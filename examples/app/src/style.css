@@ -1,0 +1,93 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+#tree {
+  user-select: none;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  height: 100vh;
+  background: #1e1e1e;
+  color: #ccc;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #444;
+}
+
+#toolbar button {
+  padding: 4px 12px;
+  border: 1px solid #555;
+  background: #3c3c3c;
+  color: #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+#toolbar button:hover {
+  background: #505050;
+}
+
+#dir-name {
+  color: #aaa;
+  font-size: 14px;
+}
+
+#main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+#tree {
+  width: 260px;
+  min-width: 180px;
+  overflow: auto;
+  padding: 8px;
+  border-right: 1px solid #444;
+  background: #252526;
+  font-size: 13px;
+}
+
+#editor-container {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+ul {
+  list-style: none;
+  padding-left: 16px;
+}
+
+.entry {
+  cursor: pointer;
+  padding: 2px 4px;
+  display: block;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.entry:hover {
+  background: #37373d;
+}
+
+.entry.active {
+  background: #094771;
+  color: #fff;
+}
