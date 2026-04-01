@@ -1,12 +1,18 @@
+export { createIncrementalTokenizer } from "./tokenizer";
+
 export {
-  createIncrementalTokenizer,
-  IncrementalShikiTokenizer,
-} from './tokenizer'
+  snapshotToEditorTokens,
+  tokenLinesToEditorTokens,
+} from "./editor-tokens";
 
 export type {
   CreateIncrementalTokenizerOptions,
+  CreateIncrementalTokenizerResult,
   IncrementalTokenizer,
   IncrementalTokenizerSnapshot,
+  LineTokens,
+  StatesEqualFn,
+  TokenizeLineFn,
   TokenLineSnapshot,
   TokenPatch,
-} from './tokenizer'
+} from "./tokenizer";
