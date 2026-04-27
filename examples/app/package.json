@@ -5,9 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsgo && vite build",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsgo --noEmit",
+    "lint": "oxlint .",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt .",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -15,6 +18,9 @@
     "@editor/shiki": "workspace:*"
   },
   "devDependencies": {
+    "@typescript/native-preview": "latest",
+    "oxlint": "latest",
+    "oxfmt": "latest",
     "typescript": "~5.9.3",
     "vite": "^8.0.1",
     "vitest": "^3.1.1"

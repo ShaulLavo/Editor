@@ -1,0 +1,64 @@
+# Open Work
+
+Consolidated validation, design, and measurement tasks.
+
+## Blocking Implementation (Phase 2)
+
+- Implement `subtreeVisibleLength` aggregate on treap nodes
+- Implement persistent balanced BST reverse index
+- Implement bridging: reverse index to treap node to prefix-sum walk
+- Verify atomic snapshot production
+- Verify indexed resolution matches linear-scan baseline
+
+## Anchor Validation
+
+- Deletion/bias against real patterns: delete-and-retype, replace, multi-cursor, boundary clamping
+- Gap-boundary resolution: delete word, line, everything
+- Replacement: delete "abc", insert "xyz", verify bias
+- Boundary clamping at document edges
+- Sentinel vs real anchor at boundaries
+- Surrogate-pair enforcement and fuzz testing
+
+## Coordinate Validation
+
+- Benchmark offset-vs-point as canonical coordinate
+- Validate Offset intermediary for Point-heavy workloads
+- Consider caching in `anchorToPoint`
+- Decide if `SelectionGoal` belongs in position or display layer
+
+## Display Validation
+
+- FoldMap end-to-end prototype
+- FoldMap invalidation precision (go/no-go)
+- Conversion benchmark through FoldMap
+- Fold-boundary edge cases
+- If FoldMap succeeds: design next layer (likely wrapping)
+
+## Undo/Redo Validation
+
+- Liveness transitions across undo/redo with interleaved edits
+- Rapid undo/redo performance
+- Create, delete, undo, redo, undo — verify liveness toggles
+
+## Scale Validation
+
+- Baseline benchmarks before new features
+- Define "representative editing patterns"
+- Multi-cursor targets (100 cursors x FoldMap)
+- 50K+ line stress tests
+- GC profiling under rapid editing
+- 100+ edits without resolving, then resolve all
+
+## Storage Validation
+
+- Chunked buffer: constant per-insertion time, bounded GC, large paste handling
+- Undo/redo-heavy storage benchmarks
+
+## Testing Strategy
+
+- Round-trip invariants for all conversions
+- Edit stability: random edits, verify anchor resolution
+- Multi-snapshot consistency: old snapshots intact after new edits
+- Display layer isolation tests
+- Fuzz testing: random insert/delete/anchor sequences
+- Surrogate pair handling with emoji and non-BMP characters

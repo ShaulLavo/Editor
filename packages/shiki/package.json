@@ -22,7 +22,10 @@
     "build": "tsup src/index.ts --format esm,cjs --dts",
     "dev": "tsup src/index.ts --format esm,cjs --dts --watch",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsgo --noEmit",
+    "lint": "oxlint .",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt ."
   },
   "dependencies": {
     "shiki": "^1.29.2"
@@ -32,6 +35,9 @@
   },
   "devDependencies": {
     "@editor/core": "workspace:*",
+    "@typescript/native-preview": "latest",
+    "oxlint": "latest",
+    "oxfmt": "latest",
     "tsup": "^7.2.0",
     "typescript": "~5.9.3",
     "vitest": "^3.1.1"

@@ -10,11 +10,15 @@
     "dev": "turbo dev",
     "build": "turbo build",
     "typecheck": "turbo typecheck",
-    "test": "turbo test",
-    "format": "biome format --write packages/ examples/",
-    "format:check": "biome format packages/ examples/"
+    "lint": "turbo lint",
+    "format": "turbo format",
+    "format:check": "turbo format:check",
+    "test": "turbo test"
   },
   "devDependencies": {
     "turbo": "^2.9.2"
+  },
+  "dependencies": {
+    "better-result": "^2.7.0"
   }
 }

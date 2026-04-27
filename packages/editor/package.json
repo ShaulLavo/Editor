@@ -9,10 +9,16 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsgo --noEmit",
+    "lint": "oxlint .",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt ."
   },
   "devDependencies": {
+    "@typescript/native-preview": "latest",
     "happy-dom": "^20.8.9",
+    "oxlint": "latest",
+    "oxfmt": "latest",
     "typescript": "~5.9.3",
     "vitest": "^3.1.1"
   }

@@ -28,3 +28,6 @@ dist-ssr
 
 # Desloppify
 .desloppify/
+
+# opensrc - source code for packages
+opensrc/
