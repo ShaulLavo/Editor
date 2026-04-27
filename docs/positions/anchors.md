@@ -57,6 +57,28 @@ Resolution produces `ResolvedAnchor`: `{ offset, liveness }`.
 - **Deterministic** for a given (anchor, snapshot) pair.
 - **Replacement is not a special case.** Fully defined by delete-first + bias.
 
+### Deletion Representation (Locked)
+
+Phase 2 deletes preserve anchor-resolvable identity by keeping deleted pieces in the treap as invisible pieces.
+
+- `Piece` gains `visible: boolean`.
+- Delete marks the affected visible pieces invisible instead of physically discarding them.
+- User-facing document length and offsets use visible length only.
+- `subtreeVisibleLength` becomes the canonical prefix-sum aggregate for document offsets.
+- `subtreeLength` remains physical buffer span length for internal traversal/debugging.
+- Future collaboration can reuse the same visibility model; no separate deleted-span history index is introduced.
+
+This is required for deleted anchors to resolve deterministically. If deleted pieces were physically removed, the current direct-node reverse-index design would have no snapshot-local place to find the deleted buffer span.
+
+### Boundary Creation (Locked)
+
+When `anchorAt(snapshot, offset, bias)` lands exactly between two visible pieces:
+
+- left bias anchors to the end of the piece on the left
+- right bias anchors to the start of the piece on the right
+- at document boundaries, real anchors still use real boundary pieces when available
+- callers that need absolute document start/end independent of content use `Anchor.MIN` / `Anchor.MAX`
+
 ---
 
 ## Resolution Architecture (Locked)
@@ -65,15 +87,15 @@ Two persistent structures:
 
 ### 1. Persistent reverse index
 
-Persistent balanced BST keyed by `(buffer, offset)`. O(log m) predecessor search finds the piece covering an anchor's buffer position (or gap neighbors for deleted anchors).
+Persistent balanced BST keyed by piece interval start: `(buffer, piece.start)`. O(log m) predecessor search finds the piece interval covering an anchor's buffer position, including invisible pieces.
 
-Does NOT store document offsets. Answers only: "which piece contains this buffer position?"
+Does NOT store document offsets. Answers only: "which piece interval contains this buffer position?"
 
 Persistent via structural sharing (path copying). Each edit produces a new root.
 
 ### 2. Enriched persistent treap (prefix sums)
 
-Treap enriched with `subtreeVisibleLength` aggregates, maintained in the same aggregate function as `subtreeLength` (see `packages/editor/src/pieceTable/pieceTable.ts`). Zero additional per-edit cost.
+Treap enriched with `subtreeVisibleLength` aggregates, maintained in the same aggregate function as `subtreeLength` (see `packages/editor/src/pieceTable/pieceTable.ts`). For visible pieces it contributes `piece.length`; for invisible pieces it contributes `0`.
 
 Serves as both ordered piece container and prefix-sum structure. No Fenwick tree needed.
 
@@ -86,9 +108,9 @@ Reverse index stores direct reference to treap node. O(1) bridging. Safe because
 ### Resolution flow
 
 1. If sentinel, return immediately.
-2. Reverse index lookup: find covering piece.
-3. Live: compute document offset via visible-length prefix sum.
-4. Deleted: apply bias, compute offset via prefix sums.
+2. Reverse index lookup: find covering piece interval.
+3. Live visible piece: compute document offset via visible-length prefix sum.
+4. Invisible piece: return deleted liveness and apply bias to the nearest visible gap edge via visible-length prefix sums.
 
 ---
 

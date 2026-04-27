@@ -4,7 +4,7 @@ Last updated: 2026-04-27
 
 ## Current Status
 
-Phase 1 storage foundation is built and committed.
+Phase 2 anchor system is implemented locally on top of the Phase 1 storage foundation.
 
 Latest committed Phase 1 work:
 
@@ -17,7 +17,16 @@ Validation after Phase 1:
 - `bun run test` passed
 - `bun run lint` passed
 - `bun run build` passed
+- `bun run bench:piece-table` passed in `packages/editor`
 - Build still emits the existing Vite large chunk warning for the example app
+
+Validation after Phase 2:
+
+- `bun run typecheck` passed in `packages/editor`
+- `bun run test` passed in `packages/editor`
+- `bun run lint` passed in `packages/editor`
+- `bun run bench:piece-table` passed in `packages/editor`
+- `bun run bench:anchors` passed in `packages/editor`
 
 ## Done
 
@@ -27,7 +36,7 @@ Validation after Phase 1:
 - Added architecture and design docs for storage, positions, anchors, editing, display transforms, collaboration, performance, phases, and open work.
 - Locked the main storage direction: persistent treap-backed piece table.
 - Locked the position hierarchy: Offset, Point, Anchor.
-- Locked the anchor model at the design level, but not implementation.
+- Locked and implemented the anchor model.
 - Defined implementation phases and acceptance criteria.
 
 ### Test Harness
@@ -42,6 +51,7 @@ Validation after Phase 1:
 - Replaced the single growing add string with append-only chunk buffers.
 - Added fresh opaque buffer IDs for inserted chunks.
 - Kept original text as its own immutable buffer chunk.
+- Decided to keep chunk storage exposed as `ReadonlyMap` at the type boundary; no debug-only accessor layer for now.
 - Added `Piece.lineBreaks`.
 - Added `subtreeLineBreaks` to treap nodes.
 - Maintained line-break aggregates through node creation, cloning, splitting, merging, and updates.
@@ -57,30 +67,34 @@ Validation after Phase 1:
   - offset-to-point conversion
   - point-to-offset conversion with column clamping
   - offset/point round trips
-
-## Not Done Yet
-
-### Phase 1 Follow-Up
-
-- Add a real benchmark file for the 1000+ insertion acceptance criterion instead of relying only on the structural test.
-- Add broader randomized/fuzz tests for insert/delete/readback.
-- Add explicit tests for empty documents, trailing newline documents, and very long single-line documents.
-- Decide whether `PieceTableBuffers.chunks` should be exposed as read-only only at the type level or wrapped behind debug-only accessors.
+  - deterministic randomized insert/delete/readback fuzz scenarios
+  - empty document, trailing newline, and very long single-line edge cases
+- Added a real piece-table insertion benchmark for the 1000+ insertion acceptance criterion.
 
 ### Phase 2: Anchor System
 
-- Implement anchor types and sentinel anchors.
-- Implement `anchorAt`, `anchorBefore`, and `anchorAfter`.
-- Enforce code-point boundaries when creating anchors.
-- Implement linear-scan `resolveAnchor` baseline.
-- Add `subtreeVisibleLength` aggregate.
-- Implement persistent reverse index keyed by `(buffer, offset)`.
-- Bridge reverse index entries to treap nodes.
-- Produce atomic snapshots containing both treap root and reverse-index root.
-- Add correctness tests proving indexed resolution matches the linear baseline.
-- Add deletion/bias/liveness tests.
-- Add `applyBatch` for atomic multi-edit operations.
-- Benchmark anchor resolution and reverse-index update cost.
+- Added anchor types, `Anchor.MIN`, and `Anchor.MAX`.
+- Added `anchorAt`, `anchorBefore`, and `anchorAfter`.
+- Enforced code-point boundaries when creating anchors.
+- Added `resolveAnchorLinear` as the correctness baseline.
+- Added indexed `resolveAnchor` using a snapshot-local lazy reverse-index cache keyed by `(buffer, piece.start)`.
+- Added `compareAnchors`.
+- Added `Piece.visible`.
+- Added `subtreeVisibleLength`; user-facing length, reads, edits, and point conversion now count visible pieces only.
+- Changed delete to mark affected pieces invisible instead of removing them physically.
+- Preserved deleted anchor resolution with liveness and replacement bias behavior.
+- Added `applyBatchToPieceTable` for non-overlapping batch edits against the original snapshot.
+- Added tests for:
+  - invisible-piece deletion
+  - sentinel resolution
+  - boundary creation and bias
+  - deleted liveness
+  - replacement bias
+  - surrogate-pair boundary rejection
+  - empty-snapshot real anchors
+  - indexed resolver parity with the linear baseline
+  - batch edits
+- Added `bench:anchors` for 10K, 50K, and 100K-line anchor resolution/index-cost measurements.
 
 ### Phase 3: Selection Model
 
@@ -119,4 +133,4 @@ Validation after Phase 1:
 
 ## Immediate Next Step
 
-Start Phase 2 only after adding a small Phase 1 benchmark/fuzz pass, or accept Phase 1 as practically complete and begin anchor implementation with a linear resolver first.
+Start Phase 3 by building the anchor-backed selection model.

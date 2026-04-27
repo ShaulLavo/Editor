@@ -12,19 +12,21 @@ The editor's storage engine is a treap-backed piece table with persistent immuta
 
 - Treap-backed piece table as the storage engine
 - Persistent (immutable-snapshot) data model for undo
-- Two logical buffers: original + append-only add buffer (append-only semantics locked)
+- Opaque buffer identity with append-only chunk storage
+- Buffer chunk storage is exposed as `ReadonlyMap` at the type boundary; no debug-only accessor layer for now
 - UTF-16 code units as the native encoding
 - Line-ending normalization to `\n` on load
+- Phase 2 deletion keeps invisible pieces in the treap rather than physically removing them
 
 ## Capabilities
 
 | Capability | Complexity | Notes |
 |---|---|---|
 | Insert text at offset | O(log n) | Split treap at offset, merge with new node |
-| Delete text range | O(log n) | Split twice, discard middle |
+| Delete text range | O(log n) | Current implementation physically removes pieces; Phase 2 changes this to mark pieces invisible |
 | Read text range | O(log n + k) | Tree walk collecting piece slices |
 | Snapshot isolation | O(1) | Structural sharing; old roots remain valid |
-| Document length | O(1) | Cached in `subtreeLength` aggregate |
+| Document length | O(1) | Currently cached in `subtreeLength`; Phase 2 switches user-facing length to `subtreeVisibleLength` |
 | Piece count | O(1) | Cached in `subtreePieces` aggregate |
 
 ## The Piece
@@ -45,28 +47,28 @@ All subtree aggregates (`subtreeLength`, `subtreePieces`, and future additions l
 - Enables O(log n) offset-to-row/column conversion
 
 **Phase 2 — Anchor resolution:**
-- Treap node gains `subtreeVisibleLength` aggregate (maintained identically to `subtreeLength`)
-- In single-user model, `subtreeVisibleLength === subtreeLength` (all pieces visible)
-- Added now to establish infrastructure before visibility flags exist
+- Treap node gains `subtreeVisibleLength` aggregate, maintained in the shared aggregate function
+- Piece gains `visible: boolean`
+- Delete marks pieces invisible instead of removing them
+- `subtreeVisibleLength` sums only visible pieces and becomes the user-facing document length aggregate
 
 **Future — Collaboration:**
-- Piece gains `visible: boolean` field
-- Deletion marks pieces invisible rather than removing from treap
-- `subtreeVisibleLength` becomes load-bearing (sums only visible pieces)
+- The Phase 2 visibility model is reused rather than redesigned
+- Reverse index keys remain extensible to replica-scoped buffer identity
 
 ## Phase 1 Prerequisites
 
 ### Opaque BufferId
 
-**Current state (violated):** `PieceBufferId` is `'original' | 'add'` — a two-value union throughout the codebase.
+**Status: complete.** `PieceBufferId` is an opaque branded string.
 
-**Required:** Change to opaque `BufferId` (`string`) before Phase 2 anchors bake in the two-buffer assumption. The change is mechanical: replace the union with a type alias and update comparisons.
+Phase 2 must continue treating buffer identity as opaque. No string-literal comparisons should be introduced.
 
 ### Chunked Append Buffer
 
-**Current state:** Single JS string re-created via `old + text` on every insertion. O(total_buffer_size) per insertion, generates full-size garbage for GC.
+**Status: complete.** Inserted text is stored in immutable chunks, each with its own `PieceBufferId`.
 
-**Required:** Immutable chunks of bounded size. Each chunk gets its own `BufferId`. Pieces reference chunk identity plus local range. Append is O(1) amortized. Buffer map becomes `Map<BufferId, string>`.
+Pieces reference chunk identity plus local range. Appending inserted text is O(1) amortized over bounded chunks.
 
 **Alternatives rejected:**
 - Single string: O(n) per insertion. Unacceptable.

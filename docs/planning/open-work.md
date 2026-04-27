@@ -4,8 +4,10 @@ Consolidated validation, design, and measurement tasks.
 
 ## Blocking Implementation (Phase 2)
 
+- Add `Piece.visible` and convert delete from physical removal to invisible-piece marking
 - Implement `subtreeVisibleLength` aggregate on treap nodes
-- Implement persistent balanced BST reverse index
+- Switch user-facing document length/offset prefix sums to visible length
+- Implement persistent balanced BST reverse index keyed by `(buffer, piece.start)` intervals
 - Implement bridging: reverse index to treap node to prefix-sum walk
 - Verify atomic snapshot production
 - Verify indexed resolution matches linear-scan baseline
@@ -17,6 +19,8 @@ Consolidated validation, design, and measurement tasks.
 - Replacement: delete "abc", insert "xyz", verify bias
 - Boundary clamping at document edges
 - Sentinel vs real anchor at boundaries
+- Piece-boundary creation: left bias chooses left piece end; right bias chooses right piece start
+- Invisible pieces remain resolvable after delete and across undo/redo
 - Surrogate-pair enforcement and fuzz testing
 
 ## Coordinate Validation

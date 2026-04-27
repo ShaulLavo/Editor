@@ -1,6 +1,22 @@
-export type { Piece, PieceBufferId, PieceTableSnapshot, Point } from "./pieceTableTypes";
+export type {
+  Anchor as PieceTableAnchor,
+  AnchorBias,
+  AnchorLiveness,
+  Piece,
+  PieceBufferId,
+  PieceTableSnapshot,
+  Point,
+  RealAnchor,
+  ResolvedAnchor,
+} from "./pieceTableTypes";
 
 export {
+  Anchor,
+  anchorAfter,
+  anchorAt,
+  anchorBefore,
+  applyBatchToPieceTable,
+  compareAnchors,
   createPieceTableSnapshot,
   deleteFromPieceTable,
   debugPieceTable,
@@ -10,4 +26,6 @@ export {
   insertIntoPieceTable,
   offsetToPoint,
   pointToOffset,
+  resolveAnchor,
+  resolveAnchorLinear,
 } from "./pieceTable";

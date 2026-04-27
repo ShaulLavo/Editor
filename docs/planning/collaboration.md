@@ -8,17 +8,17 @@ Collaboration is NOT a current design constraint. We avoid locking decisions for
 
 Collaboration needs per-replica add buffers. `PieceBufferId` must not be a two-value union.
 
-**Status: violated.** `'original' | 'add'` in `packages/editor/src/pieceTable/pieceTableTypes.ts`. Phase 1 fix.
+**Status: compatible.** `PieceBufferId` is an opaque branded string.
 
 ### 2. Pieces must not rely on physical removal
 
 Collaboration needs visibility flags (mark invisible, not remove). `subtreeVisibleLength` (Phase 2) preserves this path.
 
-**Status: compatible.**
+**Status: Phase 2 decision locked.** Deletes will mark pieces invisible for anchor resolution.
 
 ### 3. Reverse index keys must be extensible
 
-Per-replica buffers need `(replicaId, buffer, offset)` keys. Current `(buffer, offset)` with ordered comparison is extensible.
+Per-replica buffers need `(replicaId, buffer, offset)` keys. The Phase 2 `(buffer, piece.start)` interval key is extensible.
 
 **Status: compatible.**
 

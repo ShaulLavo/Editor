@@ -8,6 +8,8 @@
     "./style.css": "./src/style.css"
   },
   "scripts": {
+    "bench:anchors": "bun bench/pieceTable-anchors.ts",
+    "bench:piece-table": "bun bench/pieceTable-insertions.ts",
     "test": "vitest run",
     "typecheck": "tsgo --noEmit",
     "lint": "oxlint .",

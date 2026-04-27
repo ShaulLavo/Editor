@@ -6,12 +6,12 @@ Resolve storage prerequisites, extend treap with line-break tracking.
 
 | Deliverable | Acceptance Criteria |
 |---|---|
-| Opaque `BufferId` type | `PieceBufferId` in `packages/editor/src/pieceTable/pieceTableTypes.ts` changed from `'original' \| 'add'` to opaque string. No string literal comparisons. |
-| Chunked append buffer | Immutable chunks, each with own `BufferId`. Append O(1) amortized. 1000+ insertions = constant per-insertion time. |
-| Piece.lineBreaks | Correct on creation and split |
-| subtreeLineBreaks aggregate | Maintained through all operations in aggregate function pattern |
-| offsetToPoint | Correct for all positions |
-| pointToOffset | Round-trips with offsetToPoint; clamps out-of-range columns |
+| Opaque `BufferId` type | Complete. `PieceBufferId` is an opaque branded string. No string literal comparisons. |
+| Chunked append buffer | Complete. Immutable chunks, each with own `BufferId`. Append O(1) amortized. 1000+ insertions = constant per-insertion time. |
+| Piece.lineBreaks | Complete. Correct on creation and split. |
+| subtreeLineBreaks aggregate | Complete. Maintained through all operations in aggregate function pattern. |
+| offsetToPoint | Complete. Correct for all positions. |
+| pointToOffset | Complete. Round-trips with offsetToPoint; clamps out-of-range columns. |
 
 ## Phase 2: Anchor System
 
@@ -21,9 +21,11 @@ Anchor type, creation, resolution (with liveness), comparison. Linear-scan first
 |---|---|
 | Anchor type + sentinels | MIN/MAX resolve correctly in all snapshots |
 | anchorAt / anchorBefore / anchorAfter | Real anchors for all positions; live at creation |
+| Boundary creation | At piece boundaries, left bias anchors to the left piece end; right bias anchors to the right piece start |
+| Invisible-piece deletion | `Piece.visible` exists; delete marks pieces invisible; user-facing length/offsets count only visible pieces |
 | resolveAnchor (linear-scan) | Correct after inserts, deletes; returns liveness |
-| subtreeVisibleLength aggregate | Maintained in aggregate function |
-| Persistent reverse index | Keyed by (buffer, offset); O(log m); persistent; snapshot-isolated |
+| subtreeVisibleLength aggregate | Maintained in aggregate function; invisible pieces contribute 0 |
+| Persistent reverse index | Keyed by piece interval start `(buffer, piece.start)`; O(log m); persistent; snapshot-isolated |
 | Bridging | End-to-end resolution correct |
 | Atomic snapshot production | Both roots produced atomically per edit |
 | Correctness suite | Indexed matches linear-scan across all patterns |
