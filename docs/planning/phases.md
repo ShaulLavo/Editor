@@ -78,6 +78,24 @@ FoldMap as first layer. Go/no-go for the layered abstraction.
 | Performance baseline | Single-layer overhead; extrapolate multi-layer |
 | Go/no-go decision | Based on invalidation precision |
 
-## Phase 6: Additional Transforms (Conditional)
+## Phase 6: Layout + Viewport Virtualization
+
+Make visible-range rendering and layout queries first-class. This phase turns the Posttext direction into an implementation milestone after the display transform contract has been validated.
+
+See also: [Posttext Layout Engine Plan](../posttext.md).
+
+| Deliverable | Acceptance Criteria |
+|---|---|
+| Layout unit spec | Defines unit identity, invalidation root, spill rules, and why the initial unit is suitable for benchmarking |
+| Prepare/layout split | Text analysis artifacts are reusable across local relayout; no DOM reads in the hot path after metrics are available |
+| Viewport query API | `viewport(x1, y1, x2, y2)` returns only visible layout/rendering artifacts |
+| Vertical virtualization | Maps y-ranges to visible rows/units using aggregate heights; off-screen rows do not create paint geometry |
+| Horizontal virtualization | Long lines materialize only visible x-range spans; 50K-character lines do not force full geometry creation for paint or selection |
+| Coordinate queries | `offset -> x/y`, `x/y -> offset`, range boxes, and visual-line lookup work through the virtualization layer |
+| Invalidation precision | Edits dirty only affected layout units, visible rows, and long-line x-ranges; no global relayout after ordinary edits |
+| Integration | Rendering, selections, decorations, and FoldMap consume visible layout artifacts without assuming full-document geometry |
+| Benchmark | 10K, 50K, 100K-line files; 50K-character lines; dense decorations; wide scroll windows; rapid edits |
+
+## Phase 7: Additional Transforms (Conditional)
 
 Only if FoldMap succeeds. Scope depends on Phase 5.

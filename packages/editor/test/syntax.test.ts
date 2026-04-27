@@ -1,9 +1,26 @@
 import { describe, expect, it } from "vitest";
 
-import { styleForTreeSitterCapture, treeSitterCapturesToEditorTokens } from "../src/syntax";
+import {
+  inferEditorSyntaxLanguage,
+  styleForTreeSitterCapture,
+  treeSitterCapturesToEditorTokens,
+} from "../src/syntax";
 import { createTreeSitterEditPayload } from "../src/syntax/session";
 
 describe("Tree-sitter syntax capture conversion", () => {
+  it("infers supported language ids from document ids", () => {
+    expect(inferEditorSyntaxLanguage("file.ts")).toBe("typescript");
+    expect(inferEditorSyntaxLanguage("component.tsx")).toBe("tsx");
+    expect(inferEditorSyntaxLanguage("index.js")).toBe("javascript");
+    expect(inferEditorSyntaxLanguage("module.mjs")).toBe("javascript");
+    expect(inferEditorSyntaxLanguage("config.cts")).toBe("typescript");
+    expect(inferEditorSyntaxLanguage("image.png")).toBeNull();
+    expect(inferEditorSyntaxLanguage("Makefile")).toBeNull();
+    expect(inferEditorSyntaxLanguage("COMPONENT.TSX")).toBe("tsx");
+    expect(inferEditorSyntaxLanguage("file.test.ts")).toBe("typescript");
+    expect(inferEditorSyntaxLanguage(undefined)).toBeNull();
+  });
+
   it("maps known capture names to editor token styles", () => {
     expect(styleForTreeSitterCapture("keyword.declaration")).toEqual({ color: "#a78bfa" });
     expect(styleForTreeSitterCapture("string")).toEqual({ color: "#fde68a" });

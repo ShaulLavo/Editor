@@ -1,5 +1,6 @@
 export {
   createEditorSyntaxSession,
+  inferEditorSyntaxLanguage,
   isEditorSyntaxLanguage,
   type EditorSyntaxLanguageId,
   type EditorSyntaxResult,

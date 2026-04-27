@@ -2,7 +2,7 @@ type TreeEntry =
   | { name: string; kind: "file"; handle: FileSystemFileHandle }
   | { name: string; kind: "directory"; handle: FileSystemDirectoryHandle };
 
-type FileSelectHandler = (filePath: string, content: string) => Promise<void> | void;
+export type FileSelectHandler = (filePath: string, content: string) => Promise<void> | void;
 type DirectoryToggleHandler = (directoryPath: string, open: boolean) => void;
 
 type RenderDirOptions = {

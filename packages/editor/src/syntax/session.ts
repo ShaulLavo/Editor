@@ -48,6 +48,29 @@ export const isEditorSyntaxLanguage = (
 ): languageId is EditorSyntaxLanguageId =>
   languageId === "javascript" || languageId === "typescript" || languageId === "tsx";
 
+const fileExtensionToLanguage = new Map<string, EditorSyntaxLanguageId>([
+  [".cjs", "javascript"],
+  [".cts", "typescript"],
+  [".js", "javascript"],
+  [".jsx", "tsx"],
+  [".mjs", "javascript"],
+  [".mts", "typescript"],
+  [".ts", "typescript"],
+  [".tsx", "tsx"],
+]);
+
+export function inferEditorSyntaxLanguage(
+  documentId: string | null | undefined,
+): EditorSyntaxLanguageId | null {
+  if (!documentId) return null;
+
+  const dotIndex = documentId.lastIndexOf(".");
+  if (dotIndex === -1) return null;
+
+  const ext = documentId.slice(dotIndex).toLowerCase();
+  return fileExtensionToLanguage.get(ext) ?? null;
+}
+
 const createEmptySyntaxSession = (): EditorSyntaxSession => ({
   refresh: async () => createEmptySyntaxResult(),
   applyChange: async () => createEmptySyntaxResult(),
@@ -67,7 +90,6 @@ class TreeSitterSyntaxSession implements EditorSyntaxSession {
     this.documentId = documentId;
     this.languageId = languageId;
     this.text = text;
-    void this.refresh(text).catch(() => undefined);
   }
 
   public async refresh(text: string): Promise<EditorSyntaxResult> {

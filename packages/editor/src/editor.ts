@@ -3,7 +3,17 @@ import type {
   DocumentSessionChange,
   EditorTimingMeasurement,
 } from "./documentSession";
+import { createDocumentSession } from "./documentSession";
+import { offsetToPoint } from "./pieceTable";
 import { resolveSelection } from "./selections";
+import {
+  createEditorSyntaxSession,
+  inferEditorSyntaxLanguage,
+  type EditorSyntaxLanguageId,
+  type EditorSyntaxResult,
+  type EditorSyntaxSession,
+  type EditorSyntaxSessionOptions,
+} from "./syntax";
 import type { EditorDocument, EditorToken, EditorTokenStyle, TextEdit } from "./tokens";
 import { buildHighlightRule, clamp, normalizeTokenStyle, serializeTokenStyle } from "./style-utils";
 
@@ -35,6 +45,42 @@ export type EditorSessionOptions = {
   readonly onChange?: EditorSessionChangeHandler;
 };
 
+export type EditorSyntaxStatus = "plain" | "loading" | "ready" | "error";
+
+export type EditorState = {
+  readonly documentId: string | null;
+  readonly languageId: EditorSyntaxLanguageId | null;
+  readonly syntaxStatus: EditorSyntaxStatus;
+  readonly cursor: {
+    readonly row: number;
+    readonly column: number;
+  };
+  readonly length: number;
+  readonly canUndo: boolean;
+  readonly canRedo: boolean;
+};
+
+export type EditorChangeHandler = (
+  state: EditorState,
+  change: DocumentSessionChange | null,
+) => void;
+
+export type EditorOptions = {
+  readonly onChange?: EditorChangeHandler;
+};
+
+export type EditorOpenDocumentOptions = {
+  readonly text: string;
+  readonly documentId?: string;
+  readonly languageId?: EditorSyntaxLanguageId | null;
+};
+
+export type EditorSyntaxSessionFactory = (
+  options: EditorSyntaxSessionOptions,
+) => EditorSyntaxSession;
+
+let editorSyntaxSessionFactory: EditorSyntaxSessionFactory = createEditorSyntaxSession;
+
 let highlightRegistry: HighlightRegistry | undefined;
 
 /**
@@ -46,6 +92,12 @@ export function setHighlightRegistry(registry: HighlightRegistry | undefined): v
   highlightRegistry = registry;
 }
 
+export function setEditorSyntaxSessionFactory(
+  factory: EditorSyntaxSessionFactory | undefined,
+): void {
+  editorSyntaxSessionFactory = factory ?? createEditorSyntaxSession;
+}
+
 function getHighlightRegistry(): HighlightRegistry {
   return highlightRegistry ?? CSS.highlights;
 }
@@ -53,19 +105,27 @@ function getHighlightRegistry(): HighlightRegistry {
 export class Editor {
   private el: HTMLPreElement;
   private readonly textNode: Text;
+  private readonly options: EditorOptions;
   private readonly highlightPrefix: string;
   private readonly styleEl: HTMLStyleElement;
   private highlightNames: string[] = [];
   private nextGroupId = 0;
   private session: DocumentSession | null = null;
   private sessionOptions: EditorSessionOptions = {};
+  private documentId: string | null = null;
+  private languageId: EditorSyntaxLanguageId | null = null;
+  private syntaxStatus: EditorSyntaxStatus = "plain";
+  private syntaxSession: EditorSyntaxSession | null = null;
+  private documentVersion = 0;
+  private syntaxVersion = 0;
   private trackedTokens: Array<{ start: number; end: number; styleKey: string; range: Range }> = [];
   private groups = new Map<
     string,
     { name: string; highlight: Highlight; style: EditorTokenStyle }
   >();
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, options: EditorOptions = {}) {
+    this.options = options;
     this.el = document.createElement("pre");
     this.el.className = "editor";
     this.textNode = document.createTextNode("");
@@ -155,7 +215,48 @@ export class Editor {
     this.setTokens(document.tokens ?? []);
   }
 
+  openDocument(document: EditorOpenDocumentOptions): void {
+    const documentVersion = this.resetOwnedDocument(document);
+    this.notifyChange(null);
+    this.refreshSyntax(documentVersion, null);
+  }
+
+  clearDocument(): void {
+    this.clear();
+    this.notifyChange(null);
+  }
+
+  getState(): EditorState {
+    const snapshot = this.session?.getSnapshot();
+    const length = snapshot?.length ?? this.textNode.length;
+    const selection = this.session?.getSelections().selections[0];
+    const resolved = snapshot && selection ? resolveSelection(snapshot, selection) : null;
+    const point = snapshot ? offsetToPoint(snapshot, resolved?.headOffset ?? length) : null;
+
+    return {
+      documentId: this.documentId,
+      languageId: this.languageId,
+      syntaxStatus: this.syntaxStatus,
+      cursor: {
+        row: point?.row ?? 0,
+        column: point?.column ?? 0,
+      },
+      length,
+      canUndo: this.session?.canUndo() ?? false,
+      canRedo: this.session?.canRedo() ?? false,
+    };
+  }
+
+  getText(): string {
+    return this.session?.getText() ?? this.textNode.data;
+  }
+
   attachSession(session: DocumentSession, options: EditorSessionOptions = {}): void {
+    this.documentVersion += 1;
+    this.documentId = null;
+    this.languageId = null;
+    this.syntaxStatus = "plain";
+    this.disposeSyntaxSession();
     this.session = session;
     this.sessionOptions = options;
     this.el.contentEditable = "plaintext-only";
@@ -170,15 +271,56 @@ export class Editor {
   }
 
   clear(): void {
+    this.documentVersion += 1;
+    this.documentId = null;
+    this.languageId = null;
+    this.syntaxStatus = "plain";
+    this.disposeSyntaxSession();
     this.detachSession();
     this.setContent("");
   }
 
   dispose(): void {
+    this.disposeSyntaxSession();
     this.detachSession();
     this.clearHighlights();
     this.styleEl.remove();
     this.el.remove();
+  }
+
+  private resetOwnedDocument(document: EditorOpenDocumentOptions): number {
+    this.documentVersion += 1;
+    const documentVersion = this.documentVersion;
+    this.documentId = document.documentId ?? null;
+    this.languageId =
+      document.languageId === undefined
+        ? inferEditorSyntaxLanguage(document.documentId)
+        : document.languageId;
+    this.syntaxStatus = this.languageId ? "loading" : "plain";
+    this.disposeSyntaxSession();
+
+    const session = createDocumentSession(document.text);
+    const documentId = this.documentId ?? `${this.highlightPrefix}-${documentVersion}`;
+    this.syntaxSession = this.languageId
+      ? editorSyntaxSessionFactory({
+          documentId,
+          languageId: this.languageId,
+          text: document.text,
+        })
+      : null;
+
+    this.session = session;
+    this.sessionOptions = {};
+    this.el.contentEditable = "plaintext-only";
+    this.setDocument({ text: session.getText(), tokens: [] });
+    this.syncDomSelection();
+    return documentVersion;
+  }
+
+  private disposeSyntaxSession(): void {
+    this.syntaxVersion += 1;
+    this.syntaxSession?.dispose();
+    this.syntaxSession = null;
   }
 
   private installEditingHandlers(): void {
@@ -327,7 +469,9 @@ export class Editor {
     const change = this.updateSessionSelectionFromDom();
     if (!change) return;
 
-    this.sessionOptions.onChange?.(appendTiming(change, "input.selection", start));
+    const timedChange = appendTiming(change, "input.selection", start);
+    this.sessionOptions.onChange?.(timedChange);
+    this.notifyChange(timedChange);
   };
 
   private updateSessionSelectionFromDom(): DocumentSessionChange | null {
@@ -357,7 +501,10 @@ export class Editor {
     const selectionStart = nowMs();
     this.syncDomSelection();
     timedChange = appendTiming(timedChange, "editor.syncDomSelection", selectionStart);
-    this.sessionOptions.onChange?.(appendTiming(timedChange, totalName, totalStart));
+    const finalChange = appendTiming(timedChange, totalName, totalStart);
+    this.sessionOptions.onChange?.(finalChange);
+    this.refreshSyntax(this.documentVersion, finalChange);
+    this.notifyChange(finalChange);
   }
 
   private renderSessionChange(change: DocumentSessionChange): void {
@@ -369,6 +516,61 @@ export class Editor {
     }
 
     this.setDocument({ text: change.text, tokens: [] });
+  }
+
+  private notifyChange(change: DocumentSessionChange | null): void {
+    this.options.onChange?.(this.getState(), change);
+  }
+
+  private refreshSyntax(documentVersion: number, change: DocumentSessionChange | null): void {
+    if (!this.syntaxSession || !this.session || !this.languageId) return;
+    if (change && (change.kind === "none" || change.kind === "selection")) return;
+
+    const text = this.session.getText();
+    const startedAt = nowMs();
+    const syntaxVersion = ++this.syntaxVersion;
+    this.syntaxStatus = "loading";
+
+    void this.loadSyntaxResult(change, text)
+      .then((result) => {
+        this.applySyntaxResult(result, documentVersion, syntaxVersion, startedAt);
+      })
+      .catch(() => {
+        this.applySyntaxError(documentVersion, syntaxVersion);
+      });
+  }
+
+  private loadSyntaxResult(
+    change: DocumentSessionChange | null,
+    text: string,
+  ): Promise<EditorSyntaxResult> {
+    if (!this.syntaxSession) return Promise.reject(new Error("No syntax session"));
+    if (!change) return this.syntaxSession.refresh(text);
+    return this.syntaxSession.applyChange(change);
+  }
+
+  private applySyntaxResult(
+    result: EditorSyntaxResult,
+    documentVersion: number,
+    syntaxVersion: number,
+    startedAt: number,
+  ): void {
+    if (!this.session || documentVersion !== this.documentVersion) return;
+    if (syntaxVersion !== this.syntaxVersion) return;
+
+    this.syntaxStatus = "ready";
+    const tokenChange = this.session.setTokens(result.tokens);
+    const timedChange = appendTiming(tokenChange, "editor.syntax", startedAt);
+    this.setTokens(result.tokens);
+    this.notifyChange(timedChange);
+  }
+
+  private applySyntaxError(documentVersion: number, syntaxVersion: number): void {
+    if (documentVersion !== this.documentVersion) return;
+    if (syntaxVersion !== this.syntaxVersion) return;
+
+    this.syntaxStatus = "error";
+    this.notifyChange(null);
   }
 
   private syncDomSelection(): void {

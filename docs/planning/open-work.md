@@ -37,6 +37,12 @@ Consolidated validation, design, and measurement tasks.
 - Conversion benchmark through FoldMap
 - Fold-boundary edge cases
 - If FoldMap succeeds: design next layer (likely wrapping)
+- Define the layout unit for viewport virtualization: logical line, block, chunk, or hybrid
+- Specify viewport query API for visible layout artifacts
+- Validate vertical virtualization with aggregate height lookup and incremental height updates
+- Validate horizontal virtualization for long lines without full x-range geometry realization
+- Verify selection, decoration, and hit-test geometry can be produced from visible layout artifacts
+- Benchmark 2D virtualization with long documents, 50K-character lines, dense decorations, and wide scroll windows
 
 ## Syntax Validation
 
