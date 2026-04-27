@@ -36,6 +36,16 @@ Anchor type, creation, resolution (with liveness), comparison. Linear-scan first
 
 `Selection<T>`, `SelectionGoal`, multi-cursor with merge-on-overlap.
 
+| Deliverable | Acceptance Criteria |
+|---|---|
+| `Selection<T>` | Complete. Generic selection type with id, start/end, reversed, and goal. |
+| `SelectionGoal` | Complete. Stored with selections; pixel values remain display-derived. |
+| Anchor-backed selections | Complete. Active state can be represented as `Selection<Anchor>[]`. |
+| Lazy normalization | Complete. `SelectionSet` carries a snapshot-scoped normalization-valid flag; consumers normalize on demand. |
+| Merge semantics | Complete. Resolved ranges sort by offset and merge when overlapping or touching. |
+| Selection edits | Complete. Text replacement and backspace produce batch edits against the original snapshot. |
+| Undo boundary | Complete. Minimal O(1) linked-stack history helper stores snapshots and selection state together. |
+
 ## Phase 4: Display Transform Validation
 
 FoldMap as first layer. Go/no-go for the layered abstraction.

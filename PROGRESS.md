@@ -4,7 +4,8 @@ Last updated: 2026-04-27
 
 ## Current Status
 
-Phase 2 anchor system is implemented locally on top of the Phase 1 storage foundation.
+Phase 3 selection core is implemented locally on top of the Phase 1 storage foundation and Phase 2
+anchor system.
 
 Latest committed Phase 1 work:
 
@@ -25,6 +26,15 @@ Validation after Phase 2:
 - `bun run typecheck` passed in `packages/editor`
 - `bun run test` passed in `packages/editor`
 - `bun run lint` passed in `packages/editor`
+- `bun run bench:piece-table` passed in `packages/editor`
+- `bun run bench:anchors` passed in `packages/editor`
+
+Validation after Phase 3:
+
+- `bun run typecheck` passed
+- `bun run test` passed
+- `bun run lint` passed
+- `bun run build` passed
 - `bun run bench:piece-table` passed in `packages/editor`
 - `bun run bench:anchors` passed in `packages/editor`
 
@@ -98,12 +108,15 @@ Validation after Phase 2:
 
 ### Phase 3: Selection Model
 
-- Implement `Selection<T>`.
-- Implement `SelectionGoal`.
-- Store active selections as `Selection<Anchor>[]`.
-- Implement lazy normalization with dirty flags.
-- Implement multi-cursor merge-on-overlap behavior.
-- Wire selections into editing commands.
+- Added `Selection<T>`, `SelectionGoal`, and anchor-backed `Selection<Anchor>` helpers.
+- Added `SelectionSet<T>` with a snapshot-scoped normalization-valid dirty flag.
+- Implemented snapshot-relative selection resolution.
+- Implemented lazy normalization by resolved offsets.
+- Locked merge behavior for overlapping or touching ranges and duplicate cursors.
+- Implemented selection-aware text replacement through `applyBatchToPieceTable`.
+- Implemented backspace for selected ranges and collapsed cursors, including surrogate-pair handling.
+- Added a minimal O(1) linked-stack snapshot+selection history helper for undo/redo boundaries.
+- Added tests for selection resolution, normalization, multi-selection edits, backspace, and undo/redo.
 
 ### Phase 4: Display Transform Validation
 
@@ -128,9 +141,9 @@ Validation after Phase 2:
 - Scheduler design is not started.
 - Viewport and virtualization design is not started.
 - Decoration system design is deferred.
-- Undo/redo stack wiring is designed conceptually but not implemented.
+- Undo/redo stack wiring has a minimal snapshot+selection helper; worker transaction ownership remains open.
 - Collaboration is not a current goal, but storage choices preserve future compatibility.
 
 ## Immediate Next Step
 
-Start Phase 3 by building the anchor-backed selection model.
+Start Phase 4 FoldMap/display-transform validation.

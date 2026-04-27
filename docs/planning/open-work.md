@@ -28,7 +28,7 @@ Consolidated validation, design, and measurement tasks.
 - Benchmark offset-vs-point as canonical coordinate
 - Validate Offset intermediary for Point-heavy workloads
 - Consider caching in `anchorToPoint`
-- Decide if `SelectionGoal` belongs in position or display layer
+- Validate `SelectionGoal` pixel values against the eventual display/layout layer
 
 ## Display Validation
 
@@ -43,6 +43,7 @@ Consolidated validation, design, and measurement tasks.
 - Liveness transitions across undo/redo with interleaved edits
 - Rapid undo/redo performance
 - Create, delete, undo, redo, undo — verify liveness toggles
+- Decide final ownership boundary for history once worker transactions are introduced
 
 ## Scale Validation
 
