@@ -48,8 +48,8 @@ const FOLD_QUERY_SOURCE = [tsFoldQuerySource, jsFoldQuerySource].join("\n");
 const createErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-const ensureParser = async (): Promise<Parser> => {
-  if (parserInstance) return parserInstance;
+const ensureParser = (): Promise<Parser> => {
+  if (parserInstance) return Promise.resolve(parserInstance);
   if (initPromise) return initPromise;
 
   initPromise = createParser().catch((error) => {
@@ -354,15 +354,29 @@ const handleRequest = async (
   return undefined;
 };
 
-self.onmessage = (event: MessageEvent<TreeSitterWorkerRequest>): void => {
-  const request = event.data;
-  void handleRequest(request)
-    .then((result) => postResponse({ id: request.id, ok: true, result }))
-    .catch((error) => {
-      postResponse({ id: request.id, ok: false, error: createErrorMessage(error) });
-    });
+const workerScope = globalThis as typeof globalThis & {
+  readonly importScripts?: unknown;
+  onmessage?: (event: MessageEvent<TreeSitterWorkerRequest>) => void;
+  postMessage?: (response: TreeSitterWorkerResponse) => void;
+};
+
+if (typeof workerScope.importScripts === "function") {
+  workerScope.onmessage = (event: MessageEvent<TreeSitterWorkerRequest>): void => {
+    const request = event.data;
+    void handleRequest(request)
+      .then((result) => postResponse({ id: request.id, ok: true, result }))
+      .catch((error) => {
+        postResponse({ id: request.id, ok: false, error: createErrorMessage(error) });
+      });
+  };
+}
+
+export const __treeSitterWorkerInternalsForTests = {
+  applyTextEdit,
+  collectBracket,
+  collectError,
 };
 
 const postResponse = (response: TreeSitterWorkerResponse): void => {
-  self.postMessage(response);
+  workerScope.postMessage?.(response);
 };

@@ -9,31 +9,33 @@ export type TopBar = {
   setBusyState(isBusy: boolean, hasDirectory: boolean): void;
 };
 
+class TopBarController implements TopBar {
+  readonly element = el("div", { id: "toolbar" });
+  readonly openButton = el("button", { id: "open-btn" });
+  readonly refreshButton = el("button", { id: "refresh-btn", title: "Refresh file tree" });
+  private readonly directoryName = el("span", { id: "dir-name" });
+
+  constructor() {
+    this.openButton.textContent = "Open Directory";
+    this.refreshButton.textContent = "Refresh";
+    this.refreshButton.disabled = true;
+    this.element.append(this.openButton, this.refreshButton, this.directoryName);
+  }
+
+  setDirectoryName(name: string): void {
+    this.directoryName.textContent = name;
+  }
+
+  setMessage(message: string): void {
+    this.directoryName.textContent = message;
+  }
+
+  setBusyState(isBusy: boolean, hasDirectory: boolean): void {
+    this.openButton.disabled = isBusy;
+    this.refreshButton.disabled = isBusy || !hasDirectory;
+  }
+}
+
 export function createTopBar(): TopBar {
-  const element = el("div", { id: "toolbar" });
-  const openButton = el("button", { id: "open-btn" });
-  openButton.textContent = "Open Directory";
-
-  const refreshButton = el("button", { id: "refresh-btn", title: "Refresh file tree" });
-  refreshButton.textContent = "Refresh";
-  refreshButton.disabled = true;
-
-  const directoryName = el("span", { id: "dir-name" });
-  element.append(openButton, refreshButton, directoryName);
-
-  return {
-    element,
-    openButton,
-    refreshButton,
-    setDirectoryName: (name) => {
-      directoryName.textContent = name;
-    },
-    setMessage: (message) => {
-      directoryName.textContent = message;
-    },
-    setBusyState: (isBusy, hasDirectory) => {
-      openButton.disabled = isBusy;
-      refreshButton.disabled = isBusy || !hasDirectory;
-    },
-  };
+  return new TopBarController();
 }

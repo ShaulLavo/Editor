@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsgo && vite build",
+    "test": "vitest run --browser.enabled --browser.headless",
+    "test:e2e": "playwright test",
     "typecheck": "tsgo --noEmit",
     "lint": "oxlint .",
     "format": "oxfmt --write .",
@@ -16,7 +18,9 @@
     "@editor/core": "workspace:*"
   },
   "devDependencies": {
+    "@playwright/test": "^1.57.0",
     "@typescript/native-preview": "latest",
+    "@vitest/browser": "^3.2.4",
     "oxlint": "latest",
     "oxfmt": "latest",
     "typescript": "~5.9.3",

@@ -22,8 +22,12 @@ describe("Tree-sitter syntax capture conversion", () => {
   });
 
   it("maps known capture names to editor token styles", () => {
-    expect(styleForTreeSitterCapture("keyword.declaration")).toEqual({ color: "#a78bfa" });
-    expect(styleForTreeSitterCapture("string")).toEqual({ color: "#fde68a" });
+    expect(styleForTreeSitterCapture("keyword.declaration")).toEqual({
+      color: "var(--editor-syntax-keyword-declaration)",
+    });
+    expect(styleForTreeSitterCapture("string")).toEqual({
+      color: "var(--editor-syntax-string)",
+    });
     expect(styleForTreeSitterCapture("unknown.scope")).toBeNull();
   });
 
@@ -34,7 +38,13 @@ describe("Tree-sitter syntax capture conversion", () => {
       { startIndex: 7, endIndex: 10, captureName: "not.mapped" },
     ]);
 
-    expect(tokens).toEqual([{ start: 0, end: 5, style: { color: "#a78bfa" } }]);
+    expect(tokens).toEqual([
+      {
+        start: 0,
+        end: 5,
+        style: { color: "var(--editor-syntax-keyword-declaration)" },
+      },
+    ]);
   });
 
   it("builds single-edit payloads for incremental reparsing", () => {

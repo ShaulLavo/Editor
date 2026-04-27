@@ -113,6 +113,7 @@ function renderDirectoryEntry(
     } catch (err) {
       console.error(`Failed to expand directory "${entry.name}":`, err);
       label.classList.add("error");
+      return;
     }
   });
 
@@ -142,6 +143,7 @@ function renderFileEntry(
     } catch (err) {
       console.error(`Failed to read file "${entry.name}":`, err);
       label.classList.add("error");
+      return;
     }
   };
 
@@ -162,14 +164,14 @@ async function appendRenderedEntry(
   await restore;
 }
 
-async function appendDirectoryEntry(
+function appendDirectoryEntry(
   ul: HTMLUListElement,
   entry: TreeEntry & { kind: "directory" },
   prefix: string,
   selectedPath: string | undefined,
   onFileSelect: FileSelectHandler,
   options?: RenderDirOptions,
-) {
+): Promise<void> {
   const path = prefix + entry.name + "/";
   const childSelectedPath = getDirectorySelectedPath(entry.name, selectedPath);
   const shouldRestore = Boolean(childSelectedPath) || Boolean(options?.expandedPaths?.has(path));
@@ -181,19 +183,19 @@ async function appendDirectoryEntry(
     shouldRestore,
   });
 
-  await appendRenderedEntry(ul, li, restore);
+  return appendRenderedEntry(ul, li, restore);
 }
 
-async function appendFileEntry(
+function appendFileEntry(
   ul: HTMLUListElement,
   entry: TreeEntry & { kind: "file" },
   prefix: string,
   selectedPath: string | undefined,
   onFileSelect: FileSelectHandler,
-) {
+): Promise<void> {
   const autoSelect = selectedPath === entry.name;
   const { li, restore } = renderFileEntry(entry, prefix, onFileSelect, autoSelect);
-  await appendRenderedEntry(ul, li, restore);
+  return appendRenderedEntry(ul, li, restore);
 }
 
 async function appendTreeEntry(

@@ -16,33 +16,41 @@ export type SidebarRenderOptions = {
   readonly preserveExpandedPaths?: boolean;
 };
 
-export function createSidebar(): Sidebar {
-  const element = el("div", { id: "tree" });
-  const expandedDirectoryPaths = new Set<string>();
+class SidebarController implements Sidebar {
+  readonly element = el("div", { id: "tree" });
+  private readonly expandedDirectoryPaths = new Set<string>();
 
-  return {
-    element,
-    clear: () => {
-      expandedDirectoryPaths.clear();
-      element.replaceChildren();
-    },
-    renderDirectory: async (handle, onFileSelect, options) => {
-      const expandedPathsToRestore = options?.preserveExpandedPaths
-        ? new Set(expandedDirectoryPaths)
-        : new Set<string>();
+  clear(): void {
+    this.expandedDirectoryPaths.clear();
+    this.element.replaceChildren();
+  }
 
-      expandedDirectoryPaths.clear();
-      element.replaceChildren();
+  async renderDirectory(
+    handle: FileSystemDirectoryHandle,
+    onFileSelect: FileSelectHandler,
+    options?: SidebarRenderOptions,
+  ): Promise<void> {
+    const expandedPathsToRestore = options?.preserveExpandedPaths
+      ? new Set(this.expandedDirectoryPaths)
+      : new Set<string>();
 
-      await renderDir(handle, element, onFileSelect, {
-        selectedPath: options?.selectedPath,
-        expandedPaths: expandedPathsToRestore,
-        onDirectoryToggle: (directoryPath, open) => {
-          setDirectoryOpen(expandedDirectoryPaths, directoryPath, open);
-        },
-      });
-    },
+    this.expandedDirectoryPaths.clear();
+    this.element.replaceChildren();
+
+    await renderDir(handle, this.element, onFileSelect, {
+      selectedPath: options?.selectedPath,
+      expandedPaths: expandedPathsToRestore,
+      onDirectoryToggle: this.setDirectoryOpen,
+    });
+  }
+
+  private readonly setDirectoryOpen = (directoryPath: string, open: boolean): void => {
+    setDirectoryOpen(this.expandedDirectoryPaths, directoryPath, open);
   };
+}
+
+export function createSidebar(): Sidebar {
+  return new SidebarController();
 }
 
 function setDirectoryOpen(
