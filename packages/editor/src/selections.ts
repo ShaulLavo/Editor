@@ -246,7 +246,7 @@ export const normalizeSelections = (
   selections: readonly AnchorSelection[],
 ): AnchorSelection[] => {
   const resolved = selections.map((selection) => resolveSelectionWithSource(snapshot, selection));
-  const sorted = resolved.sort(compareResolvedSelections);
+  const sorted = resolved.toSorted(compareResolvedSelections);
   const normalized: ResolvedSelectionWithSource[] = [];
 
   for (const selection of sorted) {
@@ -388,9 +388,7 @@ const backspaceRangeForSelection = (
 };
 
 const mergeOffsetRanges = (ranges: readonly OffsetRange[]): OffsetRange[] => {
-  const sorted = [...ranges].sort(
-    (left, right) => left.start - right.start || left.end - right.end,
-  );
+  const sorted = ranges.toSorted((left, right) => left.start - right.start || left.end - right.end);
   const merged: OffsetRange[] = [];
 
   for (const range of sorted) {

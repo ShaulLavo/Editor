@@ -4,6 +4,7 @@ import { insertIntoPieceTable } from "../src/pieceTable/edits.ts";
 import { createPieceTableSnapshot } from "../src/pieceTable/pieceTable.ts";
 import {
   ensureValidRange,
+  forEachPieceTableTextChunk,
   getPieceTableLength,
   getPieceTableOriginalText,
   getPieceTableText,
@@ -19,6 +20,19 @@ describe("piece table reads", () => {
     expect(getPieceTableText(edited)).toBe("abcXXdef");
     expect(getPieceTableText(edited, 2, 6)).toBe("cXXd");
     expect(getPieceTableText(edited, 2, 2)).toBe("");
+  });
+
+  it("visits visible text chunks without materializing the joined range", () => {
+    const initial = createPieceTableSnapshot("abcdef");
+    const edited = insertIntoPieceTable(initial, 3, "XX");
+    const chunks: string[] = [];
+
+    forEachPieceTableTextChunk(edited, (text, start, end) => {
+      chunks.push(text.slice(start, end));
+    });
+
+    expect(chunks.join("")).toBe("abcXXdef");
+    expect(chunks.length).toBeGreaterThan(1);
   });
 
   it("validates read ranges", () => {

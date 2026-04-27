@@ -29,6 +29,11 @@ type DocumentWithCaretHitTesting = Document & {
   readonly caretRangeFromPoint?: (x: number, y: number) => Range | null;
 };
 
+type MouseSelectionDrag = {
+  readonly anchorOffset: number;
+  headOffset: number;
+};
+
 export function resetEditorInstanceCount(): void {
   editorInstanceCount = 0;
 }
@@ -107,7 +112,10 @@ export class Editor {
   private readonly textNode: Text;
   private readonly options: EditorOptions;
   private readonly highlightPrefix: string;
+  private readonly selectionHighlightName: string;
   private readonly styleEl: HTMLStyleElement;
+  private readonly selectionHighlight: Highlight;
+  private selectionHighlightRegistered = false;
   private highlightNames: string[] = [];
   private nextGroupId = 0;
   private session: DocumentSession | null = null;
@@ -118,6 +126,8 @@ export class Editor {
   private syntaxSession: EditorSyntaxSession | null = null;
   private documentVersion = 0;
   private syntaxVersion = 0;
+  private mouseSelectionDrag: MouseSelectionDrag | null = null;
+  private useSessionSelectionForNextInput = false;
   private trackedTokens: Array<{ start: number; end: number; styleKey: string; range: Range }> = [];
   private groups = new Map<
     string,
@@ -130,13 +140,16 @@ export class Editor {
     this.el.className = "editor";
     this.textNode = document.createTextNode("");
     this.highlightPrefix = `editor-token-${editorInstanceCount++}`;
+    this.selectionHighlightName = `${this.highlightPrefix}-selection`;
     this.styleEl = document.createElement("style");
+    this.selectionHighlight = new Highlight();
 
     this.el.appendChild(this.textNode);
     this.el.tabIndex = 0;
     this.el.spellcheck = false;
     document.head.appendChild(this.styleEl);
     container.appendChild(this.el);
+    this.rebuildStyleRules();
     this.installEditingHandlers();
   }
 
@@ -267,6 +280,7 @@ export class Editor {
   detachSession(): void {
     this.session = null;
     this.sessionOptions = {};
+    this.clearSelectionHighlight();
     this.el.removeAttribute("contenteditable");
   }
 
@@ -281,6 +295,7 @@ export class Editor {
   }
 
   dispose(): void {
+    this.uninstallEditingHandlers();
     this.disposeSyntaxSession();
     this.detachSession();
     this.clearHighlights();
@@ -330,6 +345,18 @@ export class Editor {
     this.el.addEventListener("keydown", this.handleKeyDown);
     this.el.addEventListener("keyup", this.syncSessionSelectionFromDom);
     this.el.addEventListener("mouseup", this.syncSessionSelectionFromDom);
+    this.el.ownerDocument.addEventListener("selectionchange", this.syncCustomSelectionFromDom);
+  }
+
+  private uninstallEditingHandlers(): void {
+    this.el.removeEventListener("mousedown", this.handleMouseDown);
+    this.el.removeEventListener("beforeinput", this.handleBeforeInput);
+    this.el.removeEventListener("paste", this.handlePaste);
+    this.el.removeEventListener("keydown", this.handleKeyDown);
+    this.el.removeEventListener("keyup", this.syncSessionSelectionFromDom);
+    this.el.removeEventListener("mouseup", this.syncSessionSelectionFromDom);
+    this.el.ownerDocument.removeEventListener("selectionchange", this.syncCustomSelectionFromDom);
+    this.stopMouseSelectionDrag();
   }
 
   private handleMouseDown = (event: MouseEvent): void => {
@@ -347,18 +374,73 @@ export class Editor {
       return;
     }
 
-    if (event.detail !== 2) return;
+    if (event.detail === 2) {
+      this.selectWordAtOffset(event, offset);
+      return;
+    }
 
-    this.selectWordAtOffset(event, offset);
+    this.startMouseSelectionDrag(event, offset);
   };
+
+  private startMouseSelectionDrag(event: MouseEvent, offset: number): void {
+    if (event.button !== 0) return;
+    if (event.detail !== 1) return;
+
+    event.preventDefault();
+    this.el.focus({ preventScroll: true });
+    this.mouseSelectionDrag = { anchorOffset: offset, headOffset: offset };
+    this.syncCustomSelectionHighlight(offset, offset);
+    this.el.ownerDocument.addEventListener("mousemove", this.updateMouseSelectionDrag);
+    this.el.ownerDocument.addEventListener("mouseup", this.finishMouseSelectionDrag);
+  }
+
+  private updateMouseSelectionDrag = (event: MouseEvent): void => {
+    if (!this.mouseSelectionDrag) return;
+    if (!this.session) return;
+
+    const offset = this.textOffsetFromMouseEvent(event);
+    if (offset === null) return;
+
+    event.preventDefault();
+    this.mouseSelectionDrag.headOffset = offset;
+    this.syncCustomSelectionHighlight(this.mouseSelectionDrag.anchorOffset, offset);
+    this.session.setSelection(this.mouseSelectionDrag.anchorOffset, offset);
+    this.useSessionSelectionForNextInput = this.mouseSelectionDrag.anchorOffset !== offset;
+  };
+
+  private finishMouseSelectionDrag = (event: MouseEvent): void => {
+    const drag = this.mouseSelectionDrag;
+    if (!drag || !this.session) {
+      this.stopMouseSelectionDrag();
+      return;
+    }
+
+    const offset = this.textOffsetFromMouseEvent(event) ?? drag.headOffset;
+    event.preventDefault();
+    this.stopMouseSelectionDrag();
+
+    const start = nowMs();
+    const change = this.session.setSelection(drag.anchorOffset, offset);
+    const syncDomSelection = drag.anchorOffset === offset;
+    if (!syncDomSelection) this.useSessionSelectionForNextInput = true;
+    this.applySessionChange(change, "input.selection", start, { syncDomSelection });
+  };
+
+  private stopMouseSelectionDrag(): void {
+    this.mouseSelectionDrag = null;
+    this.el.ownerDocument.removeEventListener("mousemove", this.updateMouseSelectionDrag);
+    this.el.ownerDocument.removeEventListener("mouseup", this.finishMouseSelectionDrag);
+  }
 
   private selectFullDocument(event: MouseEvent, timingName: string): void {
     if (!this.session) return;
 
-    const start = nowMs();
+    const start = eventStartMs(event);
     event.preventDefault();
     const change = this.session.setSelection(0, this.session.getSnapshot().length);
-    this.applySessionChange(change, timingName, start);
+    this.syncCustomSelectionHighlight(0, this.session.getSnapshot().length);
+    this.useSessionSelectionForNextInput = true;
+    this.applySessionChange(change, timingName, start, { syncDomSelection: false });
   }
 
   private selectLineAtOffset(event: MouseEvent, offset: number): void {
@@ -384,10 +466,12 @@ export class Editor {
   ): void {
     if (!this.session) return;
 
-    const start = nowMs();
+    const start = eventStartMs(event);
     event.preventDefault();
     const change = this.session.setSelection(range.start, range.end);
-    this.applySessionChange(change, timingName, start);
+    this.syncCustomSelectionHighlight(range.start, range.end);
+    this.useSessionSelectionForNextInput = true;
+    this.applySessionChange(change, timingName, start, { syncDomSelection: false });
   }
 
   private handleBeforeInput = (event: InputEvent): void => {
@@ -396,8 +480,8 @@ export class Editor {
     const text = event.data ?? "";
     if (event.inputType !== "insertText" && event.inputType !== "insertLineBreak") return;
 
-    const start = nowMs();
-    const selectionChange = this.updateSessionSelectionFromDom();
+    const start = eventStartMs(event);
+    const selectionChange = this.selectionChangeBeforeEdit();
     event.preventDefault();
     const inserted = event.inputType === "insertLineBreak" ? "\n" : text;
     this.applySessionChange(
@@ -413,8 +497,8 @@ export class Editor {
     const text = event.clipboardData?.getData("text/plain") ?? "";
     if (text.length === 0) return;
 
-    const start = nowMs();
-    const selectionChange = this.updateSessionSelectionFromDom();
+    const start = eventStartMs(event);
+    const selectionChange = this.selectionChangeBeforeEdit();
     event.preventDefault();
     this.applySessionChange(
       mergeChangeTimings(this.session.applyText(text), selectionChange),
@@ -428,8 +512,8 @@ export class Editor {
 
     if (this.handleUndoRedo(event)) return;
     if (event.key === "Backspace") {
-      const start = nowMs();
-      const selectionChange = this.updateSessionSelectionFromDom();
+      const start = eventStartMs(event);
+      const selectionChange = this.selectionChangeBeforeEdit();
       event.preventDefault();
       this.applySessionChange(
         mergeChangeTimings(this.session.backspace(), selectionChange),
@@ -441,8 +525,8 @@ export class Editor {
 
     if (event.key !== "Delete") return;
 
-    const start = nowMs();
-    const selectionChange = this.updateSessionSelectionFromDom();
+    const start = eventStartMs(event);
+    const selectionChange = this.selectionChangeBeforeEdit();
     event.preventDefault();
     this.applySessionChange(
       mergeChangeTimings(this.session.deleteSelection(), selectionChange),
@@ -456,22 +540,24 @@ export class Editor {
     if (!isUndoRedoEvent(event)) return false;
 
     event.preventDefault();
-    const start = nowMs();
+    const start = eventStartMs(event);
     const change = event.shiftKey ? this.session.redo() : this.session.undo();
     this.applySessionChange(change, event.shiftKey ? "input.redo" : "input.undo", start);
     return true;
   }
 
-  private syncSessionSelectionFromDom = (): void => {
+  private syncSessionSelectionFromDom = (_event: Event): void => {
     if (!this.session) return;
+    if (this.mouseSelectionDrag) return;
 
     const start = nowMs();
     const change = this.updateSessionSelectionFromDom();
     if (!change) return;
 
+    this.useSessionSelectionForNextInput = false;
     const timedChange = appendTiming(change, "input.selection", start);
     this.sessionOptions.onChange?.(timedChange);
-    this.notifyChange(timedChange);
+    this.notifyChangeWithTiming(timedChange);
   };
 
   private updateSessionSelectionFromDom(): DocumentSessionChange | null {
@@ -481,6 +567,7 @@ export class Editor {
     const offsets = this.readDomSelectionOffsets();
     if (!offsets) return null;
 
+    this.syncCustomSelectionHighlight(offsets.anchorOffset, offsets.headOffset);
     return appendTiming(
       this.session.setSelection(offsets.anchorOffset, offsets.headOffset),
       "editor.readDomSelection",
@@ -488,23 +575,33 @@ export class Editor {
     );
   }
 
+  private selectionChangeBeforeEdit(): DocumentSessionChange | null {
+    if (!this.useSessionSelectionForNextInput) return this.updateSessionSelectionFromDom();
+
+    this.useSessionSelectionForNextInput = false;
+    return null;
+  }
+
   private applySessionChange(
     change: DocumentSessionChange,
     totalName = "editor.change",
     totalStart = nowMs(),
+    options: { readonly syncDomSelection?: boolean } = {},
   ): void {
     let timedChange = change;
     const renderStart = nowMs();
     this.renderSessionChange(change);
     timedChange = appendTiming(timedChange, "editor.render", renderStart);
 
-    const selectionStart = nowMs();
-    this.syncDomSelection();
-    timedChange = appendTiming(timedChange, "editor.syncDomSelection", selectionStart);
+    if (options.syncDomSelection !== false) {
+      const selectionStart = nowMs();
+      this.syncDomSelection();
+      timedChange = appendTiming(timedChange, "editor.syncDomSelection", selectionStart);
+    }
     const finalChange = appendTiming(timedChange, totalName, totalStart);
     this.sessionOptions.onChange?.(finalChange);
     this.refreshSyntax(this.documentVersion, finalChange);
-    this.notifyChange(finalChange);
+    this.notifyChangeWithTiming(finalChange);
   }
 
   private renderSessionChange(change: DocumentSessionChange): void {
@@ -520,6 +617,13 @@ export class Editor {
 
   private notifyChange(change: DocumentSessionChange | null): void {
     this.options.onChange?.(this.getState(), change);
+  }
+
+  private notifyChangeWithTiming(change: DocumentSessionChange): void {
+    const notifyStart = nowMs();
+    const state = this.getState();
+    const timedChange = appendTiming(change, "editor.notify", notifyStart);
+    this.options.onChange?.(state, timedChange);
   }
 
   private refreshSyntax(documentVersion: number, change: DocumentSessionChange | null): void {
@@ -589,6 +693,7 @@ export class Editor {
     const domSelection = window.getSelection();
     domSelection?.removeAllRanges();
     domSelection?.addRange(range);
+    this.syncCustomSelectionHighlight(start, end);
   }
 
   private readDomSelectionOffsets(): { anchorOffset: number; headOffset: number } | null {
@@ -600,6 +705,47 @@ export class Editor {
     if (anchorOffset === null || headOffset === null) return null;
 
     return { anchorOffset, headOffset };
+  }
+
+  private syncCustomSelectionFromDom = (): void => {
+    if (!this.session) return;
+
+    const offsets = this.readDomSelectionOffsets();
+    if (!offsets) return;
+
+    this.syncCustomSelectionHighlight(offsets.anchorOffset, offsets.headOffset);
+  };
+
+  private syncCustomSelectionHighlight(anchorOffset: number, headOffset: number): void {
+    const start = clamp(Math.min(anchorOffset, headOffset), 0, this.textNode.length);
+    const end = clamp(Math.max(anchorOffset, headOffset), start, this.textNode.length);
+    if (start === end) {
+      this.clearSelectionHighlight();
+      return;
+    }
+
+    const range = document.createRange();
+    range.setStart(this.textNode, start);
+    range.setEnd(this.textNode, end);
+
+    this.ensureSelectionHighlightRegistered();
+    this.selectionHighlight.clear();
+    this.selectionHighlight.add(range);
+  }
+
+  private clearSelectionHighlight(): void {
+    if (!this.selectionHighlightRegistered) return;
+
+    this.selectionHighlight.clear();
+    getHighlightRegistry().delete(this.selectionHighlightName);
+    this.selectionHighlightRegistered = false;
+  }
+
+  private ensureSelectionHighlightRegistered(): void {
+    if (this.selectionHighlightRegistered) return;
+
+    getHighlightRegistry().set(this.selectionHighlightName, this.selectionHighlight);
+    this.selectionHighlightRegistered = true;
   }
 
   private domBoundaryToTextOffset(node: Node, offset: number): number | null {
@@ -677,11 +823,13 @@ export class Editor {
     this.trackedTokens = [];
     this.groups.clear();
     this.nextGroupId = 0;
-    this.styleEl.textContent = "";
+    this.rebuildStyleRules();
   }
 
   private rebuildStyleRules() {
-    const rules: string[] = [];
+    const rules: string[] = [
+      `::highlight(${this.selectionHighlightName}) { background-color: rgba(56, 189, 248, 0.35); }`,
+    ];
     for (const { name, style } of this.groups.values()) rules.push(buildHighlightRule(name, style));
     this.styleEl.textContent = rules.join("\n");
   }
@@ -773,6 +921,19 @@ function codePointSizeAt(text: string, offset: number): number {
 
 function nowMs(): number {
   return globalThis.performance?.now() ?? Date.now();
+}
+
+function eventStartMs(event: Event): number {
+  const start = event.timeStamp;
+  if (!Number.isFinite(start) || start <= 0) return nowMs();
+
+  const now = nowMs();
+  if (start <= now + 1_000) return start;
+
+  const wallClockDelta = Date.now() - start;
+  if (!Number.isFinite(wallClockDelta) || wallClockDelta < 0) return now;
+
+  return Math.max(0, now - wallClockDelta);
 }
 
 function appendTiming(

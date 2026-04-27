@@ -12,9 +12,7 @@ describe("createStatusBar", () => {
     expect(statusBar.element.querySelector("#status-cursor")?.textContent).toBe("Ln 2, Col 4");
     expect(statusBar.element.querySelector("#status-length")?.textContent).toBe("12 chars");
     expect(statusBar.element.querySelector("#status-syntax")?.textContent).toBe("typescript ready");
-    expect(statusBar.element.querySelector("#status-history")?.textContent).toBe(
-      "Undo / No redo",
-    );
+    expect(statusBar.element.querySelector("#status-history")?.textContent).toBe("Undo / No redo");
 
     statusBar.update(undefined, editorState({ documentId: null }));
     expect(statusBar.element.querySelector("#status-file")?.textContent).toBe("No file");

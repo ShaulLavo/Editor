@@ -1,6 +1,6 @@
 import type { PieceTableTreeSnapshot } from "./pieceTableTypes";
 import { getBufferText } from "./buffers";
-import { collectTextInRange } from "./tree";
+import { collectTextInRange, forEachTextInRange } from "./tree";
 
 export const getPieceTableLength = (snapshot: PieceTableTreeSnapshot): number => snapshot.length;
 
@@ -25,4 +25,16 @@ export const getPieceTableText = (
   const chunks: string[] = [];
   collectTextInRange(snapshot.root, snapshot.buffers, start, effectiveEnd, chunks);
   return chunks.join("");
+};
+
+export const forEachPieceTableTextChunk = (
+  snapshot: PieceTableTreeSnapshot,
+  visit: (text: string, start: number, end: number) => void,
+  start = 0,
+  end?: number,
+): void => {
+  const effectiveEnd = end ?? snapshot.length;
+  ensureValidRange(snapshot, start, effectiveEnd);
+  if (start === effectiveEnd) return;
+  forEachTextInRange(snapshot.root, snapshot.buffers, start, effectiveEnd, visit);
 };

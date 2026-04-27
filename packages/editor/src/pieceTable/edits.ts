@@ -24,7 +24,7 @@ const validateBatchEdits = (
   edits: readonly PieceTableEdit[],
 ): void => {
   let previousEnd = -1;
-  const sorted = [...edits].sort((left, right) => left.from - right.from);
+  const sorted = edits.toSorted((left, right) => left.from - right.from);
 
   for (const edit of sorted) {
     ensureValidRange(snapshot, edit.from, edit.to);
@@ -104,7 +104,7 @@ export const applyBatchToPieceTable = (
   validateBatchEdits(snapshot, edits);
 
   let next = snapshot;
-  const sorted = [...edits].sort(compareEditsDescending);
+  const sorted = edits.toSorted(compareEditsDescending);
 
   for (const edit of sorted) {
     next = deleteFromPieceTable(next, edit.from, edit.to - edit.from);

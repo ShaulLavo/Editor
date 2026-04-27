@@ -41,8 +41,8 @@ class DirectoryController implements AppController {
     return this.currentSelectedPath;
   }
 
-  updateStatus(): void {
-    this.statusBar.update(this.currentSelectedPath, this.editor.getState());
+  updateStatus(state = this.editor.getState()): void {
+    this.statusBar.update(this.currentSelectedPath, state);
   }
 
   async openDirectory(
@@ -107,8 +107,8 @@ export function mountApp(): void {
 
   let controller: DirectoryController | null = null;
   const editor = new Editor(editorPane.element, {
-    onChange: (_state, change) => {
-      controller?.updateStatus();
+    onChange: (state, change) => {
+      controller?.updateStatus(state);
       if (change) reportTimings(change);
     },
   });

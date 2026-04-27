@@ -12,12 +12,9 @@ describe("renderDir", () => {
       fileHandle("alpha.ts", "a"),
     ]);
 
-    await renderDir(
-      root,
-      container,
-      (path, content) => selectedFiles.push({ path, content }),
-      { selectedPath: "alpha.ts" },
-    );
+    await renderDir(root, container, (path, content) => selectedFiles.push({ path, content }), {
+      selectedPath: "alpha.ts",
+    });
 
     expect(entryLabels(container)).toEqual(["src", "alpha.ts", "zeta.ts"]);
     expect(selectedFiles).toEqual([{ path: "alpha.ts", content: "a" }]);
@@ -27,9 +24,7 @@ describe("renderDir", () => {
   it("restores expanded directories and reports toggles", async () => {
     const container = document.createElement("div");
     const toggles: Array<{ path: string; open: boolean }> = [];
-    const root = directoryHandle("root", [
-      directoryHandle("src", [fileHandle("main.ts", "main")]),
-    ]);
+    const root = directoryHandle("root", [directoryHandle("src", [fileHandle("main.ts", "main")])]);
 
     await renderDir(root, container, () => undefined, {
       expandedPaths: new Set(["src/"]),

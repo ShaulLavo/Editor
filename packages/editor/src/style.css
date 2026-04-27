@@ -17,7 +17,6 @@
   --editor-syntax-variable: #e4e4e7;
   --editor-syntax-variable-builtin: #fdba74;
 
-  /* user-select: none; */
   flex: 1;
   overflow: auto;
   padding: 16px;
@@ -28,4 +27,9 @@
   color: #d4d4d4;
   background: #1e1e1e;
   margin: 0;
+}
+
+.editor::selection {
+  color: inherit;
+  background: transparent;
 }

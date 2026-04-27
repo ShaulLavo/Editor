@@ -54,8 +54,7 @@ async function readDir(handle: FileSystemDirectoryHandle): Promise<TreeEntry[]> 
     return [];
   }
 
-  entries.sort(compareTreeEntries);
-  return entries;
+  return entries.toSorted(compareTreeEntries);
 }
 
 function renderDirectoryEntry(

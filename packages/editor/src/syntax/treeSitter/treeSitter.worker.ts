@@ -181,10 +181,9 @@ const collectCaptures = async (tree: Tree): Promise<TreeSitterCapture[]> => {
     collectMatchCaptures(match.captures, captures, seen);
   }
 
-  captures.sort(
+  return captures.toSorted(
     (left, right) => left.startIndex - right.startIndex || left.endIndex - right.endIndex,
   );
-  return captures;
 };
 
 const collectFolds = async (tree: Tree): Promise<FoldRange[]> => {
@@ -196,8 +195,9 @@ const collectFolds = async (tree: Tree): Promise<FoldRange[]> => {
     collectMatchFolds(match.captures, folds, seen);
   }
 
-  folds.sort((left, right) => left.startLine - right.startLine || left.endLine - right.endLine);
-  return folds;
+  return folds.toSorted(
+    (left, right) => left.startLine - right.startLine || left.endLine - right.endLine,
+  );
 };
 
 const collectMatchCaptures = (

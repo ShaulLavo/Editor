@@ -6,6 +6,7 @@ import {
   resolveSelection,
   setEditorSyntaxSessionFactory,
   setHighlightRegistry,
+  type DocumentSessionChange,
   type EditorState,
   type EditorSyntaxResult,
   type EditorSyntaxSession,
@@ -230,6 +231,29 @@ describe("Editor", () => {
       expect(container.querySelector("pre")!.textContent).toBe("abc!");
     });
 
+    it("measures input timing from the browser event timestamp", () => {
+      const changes: DocumentSessionChange[] = [];
+      editor.dispose();
+      editor = new Editor(container, {
+        onChange: (_state, change) => {
+          if (change) changes.push(change);
+        },
+      });
+      editor.attachSession(createDocumentSession("abc"));
+
+      const event = new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        data: "!",
+        inputType: "insertText",
+      });
+      Object.defineProperty(event, "timeStamp", { configurable: true, value: 1 });
+      container.querySelector("pre")!.dispatchEvent(event);
+
+      const timing = changes.at(-1)?.timings.find(({ name }) => name === "input.beforeinput");
+      expect(timing?.durationMs).toBeGreaterThan(1);
+    });
+
     it("routes undo through a document session", () => {
       const session = createDocumentSession("abc");
       editor.attachSession(session);
@@ -279,6 +303,86 @@ describe("Editor", () => {
 
       expect(session.getText()).toBe("aXd");
       expect(container.querySelector("pre")!.textContent).toBe("aXd");
+    });
+
+    it("renders range selections with a custom highlight", () => {
+      const session = createDocumentSession("abcd");
+      editor.attachSession(session);
+      const textNode = container.querySelector("pre")!.firstChild!;
+      const range = document.createRange();
+      range.setStart(textNode, 1);
+      range.setEnd(textNode, 3);
+
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      container.querySelector("pre")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+
+      expect(highlightsMap.get("editor-token-0-selection")?.size).toBe(1);
+
+      container.querySelector("pre")!.dispatchEvent(
+        new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          data: "X",
+          inputType: "insertText",
+        }),
+      );
+
+      expect(highlightsMap.has("editor-token-0-selection")).toBe(false);
+    });
+
+    it("updates custom selection immediately while dragging", () => {
+      const session = createDocumentSession("abcd");
+      editor.attachSession(session);
+      const textNode = container.querySelector("pre")!.firstChild!;
+      const originalCaretRangeFromPoint = (
+        document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+      ).caretRangeFromPoint;
+      Object.defineProperty(document, "caretRangeFromPoint", {
+        configurable: true,
+        value: (x: number) => {
+          const range = document.createRange();
+          const offset = x < 20 ? 1 : 3;
+          range.setStart(textNode, offset);
+          range.setEnd(textNode, offset);
+          return range;
+        },
+      });
+
+      const mouseDown = new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 10,
+        detail: 1,
+      });
+      container.querySelector("pre")!.dispatchEvent(mouseDown);
+      document.dispatchEvent(new MouseEvent("mousemove", { cancelable: true, clientX: 30 }));
+
+      expect(mouseDown.defaultPrevented).toBe(true);
+      expect(highlightsMap.get("editor-token-0-selection")?.size).toBe(1);
+
+      let resolved = resolveSelection(
+        session.getSnapshot(),
+        session.getSelections().selections[0]!,
+      );
+      expect(resolved.startOffset).toBe(1);
+      expect(resolved.endOffset).toBe(3);
+
+      document.dispatchEvent(new MouseEvent("mouseup", { cancelable: true, clientX: 30 }));
+
+      if (originalCaretRangeFromPoint) {
+        Object.defineProperty(document, "caretRangeFromPoint", {
+          configurable: true,
+          value: originalCaretRangeFromPoint,
+        });
+      } else {
+        Reflect.deleteProperty(document, "caretRangeFromPoint");
+      }
+
+      resolved = resolveSelection(session.getSnapshot(), session.getSelections().selections[0]!);
+      expect(resolved.startOffset).toBe(1);
+      expect(resolved.endOffset).toBe(3);
     });
 
     it("clamps cross-boundary browser selections before text input", () => {

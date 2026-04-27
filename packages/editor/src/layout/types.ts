@@ -37,15 +37,39 @@ export type PosttextLineBoundary = {
   x: number;
 };
 
-export type PosttextLineLayout = {
-  row: number;
+export type PosttextLineChunk = {
   startOffset: number;
-  endOffset: number;
-  text: string;
-  boundaries: readonly PosttextLineBoundary[];
-  y: number;
-  height: number;
+  length: number;
+  x: number;
   width: number;
+  startColumn: number;
+  endColumn: number;
+  hasTabs: boolean;
+  boundaries: readonly PosttextLineBoundary[];
+};
+
+export type PosttextLineLayout = {
+  text: string;
+  length: number;
+  breakLength: number;
+  chunks: readonly PosttextLineChunk[];
+  width: number;
+};
+
+export type PosttextLineRun = {
+  startRow: number;
+  startOffset: number;
+  lines: readonly PosttextLineLayout[];
+  firstLine: number;
+  lineCount: number;
+  textLength: number;
+  width: number;
+};
+
+export type PosttextLineIndex = {
+  runs: readonly PosttextLineRun[];
+  lineCount: number;
+  textLength: number;
 };
 
 export type PosttextViewportLine = {
@@ -72,7 +96,7 @@ export type PosttextRangeBox = {
 export type PosttextLayout = {
   snapshot: PieceTableSnapshot;
   metrics: PosttextLayoutMetrics;
-  lines: readonly PosttextLineLayout[];
+  lineIndex: PosttextLineIndex;
   width: number;
   height: number;
 };

@@ -255,6 +255,35 @@ export const collectTextInRange = (
   if (end > nodeEnd) collectTextInRange(node.right, buffers, start, end, acc, nodeEnd);
 };
 
+export const forEachTextInRange = (
+  node: PieceTreeNode | null,
+  buffers: PieceTableBuffers,
+  start: number,
+  end: number,
+  visit: (text: string, start: number, end: number) => void,
+  baseOffset = 0,
+) => {
+  if (!node || baseOffset >= end) return;
+
+  const leftLen = getSubtreeVisibleLength(node.left);
+  const nodeLen = getPieceVisibleLength(node.piece);
+  const nodeStart = baseOffset + leftLen;
+  const nodeEnd = nodeStart + nodeLen;
+
+  if (start < nodeStart) forEachTextInRange(node.left, buffers, start, end, visit, baseOffset);
+
+  if (node.piece.visible && nodeEnd > start && nodeStart < end) {
+    const pieceStart = Math.max(0, start - nodeStart);
+    const pieceEnd = Math.min(node.piece.length, end - nodeStart);
+    if (pieceEnd > pieceStart) {
+      const buffer = bufferForPiece(buffers, node.piece);
+      visit(buffer, node.piece.start + pieceStart, node.piece.start + pieceEnd);
+    }
+  }
+
+  if (end > nodeEnd) forEachTextInRange(node.right, buffers, start, end, visit, nodeEnd);
+};
+
 export const flattenPieces = (node: PieceTreeNode | null, acc: Piece[]): Piece[] => {
   if (!node) return acc;
   flattenPieces(node.left, acc);
