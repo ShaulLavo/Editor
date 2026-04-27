@@ -803,7 +803,14 @@ const editedLineChunks = (
   return [
     ...unchangedChunks,
     ...editedChunks,
-    ...repairFollowingChunks(line, chunkIndex + 1, editedChunks, localTo - localFrom, text.length, metrics),
+    ...repairFollowingChunks(
+      line,
+      chunkIndex + 1,
+      editedChunks,
+      localTo - localFrom,
+      text.length,
+      metrics,
+    ),
   ];
 };
 
@@ -866,7 +873,8 @@ const rescanChunk = (
   startColumn: number,
   x: number,
   metrics: PosttextLayoutMetrics,
-): PosttextLineChunk => createLineChunk(line.text, chunk.startOffset, startOffset, startColumn, x, metrics);
+): PosttextLineChunk =>
+  createLineChunk(line.text, chunk.startOffset, startOffset, startColumn, x, metrics);
 
 const repairFollowingChunks = (
   line: PosttextLineLayout,

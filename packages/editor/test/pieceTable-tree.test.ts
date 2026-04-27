@@ -30,9 +30,9 @@ describe("piece table tree", () => {
     expect(chunks.join("")).toBe("bcde");
     expect(findVisiblePieceContainingOffset(tree, 3)?.piece).toEqual(piece);
     expect(visiblePrefixBeforeOrder(tree, piece.order)).toBe(0);
-    expect(visibleLengthBetweenOrders(tree, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY)).toBe(
-      6,
-    );
+    expect(
+      visibleLengthBetweenOrders(tree, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY),
+    ).toBe(6);
   });
 
   it("splits pieces by visible offset and records reverse-index changes", () => {

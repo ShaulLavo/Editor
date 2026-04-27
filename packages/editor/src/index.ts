@@ -18,5 +18,6 @@ export type {
   EditorSyntaxSessionFactory,
   EditorSyntaxStatus,
   HighlightRegistry,
+  LiveLayoutQueryResult,
 } from "./editor";
 export type { EditorDocument, EditorToken, EditorTokenStyle, TextEdit } from "./tokens";

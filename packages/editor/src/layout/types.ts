@@ -32,6 +32,8 @@ export type PosttextTextEdit = {
   text: string;
 };
 
+export type PosttextLayoutUpdateMode = "reuse" | "incremental" | "rebuild";
+
 export type PosttextLineBoundary = {
   offset: number;
   x: number;
@@ -99,4 +101,21 @@ export type PosttextLayout = {
   lineIndex: PosttextLineIndex;
   width: number;
   height: number;
+};
+
+export type PosttextLayoutStats = {
+  revision: number;
+  rebuildCount: number;
+  incrementalUpdateCount: number;
+  reuseCount: number;
+};
+
+export type PosttextLayoutSession = {
+  layout: PosttextLayout;
+  stats: PosttextLayoutStats;
+};
+
+export type PosttextLayoutUpdateResult = {
+  session: PosttextLayoutSession;
+  mode: PosttextLayoutUpdateMode;
 };

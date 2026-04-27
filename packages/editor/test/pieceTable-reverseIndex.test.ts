@@ -27,11 +27,16 @@ describe("piece table reverse index", () => {
 
     expect(indexRoot).not.toBeNull();
     expect(coversAnchorOffset(inserted, 0)).toBe(true);
-    expect(lookupReverseIndex({ ...snapshot, reverseIndexRoot: indexRoot }, {
-      buffer: inserted.buffer,
-      offset: 0,
-      bias: "right",
-    })?.piece).toEqual(inserted);
+    expect(
+      lookupReverseIndex(
+        { ...snapshot, reverseIndexRoot: indexRoot },
+        {
+          buffer: inserted.buffer,
+          offset: 0,
+          bias: "right",
+        },
+      )?.piece,
+    ).toEqual(inserted);
     expect(reversePredecessor(indexRoot, inserted.buffer, inserted.start, false)?.piece).toEqual(
       inserted,
     );

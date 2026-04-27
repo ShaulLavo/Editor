@@ -1,4 +1,11 @@
 export {
+  DEFAULT_POSTTEXT_LAYOUT_METRICS,
+  createPosttextLayoutSession,
+  setPosttextLayoutSessionMetrics,
+  updatePosttextLayoutSession,
+} from "./session";
+
+export {
   applyNoWrapPosttextLayoutEdits,
   createNoWrapPosttextLayout,
   getPosttextRangeBoxes,
@@ -11,6 +18,10 @@ export {
 
 export type {
   PosttextLayout,
+  PosttextLayoutSession,
+  PosttextLayoutStats,
+  PosttextLayoutUpdateMode,
+  PosttextLayoutUpdateResult,
   PosttextLineBoundary,
   PosttextLineChunk,
   PosttextLineIndex,

@@ -122,14 +122,16 @@ const editDocument = async (request: TreeSitterEditRequest): Promise<TreeSitterP
     request.insertedText,
   );
 
-  cached.tree.edit(new Edit({
-    startIndex: request.startIndex,
-    oldEndIndex: request.oldEndIndex,
-    newEndIndex: request.newEndIndex,
-    startPosition: request.startPosition,
-    oldEndPosition: request.oldEndPosition,
-    newEndPosition: request.newEndPosition,
-  }));
+  cached.tree.edit(
+    new Edit({
+      startIndex: request.startIndex,
+      oldEndIndex: request.oldEndIndex,
+      newEndIndex: request.newEndIndex,
+      startPosition: request.startPosition,
+      oldEndPosition: request.oldEndPosition,
+      newEndPosition: request.newEndPosition,
+    }),
+  );
 
   const tree = parser.parse(text, cached.tree);
   if (!tree) throw new Error("Tree-sitter incremental parse returned no tree");
@@ -242,9 +244,7 @@ type TreeWalkVisitors = {
   readonly onError: (info: TreeSitterError) => void;
 };
 
-const collectTreeData = (
-  tree: Tree,
-): Pick<TreeSitterParseResult, "brackets" | "errors"> => {
+const collectTreeData = (tree: Tree): Pick<TreeSitterParseResult, "brackets" | "errors"> => {
   const brackets: BracketInfo[] = [];
   const errors: TreeSitterError[] = [];
   const bracketStack: { char: string; index: number }[] = [];
