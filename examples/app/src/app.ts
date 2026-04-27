@@ -1,150 +1,177 @@
-import { Editor } from "@editor/core";
+import { Editor, type DocumentSessionChange } from "@editor/core";
 import "@editor/core/style.css";
+import { createEditorPane } from "./components/editorPane.ts";
+import { el } from "./components/dom.ts";
+import { createSidebar } from "./components/sidebar.ts";
+import type { Sidebar } from "./components/sidebar.ts";
+import { createStatusBar } from "./components/statusBar.ts";
+import type { StatusBar } from "./components/statusBar.ts";
+import { createTopBar } from "./components/topBar.ts";
+import type { TopBar } from "./components/topBar.ts";
 import { getCachedHandle, cacheHandle } from "./db.ts";
-import { tokenizeFile } from "./highlighting.ts";
-import { renderDir } from "./tree.ts";
 
 const SELECTED_FILE_KEY = "editor-selected-file";
 
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  attrs?: Record<string, string>,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  if (attrs) for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
-  return node;
-}
-
-export function mountApp(): void {
-  const app = document.getElementById("app")!;
-
-  const toolbar = el("div", { id: "toolbar" });
-  const openBtn = el("button", { id: "open-btn" });
-  openBtn.textContent = "Open Directory";
-  const refreshBtn = el("button", { id: "refresh-btn", title: "Refresh file tree" });
-  refreshBtn.textContent = "Refresh";
-  refreshBtn.disabled = true;
-  const dirName = el("span", { id: "dir-name" });
-  toolbar.append(openBtn, refreshBtn, dirName);
-
-  const tree = el("div", { id: "tree" });
-  const editorContainer = el("div", { id: "editor-container" });
-  const main = el("div", { id: "main" });
-  main.append(tree, editorContainer);
-
-  app.append(toolbar, main);
-
-  const editor = new Editor(editorContainer);
-  const expandedDirectoryPaths = new Set<string>();
-  let currentDirectoryHandle: FileSystemDirectoryHandle | null = null;
-  let currentSelectedPath: string | undefined;
-  let isRenderingDirectory = false;
-  let fileSelectionVersion = 0;
-
-  function updateToolbarState() {
-    openBtn.disabled = isRenderingDirectory;
-    refreshBtn.disabled = isRenderingDirectory || !currentDirectoryHandle;
-  }
-
-  function setDirectoryOpen(directoryPath: string, open: boolean) {
-    if (open) {
-      expandedDirectoryPaths.add(directoryPath);
-      return;
-    }
-
-    expandedDirectoryPaths.delete(directoryPath);
-    for (const path of expandedDirectoryPaths) {
-      if (path.startsWith(directoryPath)) expandedDirectoryPaths.delete(path);
-    }
-  }
-
-  async function displayFile(filePath: string, content: string) {
-    const selectionVersion = ++fileSelectionVersion;
-
-    currentSelectedPath = filePath;
-    localStorage.setItem(SELECTED_FILE_KEY, filePath);
-    editor.setContent(content);
-
-    try {
-      const tokens = await tokenizeFile(filePath, content);
-      if (selectionVersion !== fileSelectionVersion) return;
-      editor.setTokens(tokens);
-    } catch (err) {
-      console.error(`Failed to tokenize "${filePath}":`, err);
-    }
-  }
-
-  async function openDirectory(
+type AppController = {
+  readonly openDirectory: (
     handle: FileSystemDirectoryHandle,
     options?: { selectedPath?: string; preserveExpandedPaths?: boolean },
-  ) {
-    const expandedPathsToRestore = options?.preserveExpandedPaths
-      ? new Set(expandedDirectoryPaths)
-      : new Set<string>();
+  ) => Promise<void>;
+  readonly refreshDirectory: () => Promise<void>;
+  readonly selectedPath: () => string | undefined;
+};
 
-    expandedDirectoryPaths.clear();
-    currentDirectoryHandle = handle;
-    currentSelectedPath = options?.selectedPath;
-    fileSelectionVersion += 1;
-    isRenderingDirectory = true;
-    updateToolbarState();
-    dirName.textContent = handle.name;
-    editor.clear();
-    tree.replaceChildren();
+class DirectoryController implements AppController {
+  private currentDirectoryHandle: FileSystemDirectoryHandle | null = null;
+  private currentSelectedPath: string | undefined;
+  private isRenderingDirectory = false;
+  private readonly topBar: TopBar;
+  private readonly sidebar: Sidebar;
+  private readonly statusBar: StatusBar;
+  private readonly editor: Editor;
+
+  constructor(topBar: TopBar, sidebar: Sidebar, statusBar: StatusBar, editor: Editor) {
+    this.topBar = topBar;
+    this.sidebar = sidebar;
+    this.statusBar = statusBar;
+    this.editor = editor;
+  }
+
+  selectedPath(): string | undefined {
+    return this.currentSelectedPath;
+  }
+
+  updateStatus(): void {
+    this.statusBar.update(this.currentSelectedPath, this.editor.getState());
+  }
+
+  async openDirectory(
+    handle: FileSystemDirectoryHandle,
+    options?: { selectedPath?: string; preserveExpandedPaths?: boolean },
+  ): Promise<void> {
+    this.currentDirectoryHandle = handle;
+    this.currentSelectedPath = options?.selectedPath;
+    this.isRenderingDirectory = true;
+    this.updateToolbarState();
+    this.topBar.setDirectoryName(handle.name);
+    this.clearActiveFile();
 
     try {
-      await renderDir(handle, tree, displayFile, {
+      await this.sidebar.renderDirectory(handle, this.displayFile, {
         selectedPath: options?.selectedPath,
-        expandedPaths: expandedPathsToRestore,
-        onDirectoryToggle: setDirectoryOpen,
+        preserveExpandedPaths: options?.preserveExpandedPaths,
       });
     } finally {
-      isRenderingDirectory = false;
-      updateToolbarState();
+      this.isRenderingDirectory = false;
+      this.updateToolbarState();
     }
   }
 
-  async function refreshDirectory() {
-    if (!currentDirectoryHandle) return;
+  async refreshDirectory(): Promise<void> {
+    if (!this.currentDirectoryHandle) return;
 
-    await openDirectory(currentDirectoryHandle, {
-      selectedPath: currentSelectedPath,
+    await this.openDirectory(this.currentDirectoryHandle, {
+      selectedPath: this.currentSelectedPath,
       preserveExpandedPaths: true,
     });
   }
 
+  private readonly displayFile = (filePath: string, content: string): void => {
+    this.currentSelectedPath = filePath;
+    localStorage.setItem(SELECTED_FILE_KEY, filePath);
+    this.editor.openDocument({ documentId: filePath, text: content });
+    this.updateStatus();
+  };
+
+  private updateToolbarState(): void {
+    this.topBar.setBusyState(this.isRenderingDirectory, Boolean(this.currentDirectoryHandle));
+  }
+
+  private clearActiveFile(): void {
+    this.currentSelectedPath = undefined;
+    this.editor.clearDocument();
+    this.updateStatus();
+  }
+}
+
+export function mountApp(): void {
+  const app = document.getElementById("app")!;
+  const topBar = createTopBar();
+  const sidebar = createSidebar();
+  const editorPane = createEditorPane();
+  const statusBar = createStatusBar();
+  const main = el("div", { id: "main" });
+  main.append(sidebar.element, editorPane.element);
+
+  app.append(topBar.element, main, statusBar.element);
+
+  let controller: DirectoryController | null = null;
+  const editor = new Editor(editorPane.element, {
+    onChange: (_state, change) => {
+      controller?.updateStatus();
+      if (change) reportTimings(change);
+    },
+  });
+  controller = new DirectoryController(topBar, sidebar, statusBar, editor);
+
+  restoreCachedDirectory(controller, topBar);
+  topBar.openButton.addEventListener("click", () => {
+    void openDirectoryFromPicker(controller, topBar);
+  });
+  topBar.refreshButton.addEventListener("click", () => {
+    void refreshOpenDirectory(controller, topBar);
+  });
+}
+
+function restoreCachedDirectory(controller: AppController, topBar: TopBar): void {
   getCachedHandle()
     .then(async (cached) => {
       if (!cached) return;
       const perm = await cached.queryPermission({ mode: "read" });
       if (perm === "granted") {
         const selectedPath = localStorage.getItem(SELECTED_FILE_KEY) ?? undefined;
-        await openDirectory(cached, { selectedPath });
+        await controller.openDirectory(cached, { selectedPath });
       }
     })
-    .catch((err) => {
-      console.error("Failed to restore cached directory:", err);
-      dirName.textContent = "Failed to restore directory";
+    .catch(() => {
+      console.error("Failed to restore cached directory");
+      topBar.setMessage("Failed to restore directory");
+      return undefined;
     });
+}
 
-  openBtn.addEventListener("click", async () => {
-    try {
-      const handle = await window.showDirectoryPicker();
-      await cacheHandle(handle);
-      await openDirectory(handle);
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return; // user cancelled the picker
-      console.error("Failed to open directory:", err);
-      dirName.textContent = "Failed to open directory";
-    }
-  });
+async function openDirectoryFromPicker(controller: AppController, topBar: TopBar): Promise<void> {
+  try {
+    const handle = await window.showDirectoryPicker();
+    await cacheHandle(handle);
+    await controller.openDirectory(handle);
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") return; // user cancelled the picker
+    console.error("Failed to open directory");
+    topBar.setMessage("Failed to open directory");
+    return;
+  }
+}
 
-  refreshBtn.addEventListener("click", async () => {
-    try {
-      await refreshDirectory();
-    } catch (err) {
-      console.error("Failed to refresh directory:", err);
-      dirName.textContent = "Failed to refresh directory";
-    }
-  });
+async function refreshOpenDirectory(controller: AppController, topBar: TopBar): Promise<void> {
+  try {
+    await controller.refreshDirectory();
+  } catch {
+    console.error("Failed to refresh directory");
+    topBar.setMessage("Failed to refresh directory");
+    return;
+  }
+}
+
+function reportTimings(change: DocumentSessionChange): void {
+  if (change.timings.length === 0) return;
+
+  console.groupCollapsed(`[editor timings] ${change.kind}`);
+  console.table(
+    change.timings.map((timing) => ({
+      phase: timing.name,
+      durationMs: Number(timing.durationMs.toFixed(3)),
+    })),
+  );
+  console.groupEnd();
 }

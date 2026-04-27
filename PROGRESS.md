@@ -4,7 +4,8 @@ Last updated: 2026-04-27
 
 ## Current Status
 
-Phase 2 anchor system is implemented locally on top of the Phase 1 storage foundation.
+Phase 3 selection core is implemented locally on top of the Phase 1 storage foundation and Phase 2
+anchor system.
 
 Latest committed Phase 1 work:
 
@@ -25,6 +26,15 @@ Validation after Phase 2:
 - `bun run typecheck` passed in `packages/editor`
 - `bun run test` passed in `packages/editor`
 - `bun run lint` passed in `packages/editor`
+- `bun run bench:piece-table` passed in `packages/editor`
+- `bun run bench:anchors` passed in `packages/editor`
+
+Validation after Phase 3:
+
+- `bun run typecheck` passed
+- `bun run test` passed
+- `bun run lint` passed
+- `bun run build` passed
 - `bun run bench:piece-table` passed in `packages/editor`
 - `bun run bench:anchors` passed in `packages/editor`
 
@@ -98,14 +108,30 @@ Validation after Phase 2:
 
 ### Phase 3: Selection Model
 
-- Implement `Selection<T>`.
-- Implement `SelectionGoal`.
-- Store active selections as `Selection<Anchor>[]`.
-- Implement lazy normalization with dirty flags.
-- Implement multi-cursor merge-on-overlap behavior.
-- Wire selections into editing commands.
+- Added `Selection<T>`, `SelectionGoal`, and anchor-backed `Selection<Anchor>` helpers.
+- Added `SelectionSet<T>` with a snapshot-scoped normalization-valid dirty flag.
+- Implemented snapshot-relative selection resolution.
+- Implemented lazy normalization by resolved offsets.
+- Locked merge behavior for overlapping or touching ranges and duplicate cursors.
+- Implemented selection-aware text replacement through `applyBatchToPieceTable`.
+- Implemented backspace for selected ranges and collapsed cursors, including surrogate-pair handling.
+- Added a minimal O(1) linked-stack snapshot+selection history helper for undo/redo boundaries.
+- Added tests for selection resolution, normalization, multi-selection edits, backspace, and undo/redo.
 
-### Phase 4: Display Transform Validation
+### Phase 4: Tree-sitter Syntax System
+
+- Replace Shiki as the long-term syntax path.
+- Keep Tree-sitter parser creation, parsing, query execution, tree traversal, and injections worker-owned.
+- Add a worker-side language registry for parser and query assets.
+- Build a piece-table input adapter for Tree-sitter.
+- Translate batch edits into Tree-sitter input edits.
+- Tie parse results to document snapshots and reject stale syntax output.
+- Use Tree-sitter highlight queries for syntax decorations.
+- Use Tree-sitter queries for folds, structural selection, indentation, injections, and bracket/tag matching.
+- Keep active selections stored as anchors; Tree-sitter nodes are transient inputs for selection commands.
+- Benchmark parse/update/query time, memory, and GC at 10K, 50K, and 100K lines.
+
+### Phase 5: Display Transform Validation
 
 - Prototype `FoldMap`.
 - Implement `FoldPoint`.
@@ -115,9 +141,9 @@ Validation after Phase 2:
 - Benchmark single-layer transform overhead.
 - Make the go/no-go decision for layered display transforms.
 
-### Phase 5: Additional Transforms
+### Phase 6: Additional Transforms
 
-- Conditional on Phase 4 succeeding.
+- Conditional on Phase 5 succeeding.
 - Likely candidates: wrapping and decoration-related transforms.
 - Scope still depends on FoldMap results.
 
@@ -125,12 +151,13 @@ Validation after Phase 2:
 
 - Layout system design is still open.
 - Main-thread versus worker layout split is still open.
+- Tree-sitter worker protocol, parser/query loading, memory policy, and worker scheduling are not designed yet.
 - Scheduler design is not started.
 - Viewport and virtualization design is not started.
 - Decoration system design is deferred.
-- Undo/redo stack wiring is designed conceptually but not implemented.
+- Undo/redo stack wiring has a minimal snapshot+selection helper; worker transaction ownership remains open.
 - Collaboration is not a current goal, but storage choices preserve future compatibility.
 
 ## Immediate Next Step
 
-Start Phase 3 by building the anchor-backed selection model.
+Start Phase 4 Tree-sitter syntax-system design and prototype the parser/query pipeline.

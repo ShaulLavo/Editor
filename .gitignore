@@ -15,6 +15,10 @@ dist-ssr
 # Turborepo
 .turbo
 
+# Test artifacts
+test-results/
+playwright-report/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

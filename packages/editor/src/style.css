@@ -1,4 +1,22 @@
 .editor {
+  --editor-syntax-attribute: #99f6e4;
+  --editor-syntax-bracket: #d4d4d8;
+  --editor-syntax-comment: #71717a;
+  --editor-syntax-constant: #f0abfc;
+  --editor-syntax-function: #fecdd3;
+  --editor-syntax-keyword: #6ee7b7;
+  --editor-syntax-keyword-declaration: #a78bfa;
+  --editor-syntax-keyword-import: #f9a8d4;
+  --editor-syntax-namespace: #a5f3fc;
+  --editor-syntax-number: #c4b5fd;
+  --editor-syntax-property: #e9d5ff;
+  --editor-syntax-string: #fde68a;
+  --editor-syntax-type: #7dd3fc;
+  --editor-syntax-type-definition: #38bdf8;
+  --editor-syntax-type-parameter: #5eead4;
+  --editor-syntax-variable: #e4e4e7;
+  --editor-syntax-variable-builtin: #fdba74;
+
   /* user-select: none; */
   flex: 1;
   overflow: auto;

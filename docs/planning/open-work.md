@@ -28,7 +28,7 @@ Consolidated validation, design, and measurement tasks.
 - Benchmark offset-vs-point as canonical coordinate
 - Validate Offset intermediary for Point-heavy workloads
 - Consider caching in `anchorToPoint`
-- Decide if `SelectionGoal` belongs in position or display layer
+- Validate `SelectionGoal` pixel values against the eventual display/layout layer
 
 ## Display Validation
 
@@ -37,18 +37,40 @@ Consolidated validation, design, and measurement tasks.
 - Conversion benchmark through FoldMap
 - Fold-boundary edge cases
 - If FoldMap succeeds: design next layer (likely wrapping)
+- Define the layout unit for viewport virtualization: logical line, block, chunk, or hybrid
+- Specify viewport query API for visible layout artifacts
+- Validate vertical virtualization with aggregate height lookup and incremental height updates
+- Validate horizontal virtualization for long lines without full x-range geometry realization
+- Verify selection, decoration, and hit-test geometry can be produced from visible layout artifacts
+- Benchmark 2D virtualization with long documents, 50K-character lines, dense decorations, and wide scroll windows
+
+## Syntax Validation
+
+- Design worker protocol for parse/query requests, cancellation, and snapshot-tagged results
+- Choose browser-compatible Tree-sitter runtime and parser packaging strategy
+- Design worker-side language registry for parsers and query assets
+- Prototype piece-table input adapter without whole-file flattening on every edit
+- Translate batch edits into Tree-sitter input edits
+- Tie parse results to `PieceTableSnapshot` versions and reject stale output
+- Convert highlight query captures into dense editor decorations
+- Convert structural selection node/token ranges into anchor-backed selections
+- Derive syntax fold ranges for FoldMap
+- Validate language injections with parent-buffer coordinates
+- Benchmark parse/update/query time, memory, and GC on 10K, 50K, and 100K-line files
 
 ## Undo/Redo Validation
 
 - Liveness transitions across undo/redo with interleaved edits
 - Rapid undo/redo performance
 - Create, delete, undo, redo, undo — verify liveness toggles
+- Decide final ownership boundary for history once worker transactions are introduced
 
 ## Scale Validation
 
 - Baseline benchmarks before new features
 - Define "representative editing patterns"
 - Multi-cursor targets (100 cursors x FoldMap)
+- Tree-sitter visible-range query latency under rapid edits
 - 50K+ line stress tests
 - GC profiling under rapid editing
 - 100+ edits without resolving, then resolve all
