@@ -4,7 +4,9 @@ import { Editor, resetEditorInstanceCount, setHighlightRegistry } from "../src";
 // Mock HighlightRegistry backed by a Map, used to assert highlight state.
 const highlightsMap = new Map<string, Highlight>();
 const mockRegistry = {
-  set: (name: string, highlight: Highlight) => { highlightsMap.set(name, highlight); },
+  set: (name: string, highlight: Highlight) => {
+    highlightsMap.set(name, highlight);
+  },
   delete: (name: string) => highlightsMap.delete(name),
 };
 
@@ -89,10 +91,9 @@ describe("Editor", () => {
       editor.setTokens([{ start: 4, end: 6, style: { color: "#ff0000" } }]);
 
       // Insert "XX" at position 0 → delta = +2
-      editor.applyEdit(
-        { from: 0, to: 0, text: "XX" },
-        [{ start: 6, end: 8, style: { color: "#ff0000" } }],
-      );
+      editor.applyEdit({ from: 0, to: 0, text: "XX" }, [
+        { start: 6, end: 8, style: { color: "#ff0000" } },
+      ]);
 
       expect(container.querySelector("pre")!.textContent).toBe("XXabcdef");
     });
@@ -120,10 +121,9 @@ describe("Editor", () => {
       ]);
 
       // Edit in the middle (positions 2-4)
-      editor.applyEdit(
-        { from: 2, to: 4, text: "XX" },
-        [{ start: 2, end: 4, style: { color: "#0000ff" } }],
-      );
+      editor.applyEdit({ from: 2, to: 4, text: "XX" }, [
+        { start: 2, end: 4, style: { color: "#0000ff" } },
+      ]);
 
       // Token at 0-2 should be untouched, so its group persists
       expect(highlightsMap.size).toBeGreaterThanOrEqual(1);
@@ -133,10 +133,9 @@ describe("Editor", () => {
       editor.setContent("abcdef");
       editor.setTokens([]);
 
-      editor.applyEdit(
-        { from: 2, to: 4, text: "XY" },
-        [{ start: 2, end: 4, style: { color: "#ff0000" } }],
-      );
+      editor.applyEdit({ from: 2, to: 4, text: "XY" }, [
+        { start: 2, end: 4, style: { color: "#ff0000" } },
+      ]);
 
       expect(highlightsMap.size).toBe(1);
     });
