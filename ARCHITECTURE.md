@@ -131,7 +131,18 @@ See: [Syntax: Tree-sitter](docs/syntax/tree-sitter.md)
 
 ### 5.8 Scheduling System
 
-**Not yet designed.** Proposed priority levels: Critical (typing) > High (visible layout) > Medium (visible syntax highlights) > Low (background Tree-sitter parsing / non-visible queries).
+Designed as a two-level scheduler: a small main-thread frame scheduler for input, mounted-row DOM
+work, and viewport reconciliation, plus a worker-side document scheduler for serialized
+transactions and derived projections.
+
+See: [Scheduling](docs/planning/scheduling.md)
+
+**Locked:** typing is never queued behind derived work; document transactions are serialized per
+document; syntax, folds, decorations, and background analysis are snapshot-tagged, coalesced, and
+stale-droppable.
+
+**Open:** worker topology, exact pressure thresholds, and whether undo/redo ownership moves fully
+into worker transactions.
 
 ---
 
@@ -177,6 +188,6 @@ CSS Highlight API renderer implemented. See `packages/editor/src/editor.ts`.
 3. Virtual row/chunk model?
 4. ~~Invalidation strategy?~~ **Partially designed.**
 5. Main vs worker virtualization split?
-6. Scheduler design?
+6. ~~Scheduler design?~~ **Locked at contract level.**
 7. Decoration system design?
 8. Tree-sitter parser/query loading and memory policy?

@@ -48,6 +48,7 @@ function createSyntaxResult(tokens = [{ start: 0, end: 5, style: { color: "#ff00
     folds: [],
     brackets: [],
     errors: [],
+    injections: [],
     tokens,
   } satisfies EditorSyntaxResult;
 }
@@ -790,6 +791,70 @@ describe("Editor", () => {
       expect(session.getText()).toBe("alpha X");
       expect(editorRoot().textContent).toBe("alpha X");
     });
+
+    it("keeps a multi-click selection when stale DOM selection events arrive", () => {
+      const session = createDocumentSession("alpha beta");
+      editor.attachSession(session);
+
+      const textNode = rowTextNode();
+      const range = document.createRange();
+      range.setStart(textNode, 8);
+      range.setEnd(textNode, 8);
+      const originalCaretRangeFromPoint = (
+        document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+      ).caretRangeFromPoint;
+      Object.defineProperty(document, "caretRangeFromPoint", {
+        configurable: true,
+        value: () => range,
+      });
+
+      editorRoot().dispatchEvent(
+        new MouseEvent("mousedown", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 10,
+          clientY: 10,
+          detail: 2,
+        }),
+      );
+      if (originalCaretRangeFromPoint) {
+        Object.defineProperty(document, "caretRangeFromPoint", {
+          configurable: true,
+          value: originalCaretRangeFromPoint,
+        });
+      } else {
+        Reflect.deleteProperty(document, "caretRangeFromPoint");
+      }
+
+      const staleRange = document.createRange();
+      staleRange.setStart(textNode, 0);
+      staleRange.setEnd(textNode, 0);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(staleRange);
+      editorRoot().dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      document.dispatchEvent(new Event("selectionchange"));
+
+      const resolved = resolveSelection(
+        session.getSnapshot(),
+        session.getSelections().selections[0]!,
+      );
+      expect(resolved.startOffset).toBe(6);
+      expect(resolved.endOffset).toBe(10);
+      expect(highlightsMap.get("editor-token-0-selection")?.size).toBe(1);
+
+      editorRoot().dispatchEvent(
+        new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          data: "X",
+          inputType: "insertText",
+        }),
+      );
+
+      expect(session.getText()).toBe("alpha X");
+      expect(editorRoot().textContent).toBe("alpha X");
+    });
   });
 
   describe("openDocument", () => {
@@ -881,11 +946,11 @@ describe("Editor", () => {
       await flushMicrotasks();
 
       expect(created).toEqual([
-        {
+        expect.objectContaining({
           documentId: "main.ts",
           languageId: "typescript",
           text: "const a = 1;",
-        },
+        }),
       ]);
       expect(editor.getState().syntaxStatus).toBe("ready");
       expect(highlightsMap.size).toBe(1);

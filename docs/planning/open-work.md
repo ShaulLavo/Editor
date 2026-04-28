@@ -30,6 +30,16 @@ Consolidated validation, design, and measurement tasks.
 - Verify CSS Highlight API can paint visible syntax/selection ranges over mounted content
 - Benchmark 2D virtualization with long documents, 50K-character lines, dense decorations, and wide scroll windows
 
+## Scheduling Validation
+
+- Implement main-thread frame coalescing for viewport and mounted highlight updates
+- Implement worker-side priority lanes for transactions, visible syntax, interactive queries, background work, and idle cleanup
+- Add stale-result rejection tests for every worker result type
+- Add coalescing tests for repeated edits, scroll events, and visible syntax requests
+- Add starvation tests: visible and interactive work must run while background work is pending
+- Add pressure-state reporting and degradation behavior for huge files
+- Add lane timing counters and benchmark assertions against the performance targets
+
 ## Syntax Validation
 
 - Design worker protocol for parse/query requests, cancellation, and snapshot-tagged results

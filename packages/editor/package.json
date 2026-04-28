@@ -10,6 +10,7 @@
   "scripts": {
     "bench:anchors": "bun bench/pieceTable-anchors.ts",
     "bench:piece-table": "bun bench/pieceTable-insertions.ts",
+    "bench:syntax": "bun bench/treeSitter-syntax.ts",
     "test": "vitest run",
     "test:browser": "vitest run --browser.enabled --browser.headless test/treeSitter-workerClient.browser.test.ts",
     "typecheck": "tsgo --noEmit",
@@ -18,7 +19,10 @@
     "format:check": "oxfmt ."
   },
   "dependencies": {
+    "tree-sitter-css": "^0.25.0",
+    "tree-sitter-html": "^0.23.2",
     "tree-sitter-javascript": "^0.25.0",
+    "tree-sitter-json": "^0.24.8",
     "tree-sitter-typescript": "^0.23.2",
     "web-tree-sitter": "^0.26.8"
   },

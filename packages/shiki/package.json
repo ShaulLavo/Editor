@@ -19,8 +19,8 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts",
-    "dev": "tsup src/index.ts --format esm,cjs --dts --watch",
+    "build": "tsup src/index.ts --format esm,cjs --target es2022 --tsconfig tsconfig.build.json --dts",
+    "dev": "tsup src/index.ts --format esm,cjs --target es2022 --tsconfig tsconfig.build.json --dts --watch",
     "test": "vitest run",
     "typecheck": "tsgo --noEmit",
     "lint": "oxlint .",

@@ -2,13 +2,19 @@ import type {
   TreeSitterEditRequest,
   TreeSitterLanguageId,
   TreeSitterParseResult,
+  TreeSitterSelectionRequest,
+  TreeSitterSelectionResult,
   TreeSitterWorkerRequest,
   TreeSitterWorkerRequestPayload,
   TreeSitterWorkerResponse,
+  TreeSitterWorkerResult,
 } from "./types";
+import type { PieceTableSnapshot } from "../../pieceTable";
 
 type PendingRequest = {
-  readonly resolve: (result: TreeSitterParseResult | undefined) => void;
+  readonly documentId: string | null;
+  readonly cancellationFlag: Int32Array | null;
+  readonly resolve: (result: TreeSitterWorkerResult) => void;
   readonly reject: (error: Error) => void;
 };
 
@@ -17,14 +23,21 @@ export type TreeSitterParsePayload = {
   readonly snapshotVersion: number;
   readonly languageId: TreeSitterLanguageId;
   readonly text: string;
+  readonly snapshot: PieceTableSnapshot;
 };
 
-export type TreeSitterEditPayload = Omit<TreeSitterEditRequest, "type">;
+export type TreeSitterEditPayload = Omit<
+  TreeSitterEditRequest,
+  "type" | "generation" | "cancellationBuffer"
+>;
+export type TreeSitterSelectionPayload = Omit<TreeSitterSelectionRequest, "type">;
 
 const supportsWorkers = (): boolean => typeof Worker !== "undefined";
+const supportsSharedCancellation = (): boolean => typeof SharedArrayBuffer !== "undefined";
 
 let worker: Worker | null = null;
 let nextRequestId = 1;
+let nextGeneration = 1;
 let initPromise: Promise<void> | null = null;
 const pendingRequests = new Map<number, PendingRequest>();
 
@@ -57,7 +70,8 @@ export const parseWithTreeSitter = async (
 ): Promise<TreeSitterParseResult | undefined> => {
   const handle = await ensureWorkerReady();
   if (!handle) return undefined;
-  return postRequest({ type: "parse", ...payload });
+  const result = await postDocumentRequest({ type: "parse", ...payload });
+  return isTreeSitterParseResult(result) ? result : undefined;
 };
 
 export const editWithTreeSitter = async (
@@ -65,7 +79,17 @@ export const editWithTreeSitter = async (
 ): Promise<TreeSitterParseResult | undefined> => {
   const handle = await ensureWorkerReady();
   if (!handle) return undefined;
-  return postRequest({ type: "edit", ...payload });
+  const result = await postDocumentRequest({ type: "edit", ...payload });
+  return isTreeSitterParseResult(result) ? result : undefined;
+};
+
+export const selectWithTreeSitter = async (
+  payload: TreeSitterSelectionPayload,
+): Promise<TreeSitterSelectionResult | undefined> => {
+  const handle = await ensureWorkerReady();
+  if (!handle) return undefined;
+  const result = await postRequest({ type: "selection", ...payload });
+  return isTreeSitterSelectionResult(result) ? result : undefined;
 };
 
 export const disposeTreeSitterDocument = (documentId: string): void => {
@@ -85,9 +109,7 @@ export const disposeTreeSitterWorker = async (): Promise<void> => {
   }
 };
 
-const postRequest = (
-  payload: TreeSitterWorkerRequestPayload,
-): Promise<TreeSitterParseResult | undefined> => {
+const postRequest = (payload: TreeSitterWorkerRequestPayload): Promise<TreeSitterWorkerResult> => {
   const handle = getWorker();
   if (!handle) return Promise.resolve(undefined);
 
@@ -95,9 +117,60 @@ const postRequest = (
   const request: TreeSitterWorkerRequest = { id, payload };
 
   return new Promise((resolve, reject) => {
-    pendingRequests.set(id, { resolve, reject });
+    pendingRequests.set(id, {
+      documentId: documentIdForPayload(payload),
+      cancellationFlag: cancellationFlagForPayload(payload),
+      resolve,
+      reject,
+    });
     handle.postMessage(request);
   });
+};
+
+function postDocumentRequest(
+  payload: TreeSitterParsePayload & { readonly type: "parse" },
+): Promise<TreeSitterWorkerResult>;
+function postDocumentRequest(
+  payload: TreeSitterEditPayload & { readonly type: "edit" },
+): Promise<TreeSitterWorkerResult>;
+function postDocumentRequest(
+  payload:
+    | (TreeSitterParsePayload & { readonly type: "parse" })
+    | (TreeSitterEditPayload & { readonly type: "edit" }),
+): Promise<TreeSitterWorkerResult> {
+  return postRequest(withCancellation(cancelPreviousDocumentRequests(payload.documentId), payload));
+}
+
+const cancelPreviousDocumentRequests = (documentId: string): Int32Array | null => {
+  let cancellationFlag: Int32Array | null = null;
+
+  for (const pending of pendingRequests.values()) {
+    if (pending.documentId !== documentId) continue;
+    if (pending.cancellationFlag) Atomics.store(pending.cancellationFlag, 0, 1);
+  }
+
+  if (supportsSharedCancellation()) {
+    cancellationFlag = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  }
+
+  return cancellationFlag;
+};
+
+const withCancellation = <
+  TPayload extends
+    | (TreeSitterParsePayload & { readonly type: "parse" })
+    | (TreeSitterEditPayload & { readonly type: "edit" }),
+>(
+  cancellationFlag: Int32Array | null,
+  payload: TPayload,
+): TPayload & { readonly generation: number; readonly cancellationBuffer?: SharedArrayBuffer } => {
+  const generation = nextGeneration++;
+  if (!cancellationFlag) return { ...payload, generation };
+  return {
+    ...payload,
+    generation,
+    cancellationBuffer: cancellationFlag.buffer as SharedArrayBuffer,
+  };
 };
 
 const handleWorkerMessage = (event: MessageEvent<TreeSitterWorkerResponse>): void => {
@@ -124,3 +197,22 @@ const rejectPendingRequests = (error: Error): void => {
   for (const request of pendingRequests.values()) request.reject(error);
   pendingRequests.clear();
 };
+
+const documentIdForPayload = (payload: TreeSitterWorkerRequestPayload): string | null => {
+  if ("documentId" in payload) return payload.documentId;
+  return null;
+};
+
+const cancellationFlagForPayload = (payload: TreeSitterWorkerRequestPayload): Int32Array | null => {
+  if (!("cancellationBuffer" in payload)) return null;
+  if (!payload.cancellationBuffer) return null;
+  return new Int32Array(payload.cancellationBuffer);
+};
+
+const isTreeSitterParseResult = (result: TreeSitterWorkerResult): result is TreeSitterParseResult =>
+  Boolean(result && "captures" in result && "folds" in result);
+
+const isTreeSitterSelectionResult = (
+  result: TreeSitterWorkerResult,
+): result is TreeSitterSelectionResult =>
+  Boolean(result && "status" in result && "ranges" in result);

@@ -1,9 +1,10 @@
 import type { DocumentSessionChange } from "../documentSession";
 import type { EditorToken, TextEdit } from "../tokens";
+import { applyBatchToPieceTable, offsetToPoint, type PieceTableSnapshot } from "../pieceTable";
 import type {
+  TreeSitterInputEdit,
   TreeSitterLanguageId,
   TreeSitterParseResult,
-  TreeSitterPoint,
 } from "./treeSitter/types";
 import { treeSitterCapturesToEditorTokens } from "./captures";
 import {
@@ -12,6 +13,7 @@ import {
   parseWithTreeSitter,
   type TreeSitterEditPayload,
 } from "./treeSitter/workerClient";
+import { inferTreeSitterLanguageFromFilename, isTreeSitterLanguageId } from "./treeSitter/registry";
 
 export type EditorSyntaxLanguageId = TreeSitterLanguageId;
 
@@ -19,6 +21,7 @@ export type EditorSyntaxResult = Pick<
   TreeSitterParseResult,
   "captures" | "folds" | "brackets" | "errors"
 > & {
+  readonly injections: TreeSitterParseResult["injections"];
   readonly tokens: readonly EditorToken[];
 };
 
@@ -26,13 +29,15 @@ export type EditorSyntaxSessionOptions = {
   readonly documentId: string;
   readonly languageId: EditorSyntaxLanguageId | null;
   readonly text: string;
+  readonly snapshot: PieceTableSnapshot;
 };
 
 export type EditorSyntaxSession = {
-  refresh(text: string): Promise<EditorSyntaxResult>;
+  refresh(snapshot: PieceTableSnapshot, text?: string): Promise<EditorSyntaxResult>;
   applyChange(change: DocumentSessionChange): Promise<EditorSyntaxResult>;
   getResult(): EditorSyntaxResult;
   getTokens(): readonly EditorToken[];
+  getSnapshotVersion(): number;
   dispose(): void;
 };
 
@@ -40,35 +45,22 @@ export const createEditorSyntaxSession = (
   options: EditorSyntaxSessionOptions,
 ): EditorSyntaxSession => {
   if (!options.languageId) return createEmptySyntaxSession();
-  return new TreeSitterSyntaxSession(options.documentId, options.languageId, options.text);
+  return new TreeSitterSyntaxSession(
+    options.documentId,
+    options.languageId,
+    options.text,
+    options.snapshot,
+  );
 };
 
 export const isEditorSyntaxLanguage = (
   languageId: string | null | undefined,
-): languageId is EditorSyntaxLanguageId =>
-  languageId === "javascript" || languageId === "typescript" || languageId === "tsx";
-
-const fileExtensionToLanguage = new Map<string, EditorSyntaxLanguageId>([
-  [".cjs", "javascript"],
-  [".cts", "typescript"],
-  [".js", "javascript"],
-  [".jsx", "tsx"],
-  [".mjs", "javascript"],
-  [".mts", "typescript"],
-  [".ts", "typescript"],
-  [".tsx", "tsx"],
-]);
+): languageId is EditorSyntaxLanguageId => isTreeSitterLanguageId(languageId);
 
 export function inferEditorSyntaxLanguage(
   documentId: string | null | undefined,
 ): EditorSyntaxLanguageId | null {
-  if (!documentId) return null;
-
-  const dotIndex = documentId.lastIndexOf(".");
-  if (dotIndex === -1) return null;
-
-  const ext = documentId.slice(dotIndex).toLowerCase();
-  return fileExtensionToLanguage.get(ext) ?? null;
+  return inferTreeSitterLanguageFromFilename(documentId);
 }
 
 const createEmptySyntaxSession = (): EditorSyntaxSession => ({
@@ -76,6 +68,7 @@ const createEmptySyntaxSession = (): EditorSyntaxSession => ({
   applyChange: async () => createEmptySyntaxResult(),
   getResult: () => createEmptySyntaxResult(),
   getTokens: () => [],
+  getSnapshotVersion: () => 0,
   dispose: () => undefined,
 });
 
@@ -84,40 +77,51 @@ class TreeSitterSyntaxSession implements EditorSyntaxSession {
   private readonly languageId: EditorSyntaxLanguageId;
   private snapshotVersion = 0;
   private text: string;
+  private snapshot: PieceTableSnapshot;
   private result: EditorSyntaxResult = createEmptySyntaxResult();
 
-  public constructor(documentId: string, languageId: EditorSyntaxLanguageId, text: string) {
+  public constructor(
+    documentId: string,
+    languageId: EditorSyntaxLanguageId,
+    text: string,
+    snapshot: PieceTableSnapshot,
+  ) {
     this.documentId = documentId;
     this.languageId = languageId;
     this.text = text;
+    this.snapshot = snapshot;
   }
 
-  public async refresh(text: string): Promise<EditorSyntaxResult> {
+  public async refresh(
+    snapshot: PieceTableSnapshot,
+    text = this.text,
+  ): Promise<EditorSyntaxResult> {
     const snapshotVersion = ++this.snapshotVersion;
     const result = await parseWithTreeSitter({
       documentId: this.documentId,
       snapshotVersion,
       languageId: this.languageId,
       text,
+      snapshot,
     });
 
-    return this.updateFromTreeSitterResult(result, snapshotVersion, text);
+    return this.updateFromTreeSitterResult(result, snapshotVersion, text, snapshot);
   }
 
   public async applyChange(change: DocumentSessionChange): Promise<EditorSyntaxResult> {
     if (change.kind === "none" || change.kind === "selection") return this.result;
-    if (change.kind !== "edit") return this.refresh(change.text);
+    if (change.kind !== "edit") return this.refresh(change.snapshot, change.text);
 
     const payload = createTreeSitterEditPayload({
       documentId: this.documentId,
       languageId: this.languageId,
       snapshotVersion: ++this.snapshotVersion,
-      previousText: this.text,
-      nextText: change.text,
+      previousSnapshot: this.snapshot,
+      nextSnapshot: change.snapshot,
       edits: change.edits,
     });
 
-    if (!payload) return this.refresh(change.text);
+    if (!payload) return this.refresh(change.snapshot, change.text);
     return this.applyIncrementalEdit(payload, change.text);
   }
 
@@ -127,6 +131,10 @@ class TreeSitterSyntaxSession implements EditorSyntaxSession {
 
   public getTokens(): readonly EditorToken[] {
     return this.result.tokens;
+  }
+
+  public getSnapshotVersion(): number {
+    return this.snapshotVersion;
   }
 
   public dispose(): void {
@@ -139,10 +147,15 @@ class TreeSitterSyntaxSession implements EditorSyntaxSession {
   ): Promise<EditorSyntaxResult> {
     try {
       const result = await editWithTreeSitter(payload);
-      return this.updateFromTreeSitterResult(result, payload.snapshotVersion, nextText);
+      return this.updateFromTreeSitterResult(
+        result,
+        payload.snapshotVersion,
+        nextText,
+        payload.snapshot,
+      );
     } catch (error) {
       if (!isRecoverableIncrementalEditError(error)) throw error;
-      return this.refresh(nextText);
+      return this.refresh(payload.snapshot, nextText);
     }
   }
 
@@ -150,12 +163,14 @@ class TreeSitterSyntaxSession implements EditorSyntaxSession {
     result: TreeSitterParseResult | undefined,
     snapshotVersion: number,
     text: string,
+    snapshot: PieceTableSnapshot,
   ): EditorSyntaxResult {
     if (!result) return this.result;
     if (result.snapshotVersion !== snapshotVersion) return this.result;
     if (result.snapshotVersion !== this.snapshotVersion) return this.result;
 
     this.text = text;
+    this.snapshot = snapshot;
     this.result = treeSitterParseResultToEditorSyntaxResult(result);
     return this.result;
   }
@@ -165,29 +180,23 @@ type TreeSitterEditPayloadOptions = {
   readonly documentId: string;
   readonly languageId: EditorSyntaxLanguageId;
   readonly snapshotVersion: number;
-  readonly previousText: string;
-  readonly nextText: string;
+  readonly previousSnapshot: PieceTableSnapshot;
+  readonly nextSnapshot: PieceTableSnapshot;
   readonly edits: readonly TextEdit[];
 };
 
 export const createTreeSitterEditPayload = (
   options: TreeSitterEditPayloadOptions,
 ): TreeSitterEditPayload | null => {
-  const edit = options.edits[0];
-  if (!edit || options.edits.length !== 1) return null;
+  if (options.edits.length === 0) return null;
 
-  const newEndIndex = edit.from + edit.text.length;
   return {
     documentId: options.documentId,
     snapshotVersion: options.snapshotVersion,
     languageId: options.languageId,
-    startIndex: edit.from,
-    oldEndIndex: edit.to,
-    newEndIndex,
-    startPosition: pointAtOffset(options.previousText, edit.from),
-    oldEndPosition: pointAtOffset(options.previousText, edit.to),
-    newEndPosition: pointAtOffset(options.nextText, newEndIndex),
-    insertedText: edit.text,
+    snapshot: options.nextSnapshot,
+    edits: options.edits,
+    inputEdits: createTreeSitterInputEdits(options.previousSnapshot, options.edits),
   };
 };
 
@@ -198,6 +207,7 @@ const treeSitterParseResultToEditorSyntaxResult = (
   folds: result.folds,
   brackets: result.brackets,
   errors: result.errors,
+  injections: result.injections,
   tokens: treeSitterCapturesToEditorTokens(result.captures),
 });
 
@@ -206,25 +216,36 @@ const createEmptySyntaxResult = (): EditorSyntaxResult => ({
   folds: [],
   brackets: [],
   errors: [],
+  injections: [],
   tokens: [],
 });
 
-const pointAtOffset = (text: string, offset: number): TreeSitterPoint => {
-  const boundedOffset = Math.max(0, Math.min(offset, text.length));
-  let row = 0;
-  let column = 0;
+const createTreeSitterInputEdits = (
+  snapshot: PieceTableSnapshot,
+  edits: readonly TextEdit[],
+): TreeSitterInputEdit[] => {
+  const sorted = edits.toSorted((left, right) => right.from - left.from || right.to - left.to);
+  const inputEdits: TreeSitterInputEdit[] = [];
+  let workingSnapshot = snapshot;
 
-  for (let index = 0; index < boundedOffset; index += 1) {
-    if (text.charCodeAt(index) === 10) {
-      row += 1;
-      column = 0;
-      continue;
-    }
+  for (const edit of sorted) {
+    const startPosition = offsetToPoint(workingSnapshot, edit.from);
+    const oldEndPosition = offsetToPoint(workingSnapshot, edit.to);
+    const nextSnapshot = applyBatchToPieceTable(workingSnapshot, [edit]);
+    const newEndIndex = edit.from + edit.text.length;
 
-    column += 1;
+    inputEdits.push({
+      startIndex: edit.from,
+      oldEndIndex: edit.to,
+      newEndIndex,
+      startPosition,
+      oldEndPosition,
+      newEndPosition: offsetToPoint(nextSnapshot, newEndIndex),
+    });
+    workingSnapshot = nextSnapshot;
   }
 
-  return { row, column };
+  return inputEdits;
 };
 
 const isRecoverableIncrementalEditError = (error: unknown): boolean =>

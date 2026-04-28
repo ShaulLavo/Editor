@@ -14,6 +14,7 @@ const SYNTAX_COLOR = {
   number: "var(--editor-syntax-number)",
   property: "var(--editor-syntax-property)",
   string: "var(--editor-syntax-string)",
+  tag: "var(--editor-syntax-keyword)",
   type: "var(--editor-syntax-type)",
   typeDefinition: "var(--editor-syntax-type-definition)",
   typeParameter: "var(--editor-syntax-type-parameter)",
@@ -48,6 +49,7 @@ const PREFIX_CAPTURE_STYLES: Record<string, EditorTokenStyle> = {
   property: { color: SYNTAX_COLOR.property },
   punctuation: { color: SYNTAX_COLOR.bracket },
   string: { color: SYNTAX_COLOR.string },
+  tag: { color: SYNTAX_COLOR.tag },
   type: { color: SYNTAX_COLOR.type },
   variable: { color: SYNTAX_COLOR.variable },
 };

@@ -1,15 +1,22 @@
-export type TreeSitterLanguageId = "javascript" | "typescript" | "tsx";
+import type { PieceTableSnapshot } from "../../pieceTable";
+import type { TextEdit } from "../../tokens";
+
+export type TreeSitterLanguageId = "javascript" | "typescript" | "tsx" | "html" | "css" | "json";
 
 export type TreeSitterCapture = {
   readonly startIndex: number;
   readonly endIndex: number;
   readonly captureName: string;
+  readonly languageId?: TreeSitterLanguageId;
 };
 
 export type FoldRange = {
+  readonly startIndex: number;
+  readonly endIndex: number;
   readonly startLine: number;
   readonly endLine: number;
   readonly type: string;
+  readonly languageId?: TreeSitterLanguageId;
 };
 
 export type BracketInfo = {
@@ -30,6 +37,27 @@ export type TreeSitterPoint = {
   readonly column: number;
 };
 
+export type TreeSitterInputEdit = {
+  readonly startIndex: number;
+  readonly oldEndIndex: number;
+  readonly newEndIndex: number;
+  readonly startPosition: TreeSitterPoint;
+  readonly oldEndPosition: TreeSitterPoint;
+  readonly newEndPosition: TreeSitterPoint;
+};
+
+export type TreeSitterInjectionInfo = {
+  readonly parentLanguageId: TreeSitterLanguageId;
+  readonly languageId: TreeSitterLanguageId;
+  readonly startIndex: number;
+  readonly endIndex: number;
+};
+
+export type TreeSitterTimingMeasurement = {
+  readonly name: string;
+  readonly durationMs: number;
+};
+
 export type TreeSitterParseResult = {
   readonly documentId: string;
   readonly snapshotVersion: number;
@@ -38,6 +66,8 @@ export type TreeSitterParseResult = {
   readonly folds: readonly FoldRange[];
   readonly brackets: readonly BracketInfo[];
   readonly errors: readonly TreeSitterError[];
+  readonly injections: readonly TreeSitterInjectionInfo[];
+  readonly timings: readonly TreeSitterTimingMeasurement[];
 };
 
 export type TreeSitterInitRequest = {
@@ -50,6 +80,9 @@ export type TreeSitterParseRequest = {
   readonly snapshotVersion: number;
   readonly languageId: TreeSitterLanguageId;
   readonly text: string;
+  readonly snapshot: PieceTableSnapshot;
+  readonly generation: number;
+  readonly cancellationBuffer?: SharedArrayBuffer;
 };
 
 export type TreeSitterEditRequest = {
@@ -57,13 +90,35 @@ export type TreeSitterEditRequest = {
   readonly documentId: string;
   readonly snapshotVersion: number;
   readonly languageId: TreeSitterLanguageId;
+  readonly snapshot: PieceTableSnapshot;
+  readonly edits: readonly TextEdit[];
+  readonly inputEdits: readonly TreeSitterInputEdit[];
+  readonly generation: number;
+  readonly cancellationBuffer?: SharedArrayBuffer;
+};
+
+export type TreeSitterSelectionRange = {
   readonly startIndex: number;
-  readonly oldEndIndex: number;
-  readonly newEndIndex: number;
-  readonly startPosition: TreeSitterPoint;
-  readonly oldEndPosition: TreeSitterPoint;
-  readonly newEndPosition: TreeSitterPoint;
-  readonly insertedText: string;
+  readonly endIndex: number;
+};
+
+export type TreeSitterSelectionAction = "selectToken" | "expand";
+
+export type TreeSitterSelectionRequest = {
+  readonly type: "selection";
+  readonly documentId: string;
+  readonly snapshotVersion: number;
+  readonly languageId: TreeSitterLanguageId;
+  readonly action: TreeSitterSelectionAction;
+  readonly ranges: readonly TreeSitterSelectionRange[];
+};
+
+export type TreeSitterSelectionResult = {
+  readonly documentId: string;
+  readonly snapshotVersion: number;
+  readonly languageId: TreeSitterLanguageId;
+  readonly status: "ok" | "stale";
+  readonly ranges: readonly TreeSitterSelectionRange[];
 };
 
 export type TreeSitterDisposeDocumentRequest = {
@@ -79,8 +134,11 @@ export type TreeSitterWorkerRequestPayload =
   | TreeSitterInitRequest
   | TreeSitterParseRequest
   | TreeSitterEditRequest
+  | TreeSitterSelectionRequest
   | TreeSitterDisposeDocumentRequest
   | TreeSitterDisposeRequest;
+
+export type TreeSitterWorkerResult = TreeSitterParseResult | TreeSitterSelectionResult | undefined;
 
 export type TreeSitterWorkerRequest = {
   readonly id: number;
@@ -91,7 +149,7 @@ export type TreeSitterWorkerResponse =
   | {
       readonly id: number;
       readonly ok: true;
-      readonly result?: TreeSitterParseResult;
+      readonly result?: TreeSitterWorkerResult;
     }
   | {
       readonly id: number;

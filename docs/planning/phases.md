@@ -50,6 +50,10 @@ Anchor type, creation, resolution (with liveness), comparison. Linear-scan first
 
 Replace Shiki as the long-term syntax path. Tree-sitter becomes the source of syntax structure, highlighting, folds, structural selection, indentation, injections, and related query-driven features.
 
+Scheduling contract: visible syntax and interactive syntax queries run before background syntax
+work, and every syntax result is snapshot-tagged and stale-droppable. See
+[Scheduling](scheduling.md).
+
 | Deliverable | Acceptance Criteria |
 |---|---|
 | Worker-owned runtime | Parser creation, parsing, query execution, tree traversal, and injections all run off the main thread |
@@ -85,6 +89,8 @@ layout is the visual source of truth; the editor virtualizes the rows and horizo
 the browser to lay out.
 
 See also: [Browser Layout + 2D Virtualizer Plan](../display/browser-virtualization.md).
+Viewport and mounted-highlight work is frame-coalesced on the main thread. Worker requests for
+visible rows/chunks supersede offscreen and stale requests. See [Scheduling](scheduling.md).
 
 | Deliverable | Acceptance Criteria |
 |---|---|

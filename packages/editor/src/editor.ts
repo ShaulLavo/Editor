@@ -241,16 +241,16 @@ export class Editor {
     this.disposeSyntaxSession();
 
     const documentId = this.documentId ?? `${this.highlightPrefix}-${documentVersion}`;
+    this.session = createDocumentSession(document.text);
+    this.sessionOptions = {};
     this.syntaxSession = this.languageId
       ? editorSyntaxSessionFactory({
           documentId,
           languageId: this.languageId,
           text: document.text,
+          snapshot: this.session.getSnapshot(),
         })
       : null;
-
-    this.session = createDocumentSession(document.text);
-    this.sessionOptions = {};
     this.view.setEditable(true);
     this.setDocument({ text: this.session.getText(), tokens: [] });
     this.syncDomSelection();
@@ -551,6 +551,7 @@ export class Editor {
   private syncSessionSelectionFromDom = (_event: Event): void => {
     if (!this.session) return;
     if (this.mouseSelectionDrag) return;
+    if (this.useSessionSelectionForNextInput) return;
 
     const start = nowMs();
     const change = this.updateSessionSelectionFromDom();
@@ -651,7 +652,11 @@ export class Editor {
     text: string,
   ): Promise<EditorSyntaxResult> {
     if (!this.syntaxSession) return Promise.reject(new Error("No syntax session"));
-    if (!change) return this.syntaxSession.refresh(text);
+    if (!change) {
+      const snapshot = this.session?.getSnapshot();
+      if (!snapshot) return Promise.reject(new Error("No document snapshot"));
+      return this.syntaxSession.refresh(snapshot, text);
+    }
     return this.syntaxSession.applyChange(change);
   }
 
@@ -709,6 +714,7 @@ export class Editor {
 
   private syncCustomSelectionFromDom = (): void => {
     if (!this.session) return;
+    if (this.useSessionSelectionForNextInput) return;
 
     const offsets = this.readDomSelectionOffsets();
     if (!offsets) return;
