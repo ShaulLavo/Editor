@@ -10,6 +10,8 @@ import { resolveMinimapOptions } from "./options";
 import type { EditorMinimapOptions, ResolvedMinimapOptions } from "./types";
 import { canUseMinimapWorker, MinimapWorkerClient, type MinimapHost } from "./workerClient";
 
+const OVERLAY_SCROLLBAR_GUTTER_FALLBACK = 14;
+
 export function createMinimapPlugin(options: EditorMinimapOptions = {}): EditorPlugin {
   const resolved = resolveMinimapOptions(options);
 
@@ -42,6 +44,7 @@ class MinimapContribution implements EditorViewContribution {
   private latestSnapshot: EditorViewSnapshot;
   private activeSliderDrag: SliderDrag | null = null;
   private reservedWidth = 0;
+  private appliedReservedWidth = 0;
   private verticalScrollbarWidth = -1;
   private horizontalScrollbarHeight = -1;
   private disposed = false;
@@ -95,7 +98,7 @@ class MinimapContribution implements EditorViewContribution {
 
     this.reservedWidth = nextWidth;
     this.updateNativeScrollbarGutter();
-    this.context.reserveOverlayWidth(this.options.side, nextWidth);
+    this.reserveEditorOverlayWidth();
   };
 
   private readonly handlePointerDown = (event: PointerEvent): void => {
@@ -188,6 +191,7 @@ class MinimapContribution implements EditorViewContribution {
     this.verticalScrollbarWidth = gutter.vertical;
     this.horizontalScrollbarHeight = gutter.horizontal;
     this.host.root.style.bottom = `${gutter.horizontal}px`;
+    this.reserveEditorOverlayWidth();
     if (this.options.side === "right") {
       this.host.root.style.right = `${gutter.vertical}px`;
       this.host.root.style.left = "";
@@ -196,6 +200,16 @@ class MinimapContribution implements EditorViewContribution {
 
     this.host.root.style.left = "0";
     this.host.root.style.right = "";
+  }
+
+  private reserveEditorOverlayWidth(): void {
+    const scrollbarWidth =
+      this.options.side === "right" ? Math.max(0, this.verticalScrollbarWidth) : 0;
+    const nextWidth = this.reservedWidth + scrollbarWidth;
+    if (nextWidth === this.appliedReservedWidth) return;
+
+    this.appliedReservedWidth = nextWidth;
+    this.context.reserveOverlayWidth(this.options.side, nextWidth);
   }
 }
 
@@ -260,14 +274,16 @@ function nativeScrollbarGutter(element: HTMLElement): {
   const style = element.ownerDocument.defaultView?.getComputedStyle(element);
   const borderX = cssPixels(style?.borderLeftWidth) + cssPixels(style?.borderRightWidth);
   const borderY = cssPixels(style?.borderTopWidth) + cssPixels(style?.borderBottomWidth);
-  const vertical =
-    element.scrollHeight > element.clientHeight
-      ? Math.max(0, element.offsetWidth - element.clientWidth - borderX)
-      : 0;
-  const horizontal =
-    element.scrollWidth > element.clientWidth
-      ? Math.max(0, element.offsetHeight - element.clientHeight - borderY)
-      : 0;
+  const hasVerticalScrollbar = element.scrollHeight > element.clientHeight;
+  const hasHorizontalScrollbar = element.scrollWidth > element.clientWidth;
+  const measuredVertical = Math.max(0, element.offsetWidth - element.clientWidth - borderX);
+  const measuredHorizontal = Math.max(0, element.offsetHeight - element.clientHeight - borderY);
+  const vertical = hasVerticalScrollbar
+    ? Math.max(measuredVertical, OVERLAY_SCROLLBAR_GUTTER_FALLBACK)
+    : 0;
+  const horizontal = hasHorizontalScrollbar
+    ? Math.max(measuredHorizontal, OVERLAY_SCROLLBAR_GUTTER_FALLBACK)
+    : 0;
 
   return { vertical, horizontal };
 }
