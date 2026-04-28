@@ -393,6 +393,7 @@ describe("VirtualizedTextView", () => {
     const recycledElement = container.querySelector(
       '[data-editor-virtual-row="0"]',
     ) as HTMLDivElement;
+    const styleText = document.head.querySelector("style")?.textContent;
     const setCount = registrySets;
     const deleteCount = registryDeletes;
 
@@ -401,6 +402,7 @@ describe("VirtualizedTextView", () => {
     const rowSeven = view.getState().mountedRows.find((row) => row.index === 7);
     const ranges = [...tokenHighlight!];
     expect(highlightsMap.get(tokenHighlightName!)).toBe(tokenHighlight);
+    expect(document.head.querySelector("style")?.textContent).toBe(styleText);
     expect(registrySets).toBe(setCount);
     expect(registryDeletes).toBe(deleteCount);
     expect(rowSeven?.element).toBe(recycledElement);

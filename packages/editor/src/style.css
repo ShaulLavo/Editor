@@ -53,6 +53,7 @@
   --editor-syntax-variable-builtin: #fdba74;
   --editor-gutter-style: hebrew;
   --editor-gutter-width: 36px;
+  --editor-row-height: 20px;
 
   flex: 1;
   position: relative;
@@ -84,6 +85,8 @@
   column-gap: 2px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 10px;
+  height: var(--editor-row-height);
+  line-height: var(--editor-row-height);
   left: 0;
   padding-right: 4px;
   position: absolute;
@@ -143,7 +146,9 @@
 }
 
 .editor-virtualized-row {
+  height: var(--editor-row-height);
   left: var(--editor-gutter-width);
+  line-height: var(--editor-row-height);
   min-width: max-content;
   position: absolute;
   right: 0;

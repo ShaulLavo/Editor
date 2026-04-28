@@ -102,7 +102,6 @@ type TokenGroup = {
   readonly highlight: Highlight;
   readonly style: EditorTokenStyle;
   readonly styleKey: string;
-  readonly rowSlotId: number;
 };
 
 type TokenRowSegment = {
@@ -146,7 +145,7 @@ type OffsetRange = {
 };
 
 const DEFAULT_ROW_HEIGHT = 20;
-const DEFAULT_OVERSCAN = 24;
+const DEFAULT_OVERSCAN = 12;
 // TODO: Size the gutter to the widest visible row marker instead of a constant.
 const DEFAULT_GUTTER_WIDTH = 36;
 const DEFAULT_SELECTION_HIGHLIGHT = "editor-virtualized-selection";
@@ -180,6 +179,7 @@ export class VirtualizedTextView {
   private foldMarkers: readonly VirtualizedFoldMarker[] = [];
   private tokenGroups = new Map<string, TokenGroup>();
   private rowTokenSignatures = new Map<number, string>();
+  private rowTokenRanges = new Map<number, Map<string, readonly AbstractRange[]>>();
   private nextTokenGroupId = 0;
   private nextTokenHighlightSlotId = 0;
   private selectionStart: number | null = null;
@@ -221,6 +221,7 @@ export class VirtualizedTextView {
     this.virtualizer = new FixedRowVirtualizer(createVirtualizerOptions(rowHeight, overscan));
 
     this.scrollElement.style.setProperty("--editor-gutter-width", `${gutterWidth}px`);
+    this.applyRowHeight(rowHeight);
     this.spacer.className = "editor-virtualized-spacer";
     this.gutterElement.className = "editor-virtualized-gutter";
     this.caretElement.className = "editor-virtualized-caret";
@@ -253,7 +254,7 @@ export class VirtualizedTextView {
     this.lineStarts = computeLineStarts(text);
     this.foldMap = foldMapMatchesText(this.foldMap, text) ? this.foldMap : null;
     this.clampStoredSelection();
-    this.rowTokenSignatures.clear();
+    this.clearRowTokenState();
     this.lastRenderedRowsKey = "";
     this.resetContentWidthScan();
     this.virtualizer.updateOptions({ count: this.visibleLineCount() });
@@ -261,7 +262,7 @@ export class VirtualizedTextView {
 
   public setFoldMap(foldMap: FoldMap | null): void {
     this.foldMap = foldMapMatchesText(foldMap, this.text) ? foldMap : null;
-    this.rowTokenSignatures.clear();
+    this.clearRowTokenState();
     this.lastRenderedRowsKey = "";
     this.virtualizer.updateOptions({ count: this.visibleLineCount() });
   }
@@ -276,6 +277,7 @@ export class VirtualizedTextView {
     const measured = measureBrowserTextMetrics(this.scrollElement);
     const rowHeight = normalizeRowHeight(measured.rowHeight);
     this.metrics = { rowHeight, characterWidth: measured.characterWidth };
+    this.applyRowHeight(rowHeight);
     this.lastRenderedRowsKey = "";
     this.virtualizer.updateOptions({ rowHeight });
     return this.metrics;
@@ -432,8 +434,7 @@ export class VirtualizedTextView {
     if (rowsKey === this.lastRenderedRowsKey) return;
 
     this.lastRenderedRowsKey = rowsKey;
-    this.spacer.style.height = `${snapshot.totalSize}px`;
-    this.gutterElement.style.height = `${snapshot.totalSize}px`;
+    this.applyTotalHeight(snapshot.totalSize);
     this.updateContentWidth(snapshot.virtualItems);
     this.reconcileRows(snapshot.virtualItems);
     this.renderTokenHighlights();
@@ -480,6 +481,8 @@ export class VirtualizedTextView {
     foldButtonElement.className = "editor-virtualized-fold-toggle";
     foldButtonElement.type = "button";
     foldButtonElement.hidden = true;
+    foldButtonElement.disabled = true;
+    foldButtonElement.tabIndex = -1;
     leftSpacerElement.className = "editor-virtualized-row-spacer";
     foldPlaceholderElement.className = "editor-virtualized-fold-placeholder";
     foldPlaceholderElement.textContent = "...";
@@ -550,10 +553,6 @@ export class VirtualizedTextView {
   ): void {
     if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
     this.updateGutterRowElement(row, item);
-    if (row.height !== item.size) {
-      row.element.style.height = `${item.size}px`;
-      row.element.style.lineHeight = `${item.size}px`;
-    }
     if (row.top !== item.start) {
       row.element.style.transform = `translate3d(0, ${item.start}px, 0)`;
     }
@@ -620,10 +619,6 @@ export class VirtualizedTextView {
   ): void {
     if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
     this.updateGutterRowElement(row, item);
-    if (row.height !== item.size) {
-      row.element.style.height = `${item.size}px`;
-      row.element.style.lineHeight = `${item.size}px`;
-    }
     if (row.top !== item.start) {
       row.element.style.transform = `translate3d(0, ${item.start}px, 0)`;
     }
@@ -826,25 +821,12 @@ export class VirtualizedTextView {
     marker: VirtualizedFoldMarker | null,
   ): void {
     if (!marker) {
-      row.foldButtonElement.hidden = true;
-      row.foldButtonElement.disabled = true;
-      row.foldButtonElement.tabIndex = -1;
-      row.foldButtonElement.removeAttribute("data-editor-fold-key");
-      row.foldButtonElement.removeAttribute("data-editor-fold-state");
-      row.foldButtonElement.removeAttribute("aria-label");
+      hideFoldButton(row.foldButtonElement);
       return;
     }
 
     const state = marker.collapsed ? "collapsed" : "expanded";
-    row.foldButtonElement.hidden = false;
-    row.foldButtonElement.disabled = false;
-    row.foldButtonElement.tabIndex = 0;
-    row.foldButtonElement.dataset.editorFoldKey = marker.key;
-    row.foldButtonElement.dataset.editorFoldState = state;
-    row.foldButtonElement.setAttribute(
-      "aria-label",
-      marker.collapsed ? "Expand folded region" : "Collapse foldable region",
-    );
+    showFoldButton(row.foldButtonElement, marker.key, state);
   }
 
   private updateFoldPlaceholder(
@@ -852,13 +834,12 @@ export class VirtualizedTextView {
     marker: VirtualizedFoldMarker | null,
   ): void {
     const show = marker?.collapsed === true;
-    row.foldPlaceholderElement.hidden = !show;
-    row.foldPlaceholderElement.dataset.editorFoldPlaceholder = show ? marker.key : "";
     if (!show) {
-      row.foldPlaceholderElement.remove();
+      hideFoldPlaceholder(row.foldPlaceholderElement);
       return;
     }
 
+    showFoldPlaceholder(row.foldPlaceholderElement, marker.key);
     if (row.foldPlaceholderElement.isConnected) return;
     row.element.appendChild(row.foldPlaceholderElement);
   }
@@ -866,11 +847,7 @@ export class VirtualizedTextView {
   private updateGutterRowElement(row: MountedVirtualizedTextRow, item: FixedRowVirtualItem): void {
     if (row.index !== item.index) {
       row.gutterElement.dataset.editorVirtualGutterRow = String(item.index);
-      row.gutterLabelElement.style.counterSet = `editor-line ${item.index + 1}`;
-    }
-    if (row.height !== item.size) {
-      row.gutterElement.style.height = `${item.size}px`;
-      row.gutterElement.style.lineHeight = `${item.size}px`;
+      setCounterSet(row.gutterLabelElement, `editor-line ${item.index + 1}`);
     }
     if (row.top !== item.start) {
       row.gutterElement.style.transform = `translate3d(0, ${item.start}px, 0)`;
@@ -926,7 +903,8 @@ export class VirtualizedTextView {
 
   private removeReusableRows(rows: readonly MountedVirtualizedTextRow[]): void {
     for (const row of rows) {
-      this.deleteTokenGroupsForRow(row.tokenHighlightSlotId);
+      this.deleteTokenRangesForRow(row.tokenHighlightSlotId);
+      this.rowTokenSignatures.delete(row.tokenHighlightSlotId);
       removeRowElements(row);
     }
   }
@@ -991,6 +969,16 @@ export class VirtualizedTextView {
 
     this.contentWidth = width;
     this.spacer.style.width = `${width + this.gutterWidth()}px`;
+  }
+
+  private applyRowHeight(rowHeight: number): void {
+    setStyleValue(this.scrollElement, "--editor-row-height", `${rowHeight}px`);
+  }
+
+  private applyTotalHeight(totalHeight: number): void {
+    const height = `${totalHeight}px`;
+    setStyleValue(this.spacer, "height", height);
+    setStyleValue(this.gutterElement, "height", height);
   }
 
   private getMountedRows(): readonly MountedVirtualizedTextRow[] {
@@ -1099,7 +1087,7 @@ export class VirtualizedTextView {
   }
 
   private clearSelectionHighlight(): void {
-    this.selectionHighlight?.clear();
+    this.clearSelectionHighlightRanges();
     if (!this.selectionHighlightRegistered || !this.highlightRegistry) return;
 
     this.highlightRegistry.delete(this.selectionHighlightName);
@@ -1109,7 +1097,6 @@ export class VirtualizedTextView {
   private renderSelectionHighlight(): void {
     const selectionRange = this.selectionRange();
 
-    this.clearSelectionHighlightRanges();
     this.renderCaret();
     if (!selectionRange) {
       this.clearSelectionHighlight();
@@ -1117,6 +1104,7 @@ export class VirtualizedTextView {
     }
     if (!this.selectionHighlight || !this.highlightRegistry) return;
 
+    this.clearSelectionHighlightRanges();
     this.addMountedSelectionRanges(selectionRange.start, selectionRange.end);
     if (this.selectionHighlight.size === 0) return;
 
@@ -1125,19 +1113,23 @@ export class VirtualizedTextView {
 
   private renderCaret(): void {
     if (this.selectionEnd === null || this.selectionStart !== this.selectionEnd) {
-      this.caretElement.hidden = true;
+      setElementHidden(this.caretElement, true);
       return;
     }
 
     const position = this.caretPosition(this.selectionEnd);
     if (!position) {
-      this.caretElement.hidden = true;
+      setElementHidden(this.caretElement, true);
       return;
     }
 
-    this.caretElement.hidden = false;
-    this.caretElement.style.height = `${position.height}px`;
-    this.caretElement.style.transform = `translate(${position.left}px, ${position.top}px)`;
+    setElementHidden(this.caretElement, false);
+    setStyleValue(this.caretElement, "height", `${position.height}px`);
+    setStyleValue(
+      this.caretElement,
+      "transform",
+      `translate(${position.left}px, ${position.top}px)`,
+    );
   }
 
   private clampStoredSelection(): void {
@@ -1176,12 +1168,10 @@ export class VirtualizedTextView {
     const signature = tokenRowSignature(row, segments);
     if (this.rowTokenSignatures.get(row.tokenHighlightSlotId) === signature) return false;
 
-    const previousRanges = this.captureTokenHighlightRangesForRow(row.tokenHighlightSlotId);
-    const usedStyleKeys = this.addTokenSegmentsForRow(row, segments);
-    this.deleteCapturedTokenRanges(previousRanges);
-    const removed = this.removeUnusedTokenGroupsForRow(row.tokenHighlightSlotId, usedStyleKeys);
+    this.deleteTokenRangesForRow(row.tokenHighlightSlotId);
+    const result = this.addTokenSegmentsForRow(row, segments);
     this.rowTokenSignatures.set(row.tokenHighlightSlotId, signature);
-    return previousRanges.size > 0 || usedStyleKeys.size > 0 || removed;
+    return result.groupsChanged;
   }
 
   private tokenSegmentsForRows(
@@ -1246,91 +1236,116 @@ export class VirtualizedTextView {
   private addTokenSegmentsForRow(
     row: MountedVirtualizedTextRow,
     segments: readonly TokenRowSegment[],
-  ): Set<string> {
-    const usedStyleKeys = new Set<string>();
+  ): { readonly groupsChanged: boolean } {
+    const rangesByStyle = new Map<string, AbstractRange[]>();
     const document = this.scrollElement.ownerDocument;
+    let groupsChanged = false;
     for (const segment of segments) {
-      const group = this.ensureTokenGroup(row, segment.styleKey, segment.style);
+      const result = this.ensureTokenGroup(segment.styleKey, segment.style);
+      const group = result.group;
       if (!group) continue;
 
-      usedStyleKeys.add(segment.styleKey);
-      addTokenRangeToChunk(document, group.highlight, segment.chunk, segment.start, segment.end);
+      const range = addTokenRangeToChunk(
+        document,
+        group.highlight,
+        segment.chunk,
+        segment.start,
+        segment.end,
+      );
+      groupsChanged = groupsChanged || result.created;
+      if (!range) continue;
+      appendTokenRange(rangesByStyle, segment.styleKey, range);
     }
 
-    return usedStyleKeys;
+    if (rangesByStyle.size > 0) {
+      this.rowTokenRanges.set(row.tokenHighlightSlotId, rangesByStyle);
+    }
+
+    return { groupsChanged };
   }
 
   private ensureTokenGroup(
-    row: MountedVirtualizedTextRow,
     styleKey: string,
     style: EditorTokenStyle,
-  ): TokenGroup | null {
-    const key = tokenGroupKey(row.tokenHighlightSlotId, styleKey);
-    const existing = this.tokenGroups.get(key);
-    if (existing) return existing;
+  ): { readonly group: TokenGroup | null; readonly created: boolean } {
+    const existing = this.tokenGroups.get(styleKey);
+    if (existing) return { group: existing, created: false };
 
     const name = `${this.selectionHighlightName}-token-${this.nextTokenGroupId++}`;
     const highlight = new Highlight();
-    if (!highlight) return null;
+    if (!highlight) return { group: null, created: false };
 
     const group = {
       name,
       highlight,
       style,
       styleKey,
-      rowSlotId: row.tokenHighlightSlotId,
     };
-    this.tokenGroups.set(key, group);
+    this.tokenGroups.set(styleKey, group);
     this.highlightRegistry?.set(name, group.highlight);
-    return group;
+    return { group, created: true };
   }
 
   private clearTokenHighlights(): void {
+    if (this.tokenGroups.size === 0 && this.rowTokenRanges.size === 0) return;
+
     for (const group of this.tokenGroups.values()) {
       this.highlightRegistry?.delete(group.name);
     }
 
     this.tokenGroups.clear();
-    this.rowTokenSignatures.clear();
+    this.clearRowTokenState();
     this.nextTokenGroupId = 0;
     this.rebuildStyleRules();
   }
 
   private syncTokenGroupsToTokenSet(): void {
-    const styleKeys = this.currentTokenStyleKeys();
-    if (styleKeys.size === 0 || this.text.length === 0) {
+    const styles = this.currentTokenStyles();
+    if (styles.size === 0 || this.text.length === 0) {
       this.clearTokenHighlights();
       return;
     }
 
-    this.removeUnusedTokenGroups(styleKeys);
+    const added = this.ensureTokenGroupsForStyles(styles);
+    const removed = this.removeUnusedTokenGroups(new Set(styles.keys()));
+    if (added || removed) this.rebuildStyleRules();
   }
 
-  private currentTokenStyleKeys(): Set<string> {
-    const styleKeys = new Set<string>();
+  private currentTokenStyles(): Map<string, EditorTokenStyle> {
+    const styles = new Map<string, EditorTokenStyle>();
     for (const token of this.tokens) {
       const style = normalizeTokenStyle(token.style);
       if (!style) continue;
-      styleKeys.add(serializeTokenStyle(style));
+      styles.set(serializeTokenStyle(style), style);
     }
 
-    return styleKeys;
+    return styles;
   }
 
-  private removeUnusedTokenGroups(styleKeys: ReadonlySet<string>): void {
+  private ensureTokenGroupsForStyles(styles: ReadonlyMap<string, EditorTokenStyle>): boolean {
+    let added = false;
+    for (const [styleKey, style] of styles) {
+      const result = this.ensureTokenGroup(styleKey, style);
+      added = added || result.created;
+    }
+
+    return added;
+  }
+
+  private removeUnusedTokenGroups(styleKeys: ReadonlySet<string>): boolean {
     let removed = false;
     for (const [key, group] of this.tokenGroups) {
-      if (styleKeys.has(group.styleKey)) continue;
+      if (styleKeys.has(key)) continue;
 
       this.highlightRegistry?.delete(group.name);
       this.tokenGroups.delete(key);
-      this.rowTokenSignatures.delete(group.rowSlotId);
       removed = true;
     }
 
-    if (!removed) return;
+    if (!removed) return false;
 
-    this.rebuildStyleRules();
+    this.clearRowTokenState();
+    return true;
   }
 
   private canKeepLiveTokenRanges(tokens: readonly EditorToken[]): boolean {
@@ -1343,60 +1358,34 @@ export class VirtualizedTextView {
     });
   }
 
-  private captureTokenHighlightRangesForRow(
-    rowSlotId: number,
-  ): Map<TokenGroup, readonly AbstractRange[]> {
-    const ranges = new Map<TokenGroup, readonly AbstractRange[]>();
-    for (const group of this.tokenGroups.values()) {
-      if (group.rowSlotId !== rowSlotId) continue;
-      ranges.set(group, [...group.highlight]);
-    }
+  private deleteTokenRangesForRow(rowSlotId: number): void {
+    const rangesByStyle = this.rowTokenRanges.get(rowSlotId);
+    if (!rangesByStyle) return;
 
-    return ranges;
-  }
+    for (const [styleKey, capturedRanges] of rangesByStyle) {
+      const group = this.tokenGroups.get(styleKey);
+      if (!group) continue;
 
-  private deleteCapturedTokenRanges(
-    ranges: ReadonlyMap<TokenGroup, readonly AbstractRange[]>,
-  ): void {
-    for (const [group, capturedRanges] of ranges) {
       for (const range of capturedRanges) {
         group.highlight.delete(range);
       }
     }
+
+    this.rowTokenRanges.delete(rowSlotId);
   }
 
-  private removeUnusedTokenGroupsForRow(
-    rowSlotId: number,
-    styleKeys: ReadonlySet<string>,
-  ): boolean {
-    let removed = false;
-    for (const [key, group] of this.tokenGroups) {
-      if (group.rowSlotId !== rowSlotId) continue;
-      if (styleKeys.has(group.styleKey)) continue;
-
-      this.highlightRegistry?.delete(group.name);
-      this.tokenGroups.delete(key);
-      removed = true;
+  private clearRowTokenState(): void {
+    for (const rowSlotId of this.rowTokenRanges.keys()) {
+      this.deleteTokenRangesForRow(rowSlotId);
     }
 
-    return removed;
-  }
-
-  private deleteTokenGroupsForRow(rowSlotId: number): void {
-    let removed = false;
-    for (const [key, group] of this.tokenGroups) {
-      if (group.rowSlotId !== rowSlotId) continue;
-
-      this.highlightRegistry?.delete(group.name);
-      this.tokenGroups.delete(key);
-      removed = true;
-    }
-
-    this.rowTokenSignatures.delete(rowSlotId);
-    if (removed) this.rebuildStyleRules();
+    this.rowTokenSignatures.clear();
+    this.rowTokenRanges.clear();
   }
 
   private clearSelectionHighlightRanges(): void {
+    if (!this.selectionHighlight || this.selectionHighlight.size === 0) return;
+
     this.selectionHighlight?.clear();
   }
 
@@ -1664,6 +1653,40 @@ function preventFoldButtonMouseDown(event: MouseEvent): void {
   event.stopPropagation();
 }
 
+function hideFoldButton(button: HTMLButtonElement): void {
+  setElementHidden(button, true);
+  if (!button.disabled) button.disabled = true;
+  if (button.tabIndex !== -1) button.tabIndex = -1;
+  deleteDatasetValue(button, "editorFoldKey");
+  deleteDatasetValue(button, "editorFoldState");
+  removeAttributeValue(button, "aria-label");
+}
+
+function showFoldButton(
+  button: HTMLButtonElement,
+  key: string,
+  state: "collapsed" | "expanded",
+): void {
+  const label = state === "collapsed" ? "Expand folded region" : "Collapse foldable region";
+  setElementHidden(button, false);
+  if (button.disabled) button.disabled = false;
+  if (button.tabIndex !== 0) button.tabIndex = 0;
+  setDatasetValue(button, "editorFoldKey", key);
+  setDatasetValue(button, "editorFoldState", state);
+  setAttributeValue(button, "aria-label", label);
+}
+
+function hideFoldPlaceholder(element: HTMLSpanElement): void {
+  setElementHidden(element, true);
+  deleteDatasetValue(element, "editorFoldPlaceholder");
+  if (element.isConnected) element.remove();
+}
+
+function showFoldPlaceholder(element: HTMLSpanElement, key: string): void {
+  setElementHidden(element, false);
+  setDatasetValue(element, "editorFoldPlaceholder", key);
+}
+
 function createVirtualizerOptions(rowHeight: number, overscan: number): FixedRowVirtualizerOptions {
   return {
     count: 1,
@@ -1862,23 +1885,34 @@ function tokenSegmentSignature(segment: TokenRowSegment): string {
   return `${segment.styleKey}:${segment.chunk.localStart}:${localStart}:${localEnd}`;
 }
 
-function tokenGroupKey(rowSlotId: number, styleKey: string): string {
-  return `${rowSlotId}:${styleKey}`;
-}
-
 function addTokenRangeToChunk(
   document: Document,
   highlight: Highlight,
   chunk: VirtualizedTextChunk,
   start: number,
   end: number,
-): void {
-  if (end <= chunk.startOffset || start >= chunk.endOffset) return;
+): Range | null {
+  if (end <= chunk.startOffset || start >= chunk.endOffset) return null;
 
   const range = document.createRange();
   range.setStart(chunk.textNode, clamp(start - chunk.startOffset, 0, chunk.textNode.length));
   range.setEnd(chunk.textNode, clamp(end - chunk.startOffset, 0, chunk.textNode.length));
   highlight.add(range);
+  return range;
+}
+
+function appendTokenRange(
+  rangesByStyle: Map<string, AbstractRange[]>,
+  styleKey: string,
+  range: AbstractRange,
+): void {
+  const ranges = rangesByStyle.get(styleKey);
+  if (ranges) {
+    ranges.push(range);
+    return;
+  }
+
+  rangesByStyle.set(styleKey, [range]);
 }
 
 function firstRangeRect(range: Range): DOMRect | null {
@@ -2049,6 +2083,41 @@ function scrollElementPadding(element: HTMLElement): {
     top: parseCssPixels(style?.paddingTop) ?? 0,
     bottom: parseCssPixels(style?.paddingBottom) ?? 0,
   };
+}
+
+function setElementHidden(element: HTMLElement, hidden: boolean): void {
+  if (element.hidden === hidden) return;
+  element.hidden = hidden;
+}
+
+function setStyleValue(element: HTMLElement, property: string, value: string): void {
+  if (element.style.getPropertyValue(property) === value) return;
+  element.style.setProperty(property, value);
+}
+
+function setCounterSet(element: HTMLElement, value: string): void {
+  if (element.style.counterSet === value) return;
+  element.style.counterSet = value;
+}
+
+function setDatasetValue(element: HTMLElement, key: string, value: string): void {
+  if (element.dataset[key] === value) return;
+  element.dataset[key] = value;
+}
+
+function deleteDatasetValue(element: HTMLElement, key: string): void {
+  if (element.dataset[key] === undefined) return;
+  delete element.dataset[key];
+}
+
+function setAttributeValue(element: HTMLElement, name: string, value: string): void {
+  if (element.getAttribute(name) === value) return;
+  element.setAttribute(name, value);
+}
+
+function removeAttributeValue(element: HTMLElement, name: string): void {
+  if (!element.hasAttribute(name)) return;
+  element.removeAttribute(name);
 }
 
 function parseCssPixels(value: string | undefined): number | null {
