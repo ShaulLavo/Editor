@@ -79,6 +79,7 @@ export type TreeSitterParseRequest = {
   readonly documentId: string;
   readonly snapshotVersion: number;
   readonly languageId: TreeSitterLanguageId;
+  readonly includeHighlights: boolean;
   readonly text: string;
   readonly snapshot: PieceTableSnapshot;
   readonly generation: number;
@@ -90,6 +91,7 @@ export type TreeSitterEditRequest = {
   readonly documentId: string;
   readonly snapshotVersion: number;
   readonly languageId: TreeSitterLanguageId;
+  readonly includeHighlights: boolean;
   readonly snapshot: PieceTableSnapshot;
   readonly edits: readonly TextEdit[];
   readonly inputEdits: readonly TreeSitterInputEdit[];

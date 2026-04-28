@@ -7,6 +7,9 @@ import {
   setEditorSyntaxSessionFactory,
   setHighlightRegistry,
   type DocumentSessionChange,
+  type EditorHighlightResult,
+  type EditorHighlighterSession,
+  type EditorPlugin,
   type EditorState,
   type EditorSyntaxResult,
   type EditorSyntaxSession,
@@ -64,8 +67,35 @@ function createMockSyntaxSession(
     applyChange: async () => createSyntaxResult(),
     getResult: () => createSyntaxResult(),
     getTokens: () => [],
+    getSnapshotVersion: () => 0,
     dispose: () => undefined,
     ...overrides,
+  };
+}
+
+function createHighlightResult(
+  tokens = [{ start: 0, end: 5, style: { color: "#00ff00" } }],
+): EditorHighlightResult {
+  return { tokens };
+}
+
+function createMockHighlighterSession(
+  overrides: Partial<EditorHighlighterSession> = {},
+): EditorHighlighterSession {
+  return {
+    refresh: async () => createHighlightResult(),
+    applyChange: async () => createHighlightResult(),
+    dispose: () => undefined,
+    ...overrides,
+  };
+}
+
+function createHighlighterPlugin(session: EditorHighlighterSession): EditorPlugin {
+  return {
+    activate: (context) =>
+      context.registerHighlighter({
+        createSession: () => session,
+      }),
   };
 }
 
@@ -124,6 +154,10 @@ function tokenHighlights(): Highlight[] {
   return [...highlightsMap]
     .filter(([name]) => name.includes("-token-"))
     .map(([, highlight]) => highlight);
+}
+
+function tokenHighlightRanges(): Range[] {
+  return tokenHighlights().flatMap((highlight) => [...highlight]);
 }
 
 function foldToggle(): HTMLButtonElement {
@@ -1032,12 +1066,72 @@ describe("Editor", () => {
       expect(created).toEqual([
         expect.objectContaining({
           documentId: "main.ts",
+          includeHighlights: true,
           languageId: "typescript",
           text: "const a = 1;",
         }),
       ]);
       expect(editor.getState().syntaxStatus).toBe("ready");
       expect(highlightsMap.size).toBe(1);
+    });
+
+    it("uses plugin highlights instead of Tree-sitter tokens", async () => {
+      const created: EditorSyntaxSessionOptions[] = [];
+      const highlighter = createMockHighlighterSession({
+        refresh: async () =>
+          createHighlightResult([{ start: 6, end: 7, style: { color: "#00ff00" } }]),
+      });
+      editor.dispose();
+      editor = new Editor(container, { plugins: [createHighlighterPlugin(highlighter)] });
+      setEditorSyntaxSessionFactory((options) => {
+        created.push(options);
+        return createMockSyntaxSession({
+          refresh: async () =>
+            createSyntaxResult([{ start: 0, end: 5, style: { color: "#ff0000" } }]),
+        });
+      });
+
+      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      await flushMicrotasks();
+
+      expect(created[0]).toEqual(expect.objectContaining({ includeHighlights: false }));
+      expect(tokenHighlightRanges()).toHaveLength(1);
+      expect(tokenHighlightRanges()[0]?.startOffset).toBe(6);
+    });
+
+    it("keeps Tree-sitter folds when plugin highlights are active", async () => {
+      const text = "if (x) {\n  y();\n}\nz();";
+      const foldEnd = text.indexOf("\nz();");
+      const highlighter = createMockHighlighterSession({
+        refresh: async () =>
+          createHighlightResult([{ start: 3, end: 4, style: { color: "#00ff00" } }]),
+      });
+      editor.dispose();
+      editor = new Editor(container, { plugins: [createHighlighterPlugin(highlighter)] });
+      setEditorSyntaxSessionFactory(() =>
+        createMockSyntaxSession({
+          refresh: async () =>
+            createSyntaxResult(
+              [{ start: 0, end: 2, style: { color: "#ff0000" } }],
+              [
+                {
+                  startIndex: 0,
+                  endIndex: foldEnd,
+                  startLine: 0,
+                  endLine: 2,
+                  type: "statement_block",
+                  languageId: "typescript",
+                },
+              ],
+            ),
+        }),
+      );
+
+      editor.openDocument({ documentId: "main.ts", text });
+      await flushMicrotasks();
+
+      expect(foldToggle().dataset.editorFoldState).toBe("expanded");
+      expect(tokenHighlightRanges()[0]?.startOffset).toBe(3);
     });
 
     it("renders syntax fold controls and toggles collapsed rows", async () => {
@@ -1285,6 +1379,61 @@ describe("Editor", () => {
       await flushMicrotasks();
       expect(editor.getText()).toBe("const a = 1;!?");
       expect(highlightsMap.size).toBe(1);
+    });
+
+    it("ignores stale plugin highlight results after rapid edits", async () => {
+      const firstEdit = createDeferred<EditorHighlightResult>();
+      const secondEdit = createDeferred<EditorHighlightResult>();
+      const editResults = [firstEdit, secondEdit];
+      const highlighter = createMockHighlighterSession({
+        refresh: async () => createHighlightResult([]),
+        applyChange: () => editResults.shift()!.promise,
+      });
+      editor.dispose();
+      editor = new Editor(container, { plugins: [createHighlighterPlugin(highlighter)] });
+      setEditorSyntaxSessionFactory(() =>
+        createMockSyntaxSession({
+          refresh: async () => createSyntaxResult([]),
+          applyChange: async () => createSyntaxResult([]),
+        }),
+      );
+
+      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      await flushMicrotasks();
+      editorRoot().dispatchEvent(createInsertEvent("!"));
+      editorRoot().dispatchEvent(createInsertEvent("?"));
+
+      secondEdit.resolve(
+        createHighlightResult([{ start: 0, end: 5, style: { color: "#00ff00" } }]),
+      );
+      await flushMicrotasks();
+      expect(tokenHighlightRanges()[0]?.startOffset).toBe(0);
+
+      firstEdit.resolve(createHighlightResult([{ start: 6, end: 7, style: { color: "#ff0000" } }]));
+      await flushMicrotasks();
+      expect(editor.getText()).toBe("const a = 1;!?");
+      expect(tokenHighlightRanges()[0]?.startOffset).toBe(0);
+    });
+
+    it("keeps structural syntax ready when plugin highlighting fails", async () => {
+      const highlighter = createMockHighlighterSession({
+        refresh: async () => {
+          throw new Error("highlight failed");
+        },
+      });
+      editor.dispose();
+      editor = new Editor(container, { plugins: [createHighlighterPlugin(highlighter)] });
+      setEditorSyntaxSessionFactory(() =>
+        createMockSyntaxSession({
+          refresh: async () => createSyntaxResult([]),
+        }),
+      );
+
+      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      await flushMicrotasks();
+
+      expect(editor.getState().syntaxStatus).toBe("ready");
+      expect(tokenHighlights()).toHaveLength(0);
     });
 
     it("falls back to plain text for unknown languages", async () => {

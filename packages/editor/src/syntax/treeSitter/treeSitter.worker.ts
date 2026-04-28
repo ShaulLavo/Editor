@@ -193,7 +193,7 @@ const parseDocument = async (
     const tree = parseSource(runtime.parser, source, null, context);
     const parseMs = nowMs() - parseStart;
     const queryStart = nowMs();
-    const result = await processTree(tree, runtime, source, context, 0);
+    const result = await processTree(tree, runtime, source, context, 0, request.includeHighlights);
     const queryMs = nowMs() - queryStart;
 
     replaceCachedSnapshot(request.documentId, {
@@ -240,7 +240,7 @@ const editDocument = async (
     reusableTree.delete();
 
     const queryStart = nowMs();
-    const result = await processTree(tree, runtime, source, context, 0);
+    const result = await processTree(tree, runtime, source, context, 0, request.includeHighlights);
     const queryMs = nowMs() - queryStart;
     replaceCachedSnapshot(request.documentId, {
       snapshotVersion: request.snapshotVersion,
@@ -326,12 +326,20 @@ const processTree = async (
   source: TreeSitterPieceTableInput,
   context: CancellationContext,
   injectionDepth: number,
+  includeHighlights: boolean,
 ): Promise<ProcessedTree> => {
   const queryContext = { ...context, budgetMs: QUERY_BUDGET_MS };
-  const captures = collectCaptures(tree, runtime, queryContext);
+  const captures = includeHighlights ? collectCaptures(tree, runtime, queryContext) : [];
   const folds = collectFolds(tree, runtime, queryContext);
   const treeData = collectTreeData(tree);
-  const injected = await collectInjectedTrees(tree, runtime, source, queryContext, injectionDepth);
+  const injected = await collectInjectedTrees(
+    tree,
+    runtime,
+    source,
+    queryContext,
+    injectionDepth,
+    includeHighlights,
+  );
 
   return {
     captures: mergeCaptures(captures, injected.captures),
@@ -431,6 +439,7 @@ const collectInjectedTrees = async (
   source: TreeSitterPieceTableInput,
   context: CancellationContext,
   depth: number,
+  includeHighlights: boolean,
 ): Promise<ProcessedTree> => {
   if (depth >= MAX_INJECTION_DEPTH) return createEmptyProcessedTree();
 
@@ -441,7 +450,7 @@ const collectInjectedTrees = async (
   assertNotCancelled(context);
 
   const specs = injectionSpecsForMatches(matches, source, runtime.descriptor.id);
-  return processInjectionSpecs(specs, source, context, depth);
+  return processInjectionSpecs(specs, source, context, depth, includeHighlights);
 };
 
 const injectionSpecsForMatches = (
@@ -490,11 +499,12 @@ const processInjectionSpecs = async (
   source: TreeSitterPieceTableInput,
   context: CancellationContext,
   depth: number,
+  includeHighlights: boolean,
 ): Promise<ProcessedTree> => {
   const result = createEmptyProcessedTree();
 
   for (const spec of specs) {
-    const processed = await processInjectionSpec(spec, source, context, depth);
+    const processed = await processInjectionSpec(spec, source, context, depth, includeHighlights);
     mergeProcessedTree(result, processed);
   }
 
@@ -506,10 +516,11 @@ const processInjectionSpec = async (
   source: TreeSitterPieceTableInput,
   context: CancellationContext,
   depth: number,
+  includeHighlights: boolean,
 ): Promise<ProcessedTree> => {
   const runtime = await ensureRuntime(spec.languageId);
   const tree = parseInjectedSource(runtime.parser, source, spec.ranges, context);
-  const processed = await processTree(tree, runtime, source, context, depth + 1);
+  const processed = await processTree(tree, runtime, source, context, depth + 1, includeHighlights);
   const injection = injectionInfoForSpec(spec);
 
   return {

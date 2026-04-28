@@ -1,5 +1,6 @@
 import { Editor } from "@editor/core/editor";
 import "@editor/core/style.css";
+import { createShikiHighlighterPlugin } from "@editor/shiki";
 import { createEditorPane } from "./components/editorPane.ts";
 import { el } from "./components/dom.ts";
 import { createSidebar } from "./components/sidebar.ts";
@@ -108,6 +109,7 @@ export function mountApp(): void {
 
   let controller: DirectoryController | null = null;
   const editor = new Editor(editorPane.element, {
+    plugins: [createShikiHighlighterPlugin({ theme: "github-dark" })],
     onChange: (state) => {
       controller?.updateStatus(state);
     },

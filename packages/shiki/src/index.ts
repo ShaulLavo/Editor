@@ -1,9 +1,12 @@
 export { createIncrementalTokenizer } from "./tokenizer";
-
+export { createShikiHighlighterPlugin } from "./plugin";
 export {
-  snapshotToEditorTokens,
-  tokenLinesToEditorTokens,
-} from "./editor-tokens";
+  canUseShikiWorker,
+  createShikiHighlighterSession,
+  disposeShikiWorker,
+} from "./workerClient";
+
+export { snapshotToEditorTokens, tokenLinesToEditorTokens } from "./editor-tokens";
 
 export type {
   CreateIncrementalTokenizerOptions,
@@ -16,3 +19,5 @@ export type {
   TokenLineSnapshot,
   TokenPatch,
 } from "./tokenizer";
+export type { ShikiHighlighterPluginOptions, ShikiLanguageMap } from "./plugin";
+export type { ShikiHighlighterSessionOptions } from "./workerClient";

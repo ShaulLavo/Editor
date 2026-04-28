@@ -28,6 +28,11 @@ import type {
 } from "./editor/types";
 import type { FoldMap } from "./foldMap";
 import { offsetToPoint } from "./pieceTable/positions";
+import {
+  EditorPluginHost,
+  type EditorHighlightResult,
+  type EditorHighlighterSession,
+} from "./plugins";
 import { resolveSelection } from "./selections";
 import {
   createEditorSyntaxSession,
@@ -55,6 +60,15 @@ export type {
   EditorSyntaxStatus,
   HighlightRegistry,
 } from "./editor/types";
+export type {
+  EditorDisposable,
+  EditorHighlightResult,
+  EditorHighlighterProvider,
+  EditorHighlighterSession,
+  EditorHighlighterSessionOptions,
+  EditorPlugin,
+  EditorPluginContext,
+} from "./plugins";
 
 let editorInstanceCount = 0;
 
@@ -90,6 +104,7 @@ export class Editor {
   private readonly foldState: EditorFoldState;
   private readonly el: HTMLDivElement;
   private readonly options: EditorOptions;
+  private readonly pluginHost: EditorPluginHost;
   private readonly highlightPrefix: string;
   private text = "";
   private session: DocumentSession | null = null;
@@ -98,9 +113,11 @@ export class Editor {
   private languageId: EditorSyntaxLanguageId | null = null;
   private syntaxStatus: EditorSyntaxStatus = "plain";
   private syntaxSession: EditorSyntaxSession | null = null;
+  private highlighterSession: EditorHighlighterSession | null = null;
   private tokens: readonly EditorToken[] = [];
   private documentVersion = 0;
   private syntaxVersion = 0;
+  private highlightVersion = 0;
   private mouseSelectionDrag: MouseSelectionDrag | null = null;
   private mouseSelectionAutoScrollFrame = 0;
   private useSessionSelectionForNextInput = false;
@@ -108,6 +125,7 @@ export class Editor {
 
   constructor(container: HTMLElement, options: EditorOptions = {}) {
     this.options = options;
+    this.pluginHost = new EditorPluginHost(options.plugins);
     this.highlightPrefix = `editor-token-${editorInstanceCount++}`;
     this.view = new VirtualizedTextView(container, {
       className: "editor",
@@ -197,6 +215,7 @@ export class Editor {
     this.languageId = null;
     this.syntaxStatus = "plain";
     this.disposeSyntaxSession();
+    this.disposeHighlighterSession();
     this.session = session;
     this.sessionOptions = options;
     this.view.setEditable(true);
@@ -217,6 +236,7 @@ export class Editor {
     this.languageId = null;
     this.syntaxStatus = "plain";
     this.disposeSyntaxSession();
+    this.disposeHighlighterSession();
     this.detachSession();
     this.setContent("");
   }
@@ -224,8 +244,10 @@ export class Editor {
   dispose(): void {
     this.uninstallEditingHandlers();
     this.disposeSyntaxSession();
+    this.disposeHighlighterSession();
     this.detachSession();
     this.view.dispose();
+    this.pluginHost.dispose();
   }
 
   private resetOwnedDocument(document: EditorOpenDocumentOptions): number {
@@ -238,14 +260,22 @@ export class Editor {
         : document.languageId;
     this.syntaxStatus = this.languageId ? "loading" : "plain";
     this.disposeSyntaxSession();
+    this.disposeHighlighterSession();
 
     const documentId = this.documentId ?? `${this.highlightPrefix}-${documentVersion}`;
     this.session = createDocumentSession(document.text);
     this.sessionOptions = {};
+    this.highlighterSession = this.pluginHost.createHighlighterSession({
+      documentId,
+      languageId: this.languageId,
+      text: document.text,
+      snapshot: this.session.getSnapshot(),
+    });
     this.syntaxSession = this.languageId
       ? editorSyntaxSessionFactory({
           documentId,
           languageId: this.languageId,
+          includeHighlights: !this.highlighterSession,
           text: document.text,
           snapshot: this.session.getSnapshot(),
         })
@@ -260,6 +290,12 @@ export class Editor {
     this.syntaxVersion += 1;
     this.syntaxSession?.dispose();
     this.syntaxSession = null;
+  }
+
+  private disposeHighlighterSession(): void {
+    this.highlightVersion += 1;
+    this.highlighterSession?.dispose();
+    this.highlighterSession = null;
   }
 
   private installEditingHandlers(): void {
@@ -693,8 +729,18 @@ export class Editor {
   }
 
   private refreshSyntax(documentVersion: number, change: DocumentSessionChange | null): void {
-    if (!this.syntaxSession || !this.session || !this.languageId) return;
+    if (!this.session) return;
     if (change && (change.kind === "none" || change.kind === "selection")) return;
+
+    this.refreshStructuralSyntax(documentVersion, change);
+    this.refreshHighlightTokens(documentVersion, change);
+  }
+
+  private refreshStructuralSyntax(
+    documentVersion: number,
+    change: DocumentSessionChange | null,
+  ): void {
+    if (!this.syntaxSession || !this.session || !this.languageId) return;
 
     const text = this.session.getText();
     const startedAt = nowMs();
@@ -707,6 +753,25 @@ export class Editor {
       })
       .catch(() => {
         this.applySyntaxError(documentVersion, syntaxVersion);
+      });
+  }
+
+  private refreshHighlightTokens(
+    documentVersion: number,
+    change: DocumentSessionChange | null,
+  ): void {
+    if (!this.highlighterSession || !this.session) return;
+
+    const text = this.session.getText();
+    const startedAt = nowMs();
+    const highlightVersion = ++this.highlightVersion;
+
+    void this.loadHighlightResult(change, text)
+      .then((result) => {
+        this.applyHighlightResult(result, documentVersion, highlightVersion, startedAt);
+      })
+      .catch(() => {
+        this.applyHighlightError(documentVersion, highlightVersion, startedAt);
       });
   }
 
@@ -723,6 +788,20 @@ export class Editor {
     return this.syntaxSession.applyChange(change);
   }
 
+  private loadHighlightResult(
+    change: DocumentSessionChange | null,
+    text: string,
+  ): Promise<EditorHighlightResult> {
+    if (!this.highlighterSession) return Promise.reject(new Error("No highlighter session"));
+    if (!change) {
+      const snapshot = this.session?.getSnapshot();
+      if (!snapshot) return Promise.reject(new Error("No document snapshot"));
+      return this.highlighterSession.refresh(snapshot, text);
+    }
+
+    return this.highlighterSession.applyChange(change);
+  }
+
   private applySyntaxResult(
     result: EditorSyntaxResult,
     documentVersion: number,
@@ -733,10 +812,26 @@ export class Editor {
     if (syntaxVersion !== this.syntaxVersion) return;
 
     this.syntaxStatus = "ready";
-    const tokenChange = this.session.adoptTokens(result.tokens);
+    const nextTokens = this.highlighterSession ? this.tokens : result.tokens;
+    const tokenChange = this.session.adoptTokens(nextTokens);
     const timedChange = appendTiming(tokenChange, "editor.syntax", startedAt);
-    this.adoptTokens(result.tokens);
+    if (!this.highlighterSession) this.adoptTokens(result.tokens);
     this.setSyntaxFolds(result.folds);
+    this.notifyChange(timedChange);
+  }
+
+  private applyHighlightResult(
+    result: EditorHighlightResult,
+    documentVersion: number,
+    highlightVersion: number,
+    startedAt: number,
+  ): void {
+    if (!this.session || documentVersion !== this.documentVersion) return;
+    if (highlightVersion !== this.highlightVersion) return;
+
+    const tokenChange = this.session.adoptTokens(result.tokens);
+    const timedChange = appendTiming(tokenChange, "editor.highlight", startedAt);
+    this.adoptTokens(result.tokens);
     this.notifyChange(timedChange);
   }
 
@@ -759,6 +854,20 @@ export class Editor {
 
     this.syntaxStatus = "error";
     this.notifyChange(null);
+  }
+
+  private applyHighlightError(
+    documentVersion: number,
+    highlightVersion: number,
+    startedAt: number,
+  ): void {
+    if (!this.session || documentVersion !== this.documentVersion) return;
+    if (highlightVersion !== this.highlightVersion) return;
+
+    const tokenChange = this.session.adoptTokens([]);
+    const timedChange = appendTiming(tokenChange, "editor.highlightError", startedAt);
+    this.adoptTokens([]);
+    this.notifyChange(timedChange);
   }
 
   private syncDomSelection(): void {

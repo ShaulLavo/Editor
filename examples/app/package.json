@@ -15,7 +15,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@editor/core": "workspace:*"
+    "@editor/core": "workspace:*",
+    "@editor/shiki": "workspace:*"
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",

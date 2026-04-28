@@ -1,6 +1,7 @@
 import type {
   TreeSitterEditRequest,
   TreeSitterLanguageId,
+  TreeSitterParseRequest,
   TreeSitterParseResult,
   TreeSitterSelectionRequest,
   TreeSitterSelectionResult,
@@ -18,10 +19,17 @@ type PendingRequest = {
   readonly reject: (error: Error) => void;
 };
 
+type TreeSitterParseDocumentRequest = Omit<
+  TreeSitterParseRequest,
+  "generation" | "cancellationBuffer"
+>;
+type TreeSitterEditDocumentRequest = TreeSitterEditPayload & { readonly type: "edit" };
+
 export type TreeSitterParsePayload = {
   readonly documentId: string;
   readonly snapshotVersion: number;
   readonly languageId: TreeSitterLanguageId;
+  readonly includeHighlights?: boolean;
   readonly text: string;
   readonly snapshot: PieceTableSnapshot;
 };
@@ -70,7 +78,12 @@ export const parseWithTreeSitter = async (
 ): Promise<TreeSitterParseResult | undefined> => {
   const handle = await ensureWorkerReady();
   if (!handle) return undefined;
-  const result = await postDocumentRequest({ type: "parse", ...payload });
+  const request: TreeSitterParseDocumentRequest = {
+    type: "parse",
+    ...payload,
+    includeHighlights: payload.includeHighlights ?? true,
+  };
+  const result = await postDocumentRequest(request);
   return isTreeSitterParseResult(result) ? result : undefined;
 };
 
@@ -128,15 +141,7 @@ const postRequest = (payload: TreeSitterWorkerRequestPayload): Promise<TreeSitte
 };
 
 function postDocumentRequest(
-  payload: TreeSitterParsePayload & { readonly type: "parse" },
-): Promise<TreeSitterWorkerResult>;
-function postDocumentRequest(
-  payload: TreeSitterEditPayload & { readonly type: "edit" },
-): Promise<TreeSitterWorkerResult>;
-function postDocumentRequest(
-  payload:
-    | (TreeSitterParsePayload & { readonly type: "parse" })
-    | (TreeSitterEditPayload & { readonly type: "edit" }),
+  payload: TreeSitterParseDocumentRequest | TreeSitterEditDocumentRequest,
 ): Promise<TreeSitterWorkerResult> {
   return postRequest(withCancellation(cancelPreviousDocumentRequests(payload.documentId), payload));
 }
@@ -157,9 +162,7 @@ const cancelPreviousDocumentRequests = (documentId: string): Int32Array | null =
 };
 
 const withCancellation = <
-  TPayload extends
-    | (TreeSitterParsePayload & { readonly type: "parse" })
-    | (TreeSitterEditPayload & { readonly type: "edit" }),
+  TPayload extends TreeSitterParseDocumentRequest | TreeSitterEditDocumentRequest,
 >(
   cancellationFlag: Int32Array | null,
   payload: TPayload,

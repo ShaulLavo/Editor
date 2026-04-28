@@ -597,10 +597,7 @@ function withThrowingScrollLeft(element: HTMLElement, callback: () => void): voi
   }
 }
 
-function restoreScrollLeft(
-  element: HTMLElement,
-  descriptor: PropertyDescriptor | undefined,
-): void {
+function restoreScrollLeft(element: HTMLElement, descriptor: PropertyDescriptor | undefined): void {
   if (descriptor) {
     Object.defineProperty(element, "scrollLeft", descriptor);
     return;

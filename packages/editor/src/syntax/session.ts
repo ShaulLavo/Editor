@@ -30,6 +30,7 @@ export type EditorSyntaxResult = Pick<
 export type EditorSyntaxSessionOptions = {
   readonly documentId: string;
   readonly languageId: EditorSyntaxLanguageId | null;
+  readonly includeHighlights?: boolean;
   readonly text: string;
   readonly snapshot: PieceTableSnapshot;
 };
@@ -50,6 +51,7 @@ export const createEditorSyntaxSession = (
   return new TreeSitterSyntaxSession(
     options.documentId,
     options.languageId,
+    options.includeHighlights ?? true,
     options.text,
     options.snapshot,
   );
@@ -77,6 +79,7 @@ const createEmptySyntaxSession = (): EditorSyntaxSession => ({
 class TreeSitterSyntaxSession implements EditorSyntaxSession {
   private readonly documentId: string;
   private readonly languageId: EditorSyntaxLanguageId;
+  private readonly includeHighlights: boolean;
   private snapshotVersion = 0;
   private text: string;
   private snapshot: PieceTableSnapshot;
@@ -85,11 +88,13 @@ class TreeSitterSyntaxSession implements EditorSyntaxSession {
   public constructor(
     documentId: string,
     languageId: EditorSyntaxLanguageId,
+    includeHighlights: boolean,
     text: string,
     snapshot: PieceTableSnapshot,
   ) {
     this.documentId = documentId;
     this.languageId = languageId;
+    this.includeHighlights = includeHighlights;
     this.text = text;
     this.snapshot = snapshot;
   }
@@ -103,6 +108,7 @@ class TreeSitterSyntaxSession implements EditorSyntaxSession {
       documentId: this.documentId,
       snapshotVersion,
       languageId: this.languageId,
+      includeHighlights: this.includeHighlights,
       text,
       snapshot,
     });
@@ -121,6 +127,7 @@ class TreeSitterSyntaxSession implements EditorSyntaxSession {
       previousSnapshot: this.snapshot,
       nextSnapshot: change.snapshot,
       edits: change.edits,
+      includeHighlights: this.includeHighlights,
     });
 
     if (!payload) return this.refresh(change.snapshot, change.text);
@@ -185,6 +192,7 @@ type TreeSitterEditPayloadOptions = {
   readonly previousSnapshot: PieceTableSnapshot;
   readonly nextSnapshot: PieceTableSnapshot;
   readonly edits: readonly TextEdit[];
+  readonly includeHighlights?: boolean;
 };
 
 export const createTreeSitterEditPayload = (
@@ -196,6 +204,7 @@ export const createTreeSitterEditPayload = (
     documentId: options.documentId,
     snapshotVersion: options.snapshotVersion,
     languageId: options.languageId,
+    includeHighlights: options.includeHighlights ?? true,
     snapshot: options.nextSnapshot,
     edits: options.edits,
     inputEdits: createTreeSitterInputEdits(options.previousSnapshot, options.edits),

@@ -75,6 +75,36 @@ describe.skipIf(typeof Worker === "undefined")("tree-sitter worker client", () =
     expect(parsed?.captures.some((capture) => capture.languageId === "javascript")).toBe(true);
   });
 
+  it("can skip highlight captures while retaining structural results", async () => {
+    const documentId = "index.html";
+    const text = [
+      "<style>",
+      ".x {",
+      "  color: red;",
+      "}",
+      "</style>",
+      "<script>",
+      "const a = 1;",
+      "</script>",
+    ].join("\n");
+    const snapshot = createPieceTableSnapshot(text);
+    const parsed = await parseWithTreeSitter({
+      documentId,
+      snapshotVersion: 1,
+      languageId: "html",
+      includeHighlights: false,
+      text,
+      snapshot,
+    });
+
+    expect(parsed?.captures).toEqual([]);
+    expect(parsed?.folds.length).toBeGreaterThan(0);
+    expect(parsed?.injections.map((injection) => injection.languageId).sort()).toEqual([
+      "css",
+      "javascript",
+    ]);
+  });
+
   it("highlights injected tagged template content", async () => {
     const documentId = "template.ts";
     const text = [
