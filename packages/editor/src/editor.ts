@@ -534,6 +534,7 @@ export class Editor {
     drag.headOffset = offset;
     this.syncCustomSelectionHighlight(drag.anchorOffset, offset);
     this.session.setSelection(drag.anchorOffset, offset);
+    this.notifyViewContributions("selection", null);
     this.useSessionSelectionForNextInput = drag.anchorOffset !== offset;
   }
 
@@ -748,6 +749,7 @@ export class Editor {
     this.useSessionSelectionForNextInput = false;
     const timedChange = appendTiming(change, "input.selection", start);
     this.sessionOptions.onChange?.(timedChange);
+    this.notifyViewContributions("selection", null);
     this.notifyChangeWithTiming(timedChange);
   };
 
@@ -796,7 +798,7 @@ export class Editor {
     const finalChange = appendTiming(timedChange, totalName, totalStart);
     this.sessionOptions.onChange?.(finalChange);
     this.refreshSyntax(this.documentVersion, finalChange);
-    this.notifyViewContributions("content", finalChange);
+    this.notifyViewContributions(viewContributionKindForChange(finalChange), finalChange);
     this.notifyChangeWithTiming(finalChange);
   }
 
@@ -1059,4 +1061,11 @@ export class Editor {
     if ((position & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return this.text.length;
     return null;
   }
+}
+
+function viewContributionKindForChange(
+  change: DocumentSessionChange,
+): EditorViewContributionUpdateKind {
+  if (change.kind === "selection") return "selection";
+  return "content";
 }
