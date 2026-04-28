@@ -10,6 +10,8 @@ import {
   type EditorHighlightResult,
   type EditorHighlighterSession,
   type EditorPlugin,
+  type EditorViewContributionUpdateKind,
+  type EditorViewSnapshot,
   type EditorState,
   type EditorSyntaxResult,
   type EditorSyntaxSession,
@@ -98,6 +100,28 @@ function createHighlighterPlugin(session: EditorHighlighterSession): EditorPlugi
       }),
   };
 }
+
+function createViewContributionPlugin(events: ViewContributionEvent[]): EditorPlugin {
+  return {
+    activate: (context) =>
+      context.registerViewContribution({
+        createContribution: () => ({
+          update: (snapshot, kind, change) => {
+            events.push({ kind, snapshot, changeKind: change?.kind ?? null });
+          },
+          dispose: () => {
+            events.push({ kind: "dispose", snapshot: null, changeKind: null });
+          },
+        }),
+      }),
+  };
+}
+
+type ViewContributionEvent = {
+  readonly kind: EditorViewContributionUpdateKind | "dispose";
+  readonly snapshot: EditorViewSnapshot | null;
+  readonly changeKind: DocumentSessionChange["kind"] | null;
+};
 
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
@@ -260,6 +284,36 @@ describe("Editor", () => {
       editor.setContent("");
       editor.setTokens([{ start: 0, end: 5, style: { color: "#ff0000" } }]);
       expect(highlightsMap.size).toBe(0);
+    });
+  });
+
+  describe("view contribution plugins", () => {
+    it("receives document, token, selection, and content updates", () => {
+      const events: ViewContributionEvent[] = [];
+      editor.dispose();
+      editor = new Editor(container, { plugins: [createViewContributionPlugin(events)] });
+
+      editor.openDocument({ documentId: "test.ts", text: "const a = 1;" });
+      editor.setTokens([{ start: 0, end: 5, style: { color: "#ff0000" } }]);
+      editorRoot().dispatchEvent(createInsertEvent("!"));
+
+      expect(events.some((event) => event.kind === "document")).toBe(true);
+      expect(events.some((event) => event.kind === "tokens")).toBe(true);
+      expect(events.some((event) => event.kind === "selection")).toBe(true);
+      expect(events.some((event) => event.kind === "content" && event.changeKind === "edit")).toBe(
+        true,
+      );
+      expect(events.at(-1)?.snapshot?.text).toBe("const a = 1;!");
+    });
+
+    it("disposes view contributions with the editor", () => {
+      const events: ViewContributionEvent[] = [];
+      editor.dispose();
+      editor = new Editor(container, { plugins: [createViewContributionPlugin(events)] });
+
+      editor.dispose();
+
+      expect(events.at(-1)?.kind).toBe("dispose");
     });
   });
 

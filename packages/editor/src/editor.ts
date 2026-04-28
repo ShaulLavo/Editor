@@ -32,6 +32,12 @@ import {
   EditorPluginHost,
   type EditorHighlightResult,
   type EditorHighlighterSession,
+  type EditorOverlaySide,
+  type EditorResolvedSelection,
+  type EditorViewContribution,
+  type EditorViewContributionContext,
+  type EditorViewContributionUpdateKind,
+  type EditorViewSnapshot,
 } from "./plugins";
 import { resolveSelection } from "./selections";
 import {
@@ -48,6 +54,7 @@ import {
   VirtualizedTextView,
   type VirtualizedFoldMarker,
 } from "./virtualization/virtualizedTextView";
+import { computeLineStarts } from "./virtualization/virtualizedTextViewHelpers";
 
 export type {
   EditorChangeHandler,
@@ -68,6 +75,12 @@ export type {
   EditorHighlighterSessionOptions,
   EditorPlugin,
   EditorPluginContext,
+  EditorResolvedSelection,
+  EditorViewContribution,
+  EditorViewContributionContext,
+  EditorViewContributionProvider,
+  EditorViewContributionUpdateKind,
+  EditorViewSnapshot,
 } from "./plugins";
 
 let editorInstanceCount = 0;
@@ -105,6 +118,7 @@ export class Editor {
   private readonly el: HTMLDivElement;
   private readonly options: EditorOptions;
   private readonly pluginHost: EditorPluginHost;
+  private viewContributions: readonly EditorViewContribution[] = [];
   private readonly highlightPrefix: string;
   private text = "";
   private session: DocumentSession | null = null;
@@ -131,10 +145,14 @@ export class Editor {
       className: "editor",
       highlightRegistry: getHighlightRegistry(),
       onFoldToggle: this.handleFoldToggle,
+      onViewportChange: this.handleViewportChange,
       selectionHighlightName: `${this.highlightPrefix}-selection`,
     });
     this.foldState = new EditorFoldState(this.view, () => this.session?.getSnapshot() ?? null);
     this.el = this.view.scrollElement;
+    this.viewContributions = this.pluginHost.createViewContributions(
+      this.createViewContributionContext(container),
+    );
     this.installEditingHandlers();
   }
 
@@ -143,6 +161,7 @@ export class Editor {
     this.view.setText(text);
     this.setTokens([]);
     this.clearSyntaxFolds();
+    this.notifyViewContributions("content", null);
   }
 
   setTokens(tokens: readonly EditorToken[]): void {
@@ -221,6 +240,7 @@ export class Editor {
     this.view.setEditable(true);
     this.setDocument({ text: session.getText(), tokens: session.getTokens() });
     this.syncDomSelection();
+    this.notifyViewContributions("document", null);
   }
 
   detachSession(): void {
@@ -239,6 +259,7 @@ export class Editor {
     this.disposeHighlighterSession();
     this.detachSession();
     this.setContent("");
+    this.notifyViewContributions("clear", null);
   }
 
   dispose(): void {
@@ -246,8 +267,8 @@ export class Editor {
     this.disposeSyntaxSession();
     this.disposeHighlighterSession();
     this.detachSession();
-    this.view.dispose();
     this.pluginHost.dispose();
+    this.view.dispose();
   }
 
   private resetOwnedDocument(document: EditorOpenDocumentOptions): number {
@@ -283,6 +304,7 @@ export class Editor {
     this.view.setEditable(true);
     this.setDocument({ text: this.session.getText(), tokens: [] });
     this.syncDomSelection();
+    this.notifyViewContributions("document", null);
     return documentVersion;
   }
 
@@ -297,6 +319,85 @@ export class Editor {
     this.highlighterSession?.dispose();
     this.highlighterSession = null;
   }
+
+  private createViewContributionContext(container: HTMLElement): EditorViewContributionContext {
+    return {
+      container,
+      scrollElement: this.el,
+      getSnapshot: () => this.createViewSnapshot(),
+      revealLine: (row) => this.view.scrollToRow(row),
+      reserveOverlayWidth: (side, width) => this.reserveOverlayWidth(side, width),
+      setScrollTop: (scrollTop) => this.setScrollTop(scrollTop),
+    };
+  }
+
+  private createViewSnapshot(): EditorViewSnapshot {
+    const viewState = this.view.getState();
+    const viewport = {
+      scrollTop: this.el.scrollTop,
+      scrollLeft: this.el.scrollLeft,
+      scrollHeight: this.el.scrollHeight,
+      scrollWidth: this.el.scrollWidth,
+      clientHeight: this.el.clientHeight,
+      clientWidth: this.el.clientWidth,
+      visibleRange: viewState.visibleRange,
+    };
+
+    return {
+      documentId: this.documentId,
+      languageId: this.languageId,
+      text: this.text,
+      textVersion: this.documentVersion,
+      lineStarts: computeLineStarts(this.text),
+      tokens: this.tokens,
+      selections: this.resolveViewSelections(),
+      metrics: viewState.metrics,
+      lineCount: viewState.lineCount,
+      contentWidth: viewState.contentWidth,
+      totalHeight: viewState.totalHeight,
+      viewport,
+    };
+  }
+
+  private resolveViewSelections(): readonly EditorResolvedSelection[] {
+    const snapshot = this.session?.getSnapshot();
+    const selections = this.session?.getSelections().selections ?? [];
+    if (!snapshot) return [];
+
+    return selections.map((selection) => {
+      const resolved = resolveSelection(snapshot, selection);
+      return {
+        anchorOffset: resolved.anchorOffset,
+        headOffset: resolved.headOffset,
+        startOffset: resolved.startOffset,
+        endOffset: resolved.endOffset,
+      };
+    });
+  }
+
+  private notifyViewContributions(
+    kind: EditorViewContributionUpdateKind,
+    change?: DocumentSessionChange | null,
+  ): void {
+    if (this.viewContributions.length === 0) return;
+
+    const snapshot = this.createViewSnapshot();
+    for (const contribution of this.viewContributions) contribution.update(snapshot, kind, change);
+  }
+
+  private reserveOverlayWidth(side: EditorOverlaySide, width: number): void {
+    this.view.reserveOverlayWidth(side, width);
+    this.notifyViewContributions("layout", null);
+  }
+
+  private setScrollTop(scrollTop: number): void {
+    const maxScrollTop = Math.max(0, this.el.scrollHeight - this.el.clientHeight);
+    this.el.scrollTop = clamp(scrollTop, 0, maxScrollTop);
+  }
+
+  private readonly handleViewportChange = (): void => {
+    this.notifyViewContributions("viewport", null);
+  };
 
   private installEditingHandlers(): void {
     this.el.addEventListener("mousedown", this.handleMouseDown);
@@ -695,6 +796,7 @@ export class Editor {
     const finalChange = appendTiming(timedChange, totalName, totalStart);
     this.sessionOptions.onChange?.(finalChange);
     this.refreshSyntax(this.documentVersion, finalChange);
+    this.notifyViewContributions("content", finalChange);
     this.notifyChangeWithTiming(finalChange);
   }
 
@@ -846,6 +948,7 @@ export class Editor {
   private adoptTokens(tokens: readonly EditorToken[]): void {
     this.tokens = tokens;
     this.view.adoptTokens(tokens);
+    this.notifyViewContributions("tokens", null);
   }
 
   private applySyntaxError(documentVersion: number, syntaxVersion: number): void {
@@ -882,6 +985,7 @@ export class Editor {
 
     if (this.isInputFocused()) {
       this.syncCustomSelectionHighlight(start, end);
+      this.notifyViewContributions("selection", null);
       return;
     }
 
@@ -890,6 +994,7 @@ export class Editor {
     domSelection?.removeAllRanges();
     if (range) domSelection?.addRange(range);
     this.syncCustomSelectionHighlight(start, end);
+    this.notifyViewContributions("selection", null);
   }
 
   private readDomSelectionOffsets(): { anchorOffset: number; headOffset: number } | null {

@@ -1,0 +1,300 @@
+import { Constants } from "./minimapCharSheet";
+import type {
+  MinimapMetrics,
+  MinimapRenderLayout,
+  MinimapViewport,
+  ResolvedMinimapOptions,
+} from "./types";
+import { RenderMinimap } from "./types";
+
+export const MINIMAP_GUTTER_WIDTH = 2;
+
+export type MinimapFrameLayout = {
+  readonly scrollTop: number;
+  readonly scrollHeight: number;
+  readonly sliderNeeded: boolean;
+  readonly computedSliderRatio: number;
+  readonly sliderTop: number;
+  readonly sliderHeight: number;
+  readonly topPaddingLineCount: number;
+  readonly startLineNumber: number;
+  readonly endLineNumber: number;
+};
+
+export function computeRenderLayout(options: {
+  readonly minimap: ResolvedMinimapOptions;
+  readonly metrics: MinimapMetrics;
+  readonly viewport: MinimapViewport;
+  readonly lineCount: number;
+  readonly contentWidth: number;
+}): MinimapRenderLayout {
+  const pixelRatio = Math.max(1, options.metrics.devicePixelRatio);
+  const height = Math.max(0, options.viewport.clientHeight);
+  const baseCharHeight = options.minimap.renderCharacters
+    ? Constants.BASE_CHAR_HEIGHT
+    : Constants.BASE_CHAR_HEIGHT + 1;
+  const configuredScale =
+    pixelRatio >= 2 ? Math.round(options.minimap.scale * 2) : options.minimap.scale;
+  const fitted = computeFittedScale({
+    baseCharHeight,
+    configuredScale,
+    height,
+    lineCount: options.lineCount,
+    minimap: options.minimap,
+    rowHeight: options.metrics.rowHeight,
+  });
+  const charWidth = fitted.scale / pixelRatio / fitted.widthMultiplier;
+  const width = computeMinimapWidth({
+    charWidth,
+    maxColumn: options.minimap.maxColumn,
+    viewportWidth: options.viewport.clientWidth,
+    contentWidth: options.contentWidth,
+    characterWidth: options.metrics.characterWidth,
+  });
+  const canvasInnerWidth = Math.floor(pixelRatio * width * fitted.widthMultiplier);
+  const canvasInnerHeight = fitted.heightIsEditorHeight
+    ? Math.ceil(Math.max(height, fitted.documentMinimapHeight))
+    : Math.floor(pixelRatio * height);
+
+  return {
+    width,
+    height,
+    canvasInnerWidth,
+    canvasInnerHeight,
+    canvasOuterWidth: canvasInnerWidth / pixelRatio,
+    canvasOuterHeight: canvasInnerHeight / pixelRatio,
+    lineHeight: fitted.lineHeight,
+    charWidth,
+    scale: fitted.scale,
+    isSampling: fitted.isSampling,
+    heightIsEditorHeight: fitted.heightIsEditorHeight,
+    renderMinimap: options.minimap.enabled
+      ? options.minimap.renderCharacters
+        ? RenderMinimap.Text
+        : RenderMinimap.Blocks
+      : RenderMinimap.None,
+  };
+}
+
+export function computeFrameLayout(options: {
+  readonly renderLayout: MinimapRenderLayout;
+  readonly viewport: MinimapViewport;
+  readonly lineCount: number;
+  readonly realLineCount: number;
+  readonly previous: MinimapFrameLayout | null;
+}): MinimapFrameLayout {
+  if (options.renderLayout.heightIsEditorHeight) return containedFrameLayout(options);
+  return proportionalFrameLayout(options);
+}
+
+export function yForLineNumber(
+  frame: Pick<MinimapFrameLayout, "startLineNumber" | "topPaddingLineCount">,
+  lineNumber: number,
+  minimapLineHeight: number,
+): number {
+  return (lineNumber - frame.startLineNumber + frame.topPaddingLineCount) * minimapLineHeight;
+}
+
+function computeFittedScale(options: {
+  readonly minimap: ResolvedMinimapOptions;
+  readonly baseCharHeight: number;
+  readonly configuredScale: number;
+  readonly height: number;
+  readonly rowHeight: number;
+  readonly lineCount: number;
+}): {
+  readonly scale: number;
+  readonly lineHeight: number;
+  readonly widthMultiplier: number;
+  readonly isSampling: boolean;
+  readonly heightIsEditorHeight: boolean;
+  readonly documentMinimapHeight: number;
+} {
+  const lineHeight = options.baseCharHeight * options.configuredScale;
+  if (options.minimap.size === "proportional") {
+    return fittedScale(options.configuredScale, lineHeight, 1, false, false, 0);
+  }
+
+  const desiredRatio = options.lineCount / Math.max(1, options.height);
+  if (desiredRatio > 1) return fittedScale(1, 1, 1, true, true, options.height);
+
+  if (options.minimap.size === "fit") {
+    const documentHeight = Math.ceil(options.lineCount * lineHeight);
+    if (documentHeight <= options.height) {
+      return fittedScale(options.configuredScale, lineHeight, 1, false, false, documentHeight);
+    }
+  }
+
+  const fillLineHeight = Math.min(
+    options.rowHeight,
+    Math.max(1, Math.floor(options.height / Math.max(1, options.lineCount))),
+  );
+  const scale = Math.max(1, Math.floor(fillLineHeight / options.baseCharHeight));
+  const widthMultiplier =
+    scale > options.configuredScale ? Math.min(2, scale / options.configuredScale) : 1;
+  return fittedScale(
+    scale,
+    fillLineHeight,
+    widthMultiplier,
+    false,
+    true,
+    options.lineCount * fillLineHeight,
+  );
+}
+
+function fittedScale(
+  scale: number,
+  lineHeight: number,
+  widthMultiplier: number,
+  isSampling: boolean,
+  heightIsEditorHeight: boolean,
+  documentMinimapHeight: number,
+) {
+  return {
+    scale,
+    lineHeight,
+    widthMultiplier,
+    isSampling,
+    heightIsEditorHeight,
+    documentMinimapHeight,
+  };
+}
+
+function computeMinimapWidth(options: {
+  readonly charWidth: number;
+  readonly maxColumn: number;
+  readonly viewportWidth: number;
+  readonly contentWidth: number;
+  readonly characterWidth: number;
+}): number {
+  const availableWidth = Math.max(0, options.viewportWidth);
+  const textWidth = Math.max(availableWidth, options.contentWidth);
+  const minimapMaxWidth = Math.floor(options.maxColumn * options.charWidth);
+  const proportionalWidth = Math.floor(
+    ((textWidth - 2) * options.charWidth) / (options.characterWidth + options.charWidth),
+  );
+  return Math.min(minimapMaxWidth, Math.max(0, proportionalWidth) + MINIMAP_GUTTER_WIDTH);
+}
+
+function containedFrameLayout(options: {
+  readonly renderLayout: MinimapRenderLayout;
+  readonly viewport: MinimapViewport;
+  readonly lineCount: number;
+  readonly realLineCount: number;
+}): MinimapFrameLayout {
+  const logicalScrollHeight = Math.max(1, options.realLineCount * options.renderLayout.lineHeight);
+  const sliderHeight = Math.max(
+    1,
+    Math.floor(
+      (options.viewport.clientHeight * options.viewport.clientHeight) / logicalScrollHeight,
+    ),
+  );
+  const maxSliderTop = Math.max(0, options.renderLayout.height - sliderHeight);
+  const ratio =
+    maxSliderTop / Math.max(1, options.viewport.scrollHeight - options.viewport.clientHeight);
+  const maxLinesFitting = Math.floor(
+    options.renderLayout.canvasInnerHeight / options.renderLayout.lineHeight,
+  );
+
+  return {
+    scrollTop: options.viewport.scrollTop,
+    scrollHeight: options.viewport.scrollHeight,
+    sliderNeeded: maxSliderTop > 0,
+    computedSliderRatio: ratio,
+    sliderTop: options.viewport.scrollTop * ratio,
+    sliderHeight,
+    topPaddingLineCount: 0,
+    startLineNumber: 1,
+    endLineNumber: Math.min(options.lineCount, maxLinesFitting),
+  };
+}
+
+function proportionalFrameLayout(options: {
+  readonly renderLayout: MinimapRenderLayout;
+  readonly viewport: MinimapViewport;
+  readonly lineCount: number;
+  readonly previous: MinimapFrameLayout | null;
+}): MinimapFrameLayout {
+  const lineHeight = options.renderLayout.lineHeight;
+  const pixelRatio =
+    options.renderLayout.canvasInnerHeight / Math.max(1, options.renderLayout.canvasOuterHeight);
+  const minimapLinesFitting = Math.floor(options.renderLayout.canvasInnerHeight / lineHeight);
+  const viewportLineCount = options.viewport.clientHeight / Math.max(1, lineHeight);
+  const sliderHeight = Math.floor((viewportLineCount * lineHeight) / pixelRatio);
+  const maxSliderTop = Math.max(0, options.renderLayout.height - sliderHeight);
+  const ratio =
+    maxSliderTop / Math.max(1, options.viewport.scrollHeight - options.viewport.clientHeight);
+  const sliderTop = options.viewport.scrollTop * ratio;
+
+  if (minimapLinesFitting >= options.lineCount) {
+    return frame(
+      options.viewport,
+      maxSliderTop > 0,
+      ratio,
+      sliderTop,
+      sliderHeight,
+      0,
+      1,
+      options.lineCount,
+    );
+  }
+
+  const startLineNumber = proportionalStartLine(options, sliderTop, pixelRatio);
+  const endLineNumber = Math.min(options.lineCount, startLineNumber + minimapLinesFitting - 1);
+  return frame(
+    options.viewport,
+    true,
+    ratio,
+    sliderTop,
+    sliderHeight,
+    0,
+    startLineNumber,
+    endLineNumber,
+  );
+}
+
+function proportionalStartLine(
+  options: {
+    readonly renderLayout: MinimapRenderLayout;
+    readonly viewport: MinimapViewport;
+    readonly previous: MinimapFrameLayout | null;
+  },
+  sliderTop: number,
+  pixelRatio: number,
+): number {
+  const visibleStart = Math.max(1, options.viewport.visibleStart + 1);
+  const raw = Math.max(
+    1,
+    Math.floor(visibleStart - (sliderTop * pixelRatio) / options.renderLayout.lineHeight),
+  );
+  const previous = options.previous;
+  if (!previous || previous.scrollHeight !== options.viewport.scrollHeight) return raw;
+  if (previous.scrollTop > options.viewport.scrollTop)
+    return Math.min(raw, previous.startLineNumber);
+  if (previous.scrollTop < options.viewport.scrollTop)
+    return Math.max(raw, previous.startLineNumber);
+  return raw;
+}
+
+function frame(
+  viewport: MinimapViewport,
+  sliderNeeded: boolean,
+  ratio: number,
+  sliderTop: number,
+  sliderHeight: number,
+  topPaddingLineCount: number,
+  startLineNumber: number,
+  endLineNumber: number,
+): MinimapFrameLayout {
+  return {
+    scrollTop: viewport.scrollTop,
+    scrollHeight: viewport.scrollHeight,
+    sliderNeeded,
+    computedSliderRatio: ratio,
+    sliderTop,
+    sliderHeight,
+    topPaddingLineCount,
+    startLineNumber,
+    endLineNumber,
+  };
+}

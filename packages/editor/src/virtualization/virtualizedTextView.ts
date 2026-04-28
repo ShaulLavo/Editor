@@ -107,6 +107,7 @@ export class VirtualizedTextView {
   private readonly longLineChunkThreshold: number;
   private readonly horizontalOverscanColumns: number;
   private readonly onFoldToggle: ((marker: VirtualizedFoldMarker) => void) | null;
+  private readonly onViewportChange: (() => void) | null;
   private readonly rowElements = new Map<number, MountedVirtualizedTextRow>();
   private readonly highlightRegistry: HighlightRegistry | null;
   private readonly selectionHighlightName: string;
@@ -159,6 +160,7 @@ export class VirtualizedTextView {
     );
     this.horizontalOverscanColumns = normalizeHorizontalOverscan(options.horizontalOverscanColumns);
     this.onFoldToggle = options.onFoldToggle ?? null;
+    this.onViewportChange = options.onViewportChange ?? null;
     this.virtualizer = new FixedRowVirtualizer(createVirtualizerOptions(rowHeight, overscan));
 
     this.scrollElement.style.setProperty("--editor-gutter-width", `${gutterWidth}px`);
@@ -296,6 +298,16 @@ export class VirtualizedTextView {
     this.virtualizer.setScrollMetrics({ scrollTop, viewportHeight });
   }
 
+  public reserveOverlayWidth(side: "left" | "right", width: number): void {
+    const value = width > 0 && Number.isFinite(width) ? `${Math.ceil(width)}px` : "";
+    if (side === "left") {
+      this.scrollElement.style.paddingLeft = value;
+      return;
+    }
+
+    this.scrollElement.style.paddingRight = value;
+  }
+
   public scrollToRow(row: number): void {
     const target = clamp(Math.floor(row), 0, this.visibleLineCount() - 1);
     this.scrollElement.scrollTop = target * this.getRowHeight();
@@ -405,6 +417,7 @@ export class VirtualizedTextView {
     this.reconcileRows(snapshot.virtualItems);
     this.renderTokenHighlights();
     this.renderSelectionHighlight();
+    this.onViewportChange?.();
   }
 
   private reconcileRows(items: readonly FixedRowVirtualItem[]): void {

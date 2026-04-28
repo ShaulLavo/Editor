@@ -2,6 +2,8 @@ import type { DocumentSessionChange } from "./documentSession";
 import type { PieceTableSnapshot } from "./pieceTable/pieceTableTypes";
 import type { EditorToken } from "./tokens";
 import type { EditorSyntaxLanguageId } from "./syntax/session";
+import type { BrowserTextMetrics } from "./virtualization/browserMetrics";
+import type { FixedRowVisibleRange } from "./virtualization/fixedRowVirtualizer";
 
 export type EditorDisposable = {
   dispose(): void;
@@ -27,8 +29,73 @@ export type EditorHighlighterProvider = {
   createSession(options: EditorHighlighterSessionOptions): EditorHighlighterSession | null;
 };
 
+export type EditorResolvedSelection = {
+  readonly anchorOffset: number;
+  readonly headOffset: number;
+  readonly startOffset: number;
+  readonly endOffset: number;
+};
+
+export type EditorViewportSnapshot = {
+  readonly scrollTop: number;
+  readonly scrollLeft: number;
+  readonly scrollHeight: number;
+  readonly scrollWidth: number;
+  readonly clientHeight: number;
+  readonly clientWidth: number;
+  readonly visibleRange: FixedRowVisibleRange;
+};
+
+export type EditorViewSnapshot = {
+  readonly documentId: string | null;
+  readonly languageId: EditorSyntaxLanguageId | null;
+  readonly text: string;
+  readonly textVersion: number;
+  readonly lineStarts: readonly number[];
+  readonly tokens: readonly EditorToken[];
+  readonly selections: readonly EditorResolvedSelection[];
+  readonly metrics: BrowserTextMetrics;
+  readonly lineCount: number;
+  readonly contentWidth: number;
+  readonly totalHeight: number;
+  readonly viewport: EditorViewportSnapshot;
+};
+
+export type EditorOverlaySide = "left" | "right";
+
+export type EditorViewContributionContext = {
+  readonly container: HTMLElement;
+  readonly scrollElement: HTMLDivElement;
+  getSnapshot(): EditorViewSnapshot;
+  revealLine(row: number): void;
+  setScrollTop(scrollTop: number): void;
+  reserveOverlayWidth(side: EditorOverlaySide, width: number): void;
+};
+
+export type EditorViewContributionUpdateKind =
+  | "document"
+  | "content"
+  | "tokens"
+  | "selection"
+  | "viewport"
+  | "layout"
+  | "clear";
+
+export type EditorViewContribution = EditorDisposable & {
+  update(
+    snapshot: EditorViewSnapshot,
+    kind: EditorViewContributionUpdateKind,
+    change?: DocumentSessionChange | null,
+  ): void;
+};
+
+export type EditorViewContributionProvider = {
+  createContribution(context: EditorViewContributionContext): EditorViewContribution | null;
+};
+
 export type EditorPluginContext = {
   registerHighlighter(provider: EditorHighlighterProvider): EditorDisposable;
+  registerViewContribution(provider: EditorViewContributionProvider): EditorDisposable;
 };
 
 export type EditorPlugin = {
@@ -38,6 +105,7 @@ export type EditorPlugin = {
 
 export class EditorPluginHost implements EditorDisposable {
   private readonly highlighters: EditorHighlighterProvider[] = [];
+  private readonly viewContributions: EditorViewContributionProvider[] = [];
   private readonly disposables: EditorDisposable[] = [];
 
   public constructor(plugins: readonly EditorPlugin[] = []) {
@@ -59,14 +127,27 @@ export class EditorPluginHost implements EditorDisposable {
     return null;
   }
 
+  public createViewContributions(context: EditorViewContributionContext): EditorViewContribution[] {
+    const contributions: EditorViewContribution[] = [];
+    for (const provider of this.viewContributions) {
+      const contribution = provider.createContribution(context);
+      if (contribution) contributions.push(contribution);
+    }
+
+    this.disposables.push(...contributions);
+    return contributions;
+  }
+
   public dispose(): void {
     while (this.disposables.length > 0) this.disposables.pop()?.dispose();
     this.highlighters.length = 0;
+    this.viewContributions.length = 0;
   }
 
   private createContext(): EditorPluginContext {
     return {
       registerHighlighter: (provider) => this.registerHighlighter(provider),
+      registerViewContribution: (provider) => this.registerViewContribution(provider),
     };
   }
 
@@ -83,6 +164,21 @@ export class EditorPluginHost implements EditorDisposable {
     if (index === -1) return;
 
     this.highlighters.splice(index, 1);
+  }
+
+  private registerViewContribution(provider: EditorViewContributionProvider): EditorDisposable {
+    this.viewContributions.push(provider);
+
+    return {
+      dispose: () => this.unregisterViewContribution(provider),
+    };
+  }
+
+  private unregisterViewContribution(provider: EditorViewContributionProvider): void {
+    const index = this.viewContributions.indexOf(provider);
+    if (index === -1) return;
+
+    this.viewContributions.splice(index, 1);
   }
 
   private adoptActivationResult(

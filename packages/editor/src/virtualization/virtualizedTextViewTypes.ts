@@ -23,6 +23,7 @@ export type VirtualizedTextViewOptions = {
   readonly selectionHighlightName?: string;
   readonly highlightRegistry?: HighlightRegistry;
   readonly onFoldToggle?: (marker: VirtualizedFoldMarker) => void;
+  readonly onViewportChange?: () => void;
 };
 
 export type VirtualizedTextChunk = {
