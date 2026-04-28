@@ -3,8 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "sideEffects": [
+    "./src/style.css"
+  ],
   "exports": {
     ".": "./src/index.ts",
+    "./editor": "./src/editor.ts",
     "./style.css": "./src/style.css"
   },
   "scripts": {

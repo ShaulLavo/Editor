@@ -5,7 +5,7 @@ import {
   resolveSelection,
   type SelectionSet,
 } from "../selections";
-import type { PieceTableAnchor, PieceTableSnapshot } from "../pieceTable";
+import type { Anchor as PieceTableAnchor, PieceTableSnapshot } from "../pieceTable/pieceTableTypes";
 import { selectWithTreeSitter } from "./treeSitter/workerClient";
 import type {
   TreeSitterLanguageId,

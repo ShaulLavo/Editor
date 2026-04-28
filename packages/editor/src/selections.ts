@@ -5,7 +5,9 @@ import type {
   PieceTableEdit,
   PieceTableSnapshot,
 } from "./pieceTable/pieceTableTypes";
-import { anchorAt, applyBatchToPieceTable, getPieceTableText, resolveAnchor } from "./pieceTable";
+import { anchorAt, resolveAnchor } from "./pieceTable/anchors";
+import { applyBatchToPieceTable } from "./pieceTable/edits";
+import { getPieceTableText } from "./pieceTable/reads";
 
 export type SelectionGoal =
   | { readonly kind: "none" }

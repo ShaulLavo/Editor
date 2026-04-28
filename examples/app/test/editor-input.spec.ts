@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 
 const coreEntry = `/@fs/${fileURLToPath(
-  new URL("../../../packages/editor/src/index.ts", import.meta.url),
+  new URL("../../../packages/editor/src/editor.ts", import.meta.url),
 )}`;
 
 type TestWindow = Window & {

@@ -1,15 +1,12 @@
-import {
-  anchorAfter,
-  anchorBefore,
-  offsetToPoint,
-  pointToOffset,
-  resolveAnchor,
-  type PieceTableAnchor,
-  type PieceTableEdit,
-  type PieceTableSnapshot,
-  type Point,
-  type ResolvedAnchor,
-} from "./pieceTable";
+import { anchorAfter, anchorBefore, resolveAnchor } from "./pieceTable/anchors";
+import type {
+  Anchor as PieceTableAnchor,
+  PieceTableEdit,
+  PieceTableSnapshot,
+  Point,
+  ResolvedAnchor,
+} from "./pieceTable/pieceTableTypes";
+import { offsetToPoint, pointToOffset } from "./pieceTable/positions";
 import type { FoldRange } from "./syntax/treeSitter/types";
 
 declare const foldPointBrand: unique symbol;

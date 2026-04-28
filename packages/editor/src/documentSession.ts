@@ -14,12 +14,9 @@ import {
   type PieceTableEditorHistory,
 } from "./history";
 import type { EditorToken, TextEdit } from "./tokens";
-import {
-  createPieceTableSnapshot,
-  getPieceTableText,
-  type PieceTableAnchor,
-  type PieceTableSnapshot,
-} from "./pieceTable";
+import type { Anchor as PieceTableAnchor, PieceTableSnapshot } from "./pieceTable/pieceTableTypes";
+import { getPieceTableText } from "./pieceTable/reads";
+import { createPieceTableSnapshot } from "./pieceTable/snapshot";
 
 export type DocumentSessionChangeKind = "edit" | "selection" | "undo" | "redo" | "none";
 

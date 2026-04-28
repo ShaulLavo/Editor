@@ -1,6 +1,8 @@
 import type { DocumentSessionChange } from "../documentSession";
 import type { EditorToken, TextEdit } from "../tokens";
-import { applyBatchToPieceTable, offsetToPoint, type PieceTableSnapshot } from "../pieceTable";
+import type { PieceTableSnapshot } from "../pieceTable/pieceTableTypes";
+import { applyBatchToPieceTable } from "../pieceTable/edits";
+import { offsetToPoint } from "../pieceTable/positions";
 import type {
   TreeSitterInputEdit,
   TreeSitterLanguageId,

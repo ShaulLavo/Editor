@@ -1,4 +1,4 @@
-import { Editor } from "@editor/core";
+import { Editor } from "@editor/core/editor";
 import "@editor/core/style.css";
 import { createEditorPane } from "./components/editorPane.ts";
 import { el } from "./components/dom.ts";

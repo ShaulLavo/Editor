@@ -1,4 +1,4 @@
-import type { PieceTableSnapshot } from "../../pieceTable";
+import type { PieceTableSnapshot } from "../../pieceTable/pieceTableTypes";
 import type { TextEdit } from "../../tokens";
 
 export type TreeSitterLanguageId = "javascript" | "typescript" | "tsx" | "html" | "css" | "json";

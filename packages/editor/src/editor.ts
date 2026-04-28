@@ -5,7 +5,7 @@ import type {
 } from "./documentSession";
 import { createDocumentSession } from "./documentSession";
 import { createFoldMap, type FoldMap } from "./foldMap";
-import { offsetToPoint } from "./pieceTable";
+import { offsetToPoint } from "./pieceTable/positions";
 import { resolveSelection } from "./selections";
 import {
   createEditorSyntaxSession,
@@ -14,11 +14,14 @@ import {
   type EditorSyntaxResult,
   type EditorSyntaxSession,
   type EditorSyntaxSessionOptions,
-  type FoldRange,
-} from "./syntax";
+} from "./syntax/session";
+import type { FoldRange } from "./syntax/treeSitter/types";
 import type { EditorDocument, EditorToken, TextEdit } from "./tokens";
 import { clamp } from "./style-utils";
-import { VirtualizedTextView, type VirtualizedFoldMarker } from "./virtualization";
+import {
+  VirtualizedTextView,
+  type VirtualizedFoldMarker,
+} from "./virtualization/virtualizedTextView";
 
 let editorInstanceCount = 0;
 

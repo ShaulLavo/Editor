@@ -9,7 +9,7 @@ import type {
   TreeSitterWorkerResponse,
   TreeSitterWorkerResult,
 } from "./types";
-import type { PieceTableSnapshot } from "../../pieceTable";
+import type { PieceTableSnapshot } from "../../pieceTable/pieceTableTypes";
 
 type PendingRequest = {
   readonly documentId: string | null;

@@ -1,4 +1,4 @@
-import type { PieceTableSnapshot } from "../../pieceTable";
+import type { PieceTableSnapshot } from "../../pieceTable/pieceTableTypes";
 import { forEachPieceTableTextChunk } from "../../pieceTable/reads";
 
 export type TreeSitterSourceChunk = {

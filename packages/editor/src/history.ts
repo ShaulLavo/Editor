@@ -1,4 +1,4 @@
-import type { PieceTableAnchor, PieceTableSnapshot } from "./pieceTable";
+import type { Anchor as PieceTableAnchor, PieceTableSnapshot } from "./pieceTable/pieceTableTypes";
 import type { SelectionSet } from "./selections";
 
 export type EditorHistoryEntry<TSnapshot, TSelectionState> = {
