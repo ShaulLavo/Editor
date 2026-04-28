@@ -63,4 +63,18 @@ describe("DocumentSession", () => {
     expect(session.getText()).toBe("abc!");
     expect(resolvedOffsets(session)).toEqual({ start: 4, end: 4 });
   });
+
+  it("reports incremental edits for undo and redo", () => {
+    const session = createDocumentSession("abcdef");
+    session.setSelection(1, 4);
+    session.applyText("XYZ");
+
+    const undone = session.undo();
+    const redone = session.redo();
+
+    expect(undone.kind).toBe("undo");
+    expect(undone.edits).toEqual([{ from: 1, to: 4, text: "bcd" }]);
+    expect(redone.kind).toBe("redo");
+    expect(redone.edits).toEqual([{ from: 1, to: 4, text: "XYZ" }]);
+  });
 });

@@ -65,6 +65,29 @@ describe.skipIf(typeof Worker === "undefined")("Shiki worker highlighter", () =>
     session!.dispose();
   });
 
+  it("diffs from cached worker text when earlier UI edits were skipped", async () => {
+    const initialText = "const a = 1;";
+    const nextText = "const answer = 1;";
+    const session = createShikiHighlighterSession({
+      documentId: "file.ts",
+      languageId: "typescript",
+      lang: "typescript",
+      theme: "github-dark",
+      text: initialText,
+      snapshot: createPieceTableSnapshot(initialText),
+    });
+
+    expect(session).not.toBeNull();
+
+    await session!.refresh(createPieceTableSnapshot(initialText), initialText);
+    const result = await session!.applyChange(
+      createChange(nextText, { from: 11, to: 11, text: "r" }),
+    );
+
+    expect(result.tokens.some((token) => token.start === 6 && token.end === 12)).toBe(true);
+    session!.dispose();
+  });
+
   it("disposes document tokenizer state", async () => {
     const text = "const value = 1;";
     const session = createShikiHighlighterSession({

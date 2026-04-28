@@ -1373,6 +1373,74 @@ describe("Editor", () => {
       expect(document.querySelector(".editor-virtualized-fold-toggle:not([hidden])")).toBeNull();
     });
 
+    it("keeps projected highlights and folds through undo while syntax is pending", async () => {
+      const text = "if (x) {\n  y();\n}\nz();";
+      const foldEnd = text.indexOf("\nz();");
+      const changes: DocumentSessionChange[] = [];
+      let refreshCount = 0;
+      setEditorSyntaxSessionFactory(() =>
+        createMockSyntaxSession({
+          refresh: async () => {
+            refreshCount += 1;
+            return createSyntaxResult(
+              [{ start: 0, end: 2, style: { color: "#ff0000" } }],
+              [
+                {
+                  startIndex: 0,
+                  endIndex: foldEnd,
+                  startLine: 0,
+                  endLine: 2,
+                  type: "statement_block",
+                  languageId: "typescript",
+                },
+              ],
+            );
+          },
+          applyChange: async (change) => {
+            changes.push(change);
+            return createSyntaxResult(
+              [{ start: 0, end: 2, style: { color: "#00ff00" } }],
+              [
+                {
+                  startIndex: 0,
+                  endIndex: foldEnd,
+                  startLine: 0,
+                  endLine: 2,
+                  type: "statement_block",
+                  languageId: "typescript",
+                },
+              ],
+            );
+          },
+        }),
+      );
+
+      editor.openDocument({ documentId: "main.ts", text });
+      await flushMicrotasks();
+      editorRoot().dispatchEvent(createInsertEvent("!"));
+      editorRoot().dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "z",
+          metaKey: true,
+        }),
+      );
+
+      expect(editor.getText()).toBe(text);
+      expect(tokenHighlightRanges()).toHaveLength(1);
+      expect(foldToggle().dataset.editorFoldState).toBe("expanded");
+      expect(refreshCount).toBe(1);
+
+      await flushSyntaxDebounce();
+      expect(refreshCount).toBe(1);
+      expect(changes).toHaveLength(1);
+      expect(changes[0]).toMatchObject({
+        kind: "undo",
+        edits: [{ from: text.length, to: text.length + 1, text: "" }],
+      });
+    });
+
     it("moves syntax fold controls through line edits while syntax is pending", async () => {
       const text = "a\nif (x) {\n  y();\n}\nz();";
       const foldStart = text.indexOf("if");
@@ -1496,6 +1564,44 @@ describe("Editor", () => {
       await flushSyntaxDebounce();
       expect(changes).toEqual(["const a = 1;!?"]);
       expect(tokenHighlightRanges()[0]?.startOffset).toBe(0);
+    });
+
+    it("sends undo edits to plugin highlighter sessions", async () => {
+      const changes: DocumentSessionChange[] = [];
+      const highlighter = createMockHighlighterSession({
+        refresh: async () => createHighlightResult([]),
+        applyChange: async (change) => {
+          changes.push(change);
+          return createHighlightResult([]);
+        },
+      });
+      editor.dispose();
+      editor = new Editor(container, { plugins: [createHighlighterPlugin(highlighter)] });
+      setEditorSyntaxSessionFactory(() =>
+        createMockSyntaxSession({
+          refresh: async () => createSyntaxResult([]),
+          applyChange: async () => createSyntaxResult([]),
+        }),
+      );
+
+      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      await flushMicrotasks();
+      editorRoot().dispatchEvent(createInsertEvent("!"));
+      editorRoot().dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "z",
+          metaKey: true,
+        }),
+      );
+
+      await flushSyntaxDebounce();
+      expect(changes).toHaveLength(1);
+      expect(changes[0]).toMatchObject({
+        kind: "undo",
+        edits: [{ from: 12, to: 13, text: "" }],
+      });
     });
 
     it("ignores stale plugin highlight results after a newer edit", async () => {

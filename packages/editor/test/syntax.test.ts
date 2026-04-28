@@ -8,7 +8,7 @@ import {
   styleForTreeSitterCapture,
   treeSitterCapturesToEditorTokens,
 } from "../src/syntax";
-import { createTreeSitterEditPayload } from "../src/syntax/session";
+import { createTextDiffEdit, createTreeSitterEditPayload } from "../src/syntax/session";
 
 describe("Tree-sitter syntax capture conversion", () => {
   it("infers supported language ids from document ids", () => {
@@ -133,6 +133,36 @@ describe("Tree-sitter syntax capture conversion", () => {
         startPosition: { row: 0, column: 0 },
         oldEndPosition: { row: 0, column: 1 },
         newEndPosition: { row: 0, column: 1 },
+      },
+    ]);
+  });
+
+  it("diffs skipped typing edits against the cached syntax text", () => {
+    const previousText = "const a = 1;";
+    const nextText = "const a = 1;!?";
+    const previousSnapshot = createPieceTableSnapshot(previousText);
+    const nextSnapshot = createPieceTableSnapshot(nextText);
+    const edit = createTextDiffEdit(previousText, nextText);
+
+    expect(edit).toEqual({ from: 12, to: 12, text: "!?" });
+
+    const payload = createTreeSitterEditPayload({
+      documentId: "file.ts",
+      languageId: "typescript",
+      snapshotVersion: 2,
+      previousSnapshot,
+      nextSnapshot,
+      edits: edit ? [edit] : [],
+    });
+
+    expect(payload?.inputEdits).toMatchObject([
+      {
+        startIndex: 12,
+        oldEndIndex: 12,
+        newEndIndex: 14,
+        startPosition: { row: 0, column: 12 },
+        oldEndPosition: { row: 0, column: 12 },
+        newEndPosition: { row: 0, column: 14 },
       },
     ]);
   });

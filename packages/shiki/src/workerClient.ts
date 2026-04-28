@@ -57,6 +57,8 @@ class ShikiHighlighterSession implements EditorHighlighterSession {
   private readonly theme: string;
   private readonly langs: readonly string[];
   private readonly themes: readonly string[];
+  private text: string;
+  private task: Promise<void> = Promise.resolve();
 
   public constructor(options: ShikiHighlighterSessionOptions) {
     this.documentId = options.documentId;
@@ -64,24 +66,31 @@ class ShikiHighlighterSession implements EditorHighlighterSession {
     this.theme = options.theme;
     this.langs = options.langs ?? [];
     this.themes = options.themes ?? [];
+    this.text = options.text;
   }
 
   public async refresh(
     _snapshot: ShikiHighlighterSessionOptions["snapshot"],
     text = "",
   ): Promise<EditorHighlightResult> {
-    const result = await postRequest({
-      type: "open",
-      ...this.documentOptions(text),
-    });
+    return this.enqueueRequest(async () => {
+      const result = await postRequest({
+        type: "open",
+        ...this.documentOptions(text),
+      });
 
-    return { tokens: result?.tokens ?? [] };
+      this.text = text;
+      return { tokens: result?.tokens ?? [] };
+    });
   }
 
   public async applyChange(change: DocumentSessionChange): Promise<EditorHighlightResult> {
-    const payload = this.editPayloadForChange(change);
-    const result = await postRequest(payload);
-    return { tokens: result?.tokens ?? [] };
+    return this.enqueueRequest(async () => {
+      const payload = this.editPayloadForText(change.text);
+      const result = await postRequest(payload);
+      this.text = change.text;
+      return { tokens: result?.tokens ?? [] };
+    });
   }
 
   public dispose(): void {
@@ -90,11 +99,22 @@ class ShikiHighlighterSession implements EditorHighlighterSession {
     );
   }
 
-  private editPayloadForChange(change: DocumentSessionChange): ShikiWorkerRequestPayload {
-    const edit = change.kind === "edit" && change.edits.length === 1 ? change.edits[0] : undefined;
+  private enqueueRequest(
+    run: () => Promise<EditorHighlightResult>,
+  ): Promise<EditorHighlightResult> {
+    const result = this.task.then(run, run);
+    this.task = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private editPayloadForText(text: string): ShikiWorkerRequestPayload {
+    const edit = createTextDiffEdit(this.text, text) ?? undefined;
     return {
       type: "edit",
-      ...this.documentOptions(change.text),
+      ...this.documentOptions(text),
       edit,
     };
   }
@@ -157,4 +177,29 @@ const handleWorkerError = (event: ErrorEvent): void => {
 const rejectPendingRequests = (error: Error): void => {
   for (const request of pendingRequests.values()) request.reject(error);
   pendingRequests.clear();
+};
+
+export const createTextDiffEdit = (previousText: string, nextText: string) => {
+  if (previousText === nextText) return null;
+
+  let start = 0;
+  const maxPrefixLength = Math.min(previousText.length, nextText.length);
+  while (start < maxPrefixLength && previousText[start] === nextText[start]) start += 1;
+
+  let previousEnd = previousText.length;
+  let nextEnd = nextText.length;
+  while (
+    previousEnd > start &&
+    nextEnd > start &&
+    previousText[previousEnd - 1] === nextText[nextEnd - 1]
+  ) {
+    previousEnd -= 1;
+    nextEnd -= 1;
+  }
+
+  return {
+    from: start,
+    to: previousEnd,
+    text: nextText.slice(start, nextEnd),
+  };
 };

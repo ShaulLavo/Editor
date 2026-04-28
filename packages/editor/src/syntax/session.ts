@@ -118,7 +118,13 @@ class TreeSitterSyntaxSession implements EditorSyntaxSession {
 
   public async applyChange(change: DocumentSessionChange): Promise<EditorSyntaxResult> {
     if (change.kind === "none" || change.kind === "selection") return this.result;
-    if (change.kind !== "edit") return this.refresh(change.snapshot, change.text);
+
+    const edit = createTextDiffEdit(this.text, change.text);
+    if (!edit) {
+      this.text = change.text;
+      this.snapshot = change.snapshot;
+      return this.result;
+    }
 
     const payload = createTreeSitterEditPayload({
       documentId: this.documentId,
@@ -126,7 +132,7 @@ class TreeSitterSyntaxSession implements EditorSyntaxSession {
       snapshotVersion: ++this.snapshotVersion,
       previousSnapshot: this.snapshot,
       nextSnapshot: change.snapshot,
-      edits: change.edits,
+      edits: [edit],
       includeHighlights: this.includeHighlights,
     });
 
@@ -257,6 +263,31 @@ const createTreeSitterInputEdits = (
   }
 
   return inputEdits;
+};
+
+export const createTextDiffEdit = (previousText: string, nextText: string): TextEdit | null => {
+  if (previousText === nextText) return null;
+
+  let start = 0;
+  const maxPrefixLength = Math.min(previousText.length, nextText.length);
+  while (start < maxPrefixLength && previousText[start] === nextText[start]) start += 1;
+
+  let previousEnd = previousText.length;
+  let nextEnd = nextText.length;
+  while (
+    previousEnd > start &&
+    nextEnd > start &&
+    previousText[previousEnd - 1] === nextText[nextEnd - 1]
+  ) {
+    previousEnd -= 1;
+    nextEnd -= 1;
+  }
+
+  return {
+    from: start,
+    to: previousEnd,
+    text: nextText.slice(start, nextEnd),
+  };
 };
 
 const isRecoverableIncrementalEditError = (error: unknown): boolean =>

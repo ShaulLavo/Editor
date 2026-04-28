@@ -115,7 +115,7 @@ function getHighlightRegistry(): HighlightRegistry | undefined {
 }
 
 const syntaxRefreshDelay = (change: DocumentSessionChange | null): number => {
-  if (change?.kind !== "edit") return 0;
+  if (!change || change.edits.length === 0) return 0;
   return SYNTAX_EDIT_DEBOUNCE_MS;
 };
 
@@ -813,7 +813,7 @@ export class Editor {
     const edit = change.edits[0];
     if (change.kind === "selection" || change.kind === "none") return;
 
-    if (change.kind === "edit" && edit && change.edits.length === 1) {
+    if (edit && change.edits.length === 1) {
       const foldProjection = projectSyntaxFoldsThroughLineEdit(
         this.foldState.folds,
         edit,

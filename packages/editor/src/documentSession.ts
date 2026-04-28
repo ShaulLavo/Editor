@@ -58,12 +58,16 @@ class PieceTableDocumentSession implements DocumentSession {
   private history: PieceTableEditorHistory;
   private text: string;
   private tokens: readonly EditorToken[] = [];
+  private undoEdits: readonly (readonly TextEdit[])[];
+  private redoEdits: readonly (readonly TextEdit[])[];
 
   public constructor(text: string) {
     const snapshot = createPieceTableSnapshot(text);
     const selections = createSelectionSet([createAnchorSelection(snapshot, snapshot.length)], true);
     this.history = createEditorHistory(snapshot, selections);
     this.text = text;
+    this.undoEdits = [];
+    this.redoEdits = [];
   }
 
   public applyText(text: string): DocumentSessionChange {
@@ -107,9 +111,11 @@ class PieceTableDocumentSession implements DocumentSession {
       return appendTiming(this.createChange("none", []), "session.undo", start);
     }
 
+    const previousSnapshot = this.history.current;
     this.history = next;
     this.refreshText();
-    return appendTiming(this.createChange("undo", []), "session.undo", start);
+    const edits = this.consumeUndoEdits(previousSnapshot);
+    return appendTiming(this.createChange("undo", edits), "session.undo", start);
   }
 
   public redo(): DocumentSessionChange {
@@ -119,9 +125,11 @@ class PieceTableDocumentSession implements DocumentSession {
       return appendTiming(this.createChange("none", []), "session.redo", start);
     }
 
+    const previousSnapshot = this.history.current;
     this.history = next;
     this.refreshText();
-    return appendTiming(this.createChange("redo", []), "session.redo", start);
+    const edits = this.consumeRedoEdits(previousSnapshot);
+    return appendTiming(this.createChange("redo", edits), "session.redo", start);
   }
 
   public setSelection(anchorOffset: number, headOffset = anchorOffset): DocumentSessionChange {
@@ -173,9 +181,30 @@ class PieceTableDocumentSession implements DocumentSession {
   ): DocumentSessionChange {
     if (edits.length === 0) return this.createChange("none", []);
 
+    this.recordEditHistory(edits);
     this.history = commitEditorHistory(this.history, snapshot, selections);
     this.refreshText();
     return this.createChange("edit", edits);
+  }
+
+  private recordEditHistory(edits: readonly TextEdit[]): void {
+    const undoEdits = invertTextEdits(this.history.current, edits);
+    this.undoEdits = [...this.undoEdits, undoEdits];
+    this.redoEdits = [];
+  }
+
+  private consumeUndoEdits(previousSnapshot: PieceTableSnapshot): readonly TextEdit[] {
+    const edits = this.undoEdits.at(-1) ?? [];
+    this.undoEdits = this.undoEdits.slice(0, -1);
+    this.redoEdits = [...this.redoEdits, invertTextEdits(previousSnapshot, edits)];
+    return edits;
+  }
+
+  private consumeRedoEdits(previousSnapshot: PieceTableSnapshot): readonly TextEdit[] {
+    const edits = this.redoEdits.at(-1) ?? [];
+    this.redoEdits = this.redoEdits.slice(0, -1);
+    this.undoEdits = [...this.undoEdits, invertTextEdits(previousSnapshot, edits)];
+    return edits;
   }
 
   private refreshText(): void {
@@ -202,6 +231,28 @@ class PieceTableDocumentSession implements DocumentSession {
 
 export function createDocumentSession(text: string): DocumentSession {
   return new PieceTableDocumentSession(text);
+}
+
+function invertTextEdits(
+  snapshot: PieceTableSnapshot,
+  edits: readonly TextEdit[],
+): readonly TextEdit[] {
+  let delta = 0;
+  const inverse: TextEdit[] = [];
+  const sorted = edits.toSorted((left, right) => left.from - right.from || left.to - right.to);
+
+  for (const edit of sorted) {
+    const from = edit.from + delta;
+    const to = from + edit.text.length;
+    inverse.push({
+      from,
+      to,
+      text: getPieceTableText(snapshot, edit.from, edit.to),
+    });
+    delta += edit.text.length - (edit.to - edit.from);
+  }
+
+  return inverse;
 }
 
 function nowMs(): number {
