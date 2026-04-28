@@ -23,4 +23,4 @@ export type {
   VirtualizedTextRow,
   VirtualizedTextViewOptions,
   VirtualizedTextViewState,
-} from "./virtualizedTextView";
+} from "./virtualizedTextViewTypes";

@@ -1,10 +1,32 @@
-import type {
-  DocumentSession,
-  DocumentSessionChange,
-  EditorTimingMeasurement,
-} from "./documentSession";
+import type { DocumentSession, DocumentSessionChange } from "./documentSession";
 import { createDocumentSession } from "./documentSession";
-import { createFoldMap, type FoldMap } from "./foldMap";
+import {
+  childContainingNode,
+  childNodeIndex,
+  elementBoundaryToTextOffset,
+} from "./editor/domBoundary";
+import { projectSyntaxFoldsThroughLineEdit } from "./editor/folds";
+import { EditorFoldState } from "./editor/foldState";
+import { isUndoRedoEvent, keyboardFallbackText } from "./editor/input";
+import {
+  cancelFrame,
+  mouseSelectionAutoScrollDelta,
+  requestFrame,
+  type MouseSelectionDrag,
+} from "./editor/mouseSelection";
+import { lineRangeAtOffset, wordRangeAtOffset } from "./editor/textRanges";
+import { appendTiming, eventStartMs, mergeChangeTimings, nowMs } from "./editor/timing";
+import { projectTokensThroughEdit } from "./editor/tokenProjection";
+import type {
+  EditorOptions,
+  EditorOpenDocumentOptions,
+  EditorSessionOptions,
+  EditorState,
+  EditorSyntaxSessionFactory,
+  EditorSyntaxStatus,
+  HighlightRegistry,
+} from "./editor/types";
+import type { FoldMap } from "./foldMap";
 import { offsetToPoint } from "./pieceTable/positions";
 import { resolveSelection } from "./selections";
 import {
@@ -13,7 +35,6 @@ import {
   type EditorSyntaxLanguageId,
   type EditorSyntaxResult,
   type EditorSyntaxSession,
-  type EditorSyntaxSessionOptions,
 } from "./syntax/session";
 import type { FoldRange } from "./syntax/treeSitter/types";
 import type { EditorDocument, EditorToken, TextEdit } from "./tokens";
@@ -23,75 +44,23 @@ import {
   type VirtualizedFoldMarker,
 } from "./virtualization/virtualizedTextView";
 
+export type {
+  EditorChangeHandler,
+  EditorOpenDocumentOptions,
+  EditorOptions,
+  EditorSessionChangeHandler,
+  EditorSessionOptions,
+  EditorState,
+  EditorSyntaxSessionFactory,
+  EditorSyntaxStatus,
+  HighlightRegistry,
+} from "./editor/types";
+
 let editorInstanceCount = 0;
-
-type MouseSelectionDrag = {
-  readonly anchorOffset: number;
-  headOffset: number;
-  clientX: number;
-  clientY: number;
-};
-
-type SyntaxFoldProjection = {
-  readonly folds: readonly FoldRange[];
-  readonly keyMap: ReadonlyMap<string, string>;
-};
-
-const MOUSE_SELECTION_SCROLL_ZONE_PX = 40;
-const MOUSE_SELECTION_MAX_SCROLL_PX = 24;
-const MOUSE_SELECTION_MIN_SCROLL_PX = 2;
-const EMPTY_SYNTAX_FOLDS: readonly FoldRange[] = [];
-const EMPTY_FOLD_MARKERS: readonly VirtualizedFoldMarker[] = [];
 
 export function resetEditorInstanceCount(): void {
   editorInstanceCount = 0;
 }
-
-/** Minimal interface for the CSS Custom Highlight API registry. */
-export interface HighlightRegistry {
-  set(name: string, highlight: Highlight): void;
-  delete(name: string): boolean;
-}
-
-export type EditorSessionChangeHandler = (change: DocumentSessionChange) => void;
-
-export type EditorSessionOptions = {
-  readonly onChange?: EditorSessionChangeHandler;
-};
-
-export type EditorSyntaxStatus = "plain" | "loading" | "ready" | "error";
-
-export type EditorState = {
-  readonly documentId: string | null;
-  readonly languageId: EditorSyntaxLanguageId | null;
-  readonly syntaxStatus: EditorSyntaxStatus;
-  readonly cursor: {
-    readonly row: number;
-    readonly column: number;
-  };
-  readonly length: number;
-  readonly canUndo: boolean;
-  readonly canRedo: boolean;
-};
-
-export type EditorChangeHandler = (
-  state: EditorState,
-  change: DocumentSessionChange | null,
-) => void;
-
-export type EditorOptions = {
-  readonly onChange?: EditorChangeHandler;
-};
-
-export type EditorOpenDocumentOptions = {
-  readonly text: string;
-  readonly documentId?: string;
-  readonly languageId?: EditorSyntaxLanguageId | null;
-};
-
-export type EditorSyntaxSessionFactory = (
-  options: EditorSyntaxSessionOptions,
-) => EditorSyntaxSession;
 
 let editorSyntaxSessionFactory: EditorSyntaxSessionFactory = createEditorSyntaxSession;
 
@@ -118,6 +87,7 @@ function getHighlightRegistry(): HighlightRegistry | undefined {
 
 export class Editor {
   private readonly view: VirtualizedTextView;
+  private readonly foldState: EditorFoldState;
   private readonly el: HTMLDivElement;
   private readonly options: EditorOptions;
   private readonly highlightPrefix: string;
@@ -129,8 +99,6 @@ export class Editor {
   private syntaxStatus: EditorSyntaxStatus = "plain";
   private syntaxSession: EditorSyntaxSession | null = null;
   private tokens: readonly EditorToken[] = [];
-  private syntaxFolds: readonly FoldRange[] = [];
-  private collapsedFoldKeys = new Set<string>();
   private documentVersion = 0;
   private syntaxVersion = 0;
   private mouseSelectionDrag: MouseSelectionDrag | null = null;
@@ -147,6 +115,7 @@ export class Editor {
       onFoldToggle: this.handleFoldToggle,
       selectionHighlightName: `${this.highlightPrefix}-selection`,
     });
+    this.foldState = new EditorFoldState(this.view, () => this.session?.getSnapshot() ?? null);
     this.el = this.view.scrollElement;
     this.installEditingHandlers();
   }
@@ -179,11 +148,7 @@ export class Editor {
   }
 
   setSyntaxFolds(folds: readonly FoldRange[]): void {
-    if (foldRangesEqual(this.syntaxFolds, folds)) return;
-
-    this.syntaxFolds = folds.length === 0 ? EMPTY_SYNTAX_FOLDS : [...folds];
-    this.pruneCollapsedFolds();
-    this.syncFoldView();
+    this.foldState.setSyntaxFolds(folds);
   }
 
   openDocument(document: EditorOpenDocumentOptions): void {
@@ -703,12 +668,12 @@ export class Editor {
 
     if (change.kind === "edit" && edit && change.edits.length === 1) {
       const foldProjection = projectSyntaxFoldsThroughLineEdit(
-        this.syntaxFolds,
+        this.foldState.folds,
         edit,
         this.text,
       );
       this.applyEdit(edit, projectTokensThroughEdit(this.tokens, edit, this.text));
-      this.applySyntaxFoldProjection(foldProjection);
+      this.foldState.applyProjection(foldProjection);
       return;
     }
 
@@ -776,64 +741,11 @@ export class Editor {
   }
 
   private handleFoldToggle = (marker: VirtualizedFoldMarker): void => {
-    if (this.collapsedFoldKeys.has(marker.key)) {
-      this.collapsedFoldKeys.delete(marker.key);
-      this.syncFoldView();
-      return;
-    }
-
-    this.collapsedFoldKeys.add(marker.key);
-    this.syncFoldView();
+    this.foldState.toggle(marker);
   };
 
   private clearSyntaxFolds(): void {
-    this.syntaxFolds = EMPTY_SYNTAX_FOLDS;
-    if (this.collapsedFoldKeys.size > 0) this.collapsedFoldKeys.clear();
-    this.view.setFoldState(EMPTY_FOLD_MARKERS, null);
-  }
-
-  private applySyntaxFoldProjection(projection: SyntaxFoldProjection | null): void {
-    if (!projection) return;
-
-    this.remapCollapsedFoldKeys(projection.keyMap);
-    this.setSyntaxFolds(projection.folds);
-  }
-
-  private remapCollapsedFoldKeys(keyMap: ReadonlyMap<string, string>): void {
-    if (this.collapsedFoldKeys.size === 0) return;
-    if (keyMap.size === 0) return;
-
-    const nextKeys = new Set<string>();
-    for (const key of this.collapsedFoldKeys) {
-      nextKeys.add(keyMap.get(key) ?? key);
-    }
-    this.collapsedFoldKeys = nextKeys;
-  }
-
-  private pruneCollapsedFolds(): void {
-    const foldKeys = new Set(this.syntaxFolds.map((fold) => foldRangeKey(fold)));
-    for (const key of this.collapsedFoldKeys) {
-      if (foldKeys.has(key)) continue;
-      this.collapsedFoldKeys.delete(key);
-    }
-  }
-
-  private syncFoldView(): void {
-    const snapshot = this.session?.getSnapshot();
-    if (!snapshot || this.syntaxFolds.length === 0) {
-      this.view.setFoldState(EMPTY_FOLD_MARKERS, null);
-      return;
-    }
-
-    const markers = this.syntaxFolds.map((fold) =>
-      foldMarkerFromRange(fold, this.collapsedFoldKeys),
-    );
-    const collapsedFolds = this.syntaxFolds.filter((fold) => {
-      return this.collapsedFoldKeys.has(foldRangeKey(fold));
-    });
-
-    const foldMap = collapsedFolds.length > 0 ? createFoldMap(snapshot, collapsedFolds) : null;
-    this.view.setFoldState(markers, foldMap);
+    this.foldState.clear();
   }
 
   private adoptTokens(tokens: readonly EditorToken[]): void {
@@ -858,13 +770,13 @@ export class Editor {
     const resolved = resolveSelection(this.session.getSnapshot(), selection);
     const start = clamp(resolved.startOffset, 0, this.text.length);
     const end = clamp(resolved.endOffset, start, this.text.length);
-    const range = this.view.createRange(start, end);
 
     if (this.isInputFocused()) {
       this.syncCustomSelectionHighlight(start, end);
       return;
     }
 
+    const range = this.view.createRange(start, end);
     const domSelection = window.getSelection();
     domSelection?.removeAllRanges();
     if (range) domSelection?.addRange(range);
@@ -933,385 +845,4 @@ export class Editor {
     if ((position & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return this.text.length;
     return null;
   }
-}
-
-function isUndoRedoEvent(event: KeyboardEvent): boolean {
-  if (event.key.toLowerCase() !== "z") return false;
-  return event.metaKey || event.ctrlKey;
-}
-
-function keyboardFallbackText(event: KeyboardEvent): string | null {
-  if (event.defaultPrevented) return null;
-  if (event.isComposing) return null;
-  if (event.metaKey || event.ctrlKey || event.altKey) return null;
-  if (event.key === "Enter") return "\n";
-  if (event.key.length !== 1) return null;
-
-  return event.key;
-}
-
-function projectTokensThroughEdit(
-  tokens: readonly EditorToken[],
-  edit: TextEdit,
-  previousText: string,
-): readonly EditorToken[] {
-  const delta = edit.text.length - (edit.to - edit.from);
-  const projected: EditorToken[] = [];
-
-  for (const token of tokens) {
-    const next = projectTokenThroughEdit(token, edit, previousText, delta);
-    if (!next || next.end <= next.start) continue;
-    projected.push(next);
-  }
-
-  return projected;
-}
-
-function foldMarkerFromRange(
-  fold: FoldRange,
-  collapsedFoldKeys: ReadonlySet<string>,
-): VirtualizedFoldMarker {
-  const key = foldRangeKey(fold);
-  return {
-    key,
-    startOffset: fold.startIndex,
-    endOffset: fold.endIndex,
-    startRow: fold.startLine,
-    endRow: fold.endLine,
-    collapsed: collapsedFoldKeys.has(key),
-  };
-}
-
-function foldRangeKey(fold: FoldRange): string {
-  return `${fold.languageId ?? "plain"}:${fold.type}:${fold.startIndex}:${fold.endIndex}`;
-}
-
-function foldRangesEqual(left: readonly FoldRange[], right: readonly FoldRange[]): boolean {
-  if (left === right) return true;
-  if (left.length !== right.length) return false;
-
-  for (let index = 0; index < left.length; index += 1) {
-    if (!foldRangeEqual(left[index]!, right[index]!)) return false;
-  }
-
-  return true;
-}
-
-function foldRangeEqual(left: FoldRange, right: FoldRange): boolean {
-  return (
-    left.startIndex === right.startIndex &&
-    left.endIndex === right.endIndex &&
-    left.startLine === right.startLine &&
-    left.endLine === right.endLine &&
-    left.type === right.type &&
-    left.languageId === right.languageId
-  );
-}
-
-function projectSyntaxFoldsThroughLineEdit(
-  folds: readonly FoldRange[],
-  edit: TextEdit,
-  previousText: string,
-): SyntaxFoldProjection | null {
-  const lineDelta = editLineDelta(edit, previousText);
-  if (lineDelta === 0) return null;
-  if (folds.length === 0) return null;
-
-  const offsetDelta = edit.text.length - (edit.to - edit.from);
-  const keyMap = new Map<string, string>();
-  const projected = folds.map((fold) =>
-    projectSyntaxFoldThroughLineEdit(fold, edit, offsetDelta, lineDelta, keyMap),
-  );
-
-  if (foldRangesEqual(folds, projected)) return null;
-  return { folds: projected, keyMap };
-}
-
-function projectSyntaxFoldThroughLineEdit(
-  fold: FoldRange,
-  edit: TextEdit,
-  offsetDelta: number,
-  lineDelta: number,
-  keyMap: Map<string, string>,
-): FoldRange {
-  const projected = projectFoldRangeThroughLineEdit(fold, edit, offsetDelta, lineDelta);
-  if (projected === fold) return fold;
-
-  keyMap.set(foldRangeKey(fold), foldRangeKey(projected));
-  return projected;
-}
-
-function projectFoldRangeThroughLineEdit(
-  fold: FoldRange,
-  edit: TextEdit,
-  offsetDelta: number,
-  lineDelta: number,
-): FoldRange {
-  if (edit.to <= fold.startIndex) return shiftFoldRange(fold, offsetDelta, lineDelta);
-  if (edit.from >= fold.endIndex) return fold;
-  if (edit.from > fold.startIndex && edit.to < fold.endIndex) {
-    return resizeFoldRangeEnd(fold, offsetDelta, lineDelta);
-  }
-
-  return fold;
-}
-
-function shiftFoldRange(fold: FoldRange, offsetDelta: number, lineDelta: number): FoldRange {
-  return {
-    ...fold,
-    startIndex: Math.max(0, fold.startIndex + offsetDelta),
-    endIndex: Math.max(0, fold.endIndex + offsetDelta),
-    startLine: Math.max(0, fold.startLine + lineDelta),
-    endLine: Math.max(0, fold.endLine + lineDelta),
-  };
-}
-
-function resizeFoldRangeEnd(
-  fold: FoldRange,
-  offsetDelta: number,
-  lineDelta: number,
-): FoldRange {
-  return {
-    ...fold,
-    endIndex: Math.max(fold.startIndex + 1, fold.endIndex + offsetDelta),
-    endLine: Math.max(fold.startLine + 1, fold.endLine + lineDelta),
-  };
-}
-
-function editLineDelta(edit: TextEdit, previousText: string): number {
-  const deletedText = previousText.slice(edit.from, edit.to);
-  return countLineBreaks(edit.text) - countLineBreaks(deletedText);
-}
-
-function countLineBreaks(text: string): number {
-  let count = 0;
-
-  for (let index = 0; index < text.length; index += 1) {
-    if (text[index] === "\n") count += 1;
-  }
-
-  return count;
-}
-
-function projectTokenThroughEdit(
-  token: EditorToken,
-  edit: TextEdit,
-  previousText: string,
-  delta: number,
-): EditorToken | null {
-  if (edit.from === edit.to) return projectTokenThroughInsertion(token, edit, previousText);
-  if (token.end <= edit.from) return token;
-  if (token.start >= edit.to) return shiftToken(token, delta);
-  if (!canResizeTokenAcrossEdit(token, edit)) return null;
-
-  return { ...token, end: token.end + delta };
-}
-
-function projectTokenThroughInsertion(
-  token: EditorToken,
-  edit: TextEdit,
-  previousText: string,
-): EditorToken {
-  if (shouldExpandTokenForInsertion(token, edit, previousText)) {
-    return { ...token, end: token.end + edit.text.length };
-  }
-  if (token.start >= edit.from) return shiftToken(token, edit.text.length);
-
-  return token;
-}
-
-function canResizeTokenAcrossEdit(token: EditorToken, edit: TextEdit): boolean {
-  if (edit.text.includes("\n")) return false;
-  return token.start < edit.from && edit.to < token.end;
-}
-
-function shouldExpandTokenForInsertion(
-  token: EditorToken,
-  edit: TextEdit,
-  previousText: string,
-): boolean {
-  if (edit.text.length === 0) return false;
-  if (edit.text.includes("\n")) return false;
-  if (token.start < edit.from && edit.from < token.end) return true;
-  if (!isWordLikeText(edit.text)) return false;
-  if (token.end === edit.from) return isWordBeforeOffset(previousText, edit.from);
-  if (token.start === edit.from) {
-    return (
-      !isWordBeforeOffset(previousText, edit.from) && isWordCodePointAt(previousText, edit.from)
-    );
-  }
-
-  return false;
-}
-
-function shiftToken(token: EditorToken, delta: number): EditorToken {
-  return {
-    ...token,
-    start: token.start + delta,
-    end: token.end + delta,
-  };
-}
-
-function isWordLikeText(text: string): boolean {
-  return /^[\p{L}\p{N}_]+$/u.test(text);
-}
-
-function isWordBeforeOffset(text: string, offset: number): boolean {
-  const previous = previousCodePointStart(text, offset);
-  if (previous === null) return false;
-  return isWordCodePointAt(text, previous);
-}
-
-function elementBoundaryToTextOffset(offset: number, textLength: number): number {
-  if (offset <= 0) return 0;
-  return textLength;
-}
-
-function childContainingNode(ancestor: Node, node: Node): ChildNode | null {
-  for (const child of ancestor.childNodes) {
-    if (child === node || child.contains(node)) return child;
-  }
-
-  return null;
-}
-
-function childNodeIndex(parent: Node, child: ChildNode): number {
-  return Array.prototype.indexOf.call(parent.childNodes, child) as number;
-}
-
-function lineRangeAtOffset(text: string, rawOffset: number): { start: number; end: number } {
-  const offset = clamp(rawOffset, 0, text.length);
-  const lineStart = text.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
-  const nextLineBreak = text.indexOf("\n", offset);
-  const lineEnd = nextLineBreak === -1 ? text.length : nextLineBreak;
-  return { start: lineStart, end: lineEnd };
-}
-
-function wordRangeAtOffset(text: string, rawOffset: number): { start: number; end: number } {
-  const offset = clamp(rawOffset, 0, text.length);
-  const probeOffset = wordProbeOffset(text, offset);
-  if (probeOffset === null) return { start: offset, end: offset };
-
-  let start = probeOffset;
-  let end = probeOffset + codePointSizeAt(text, probeOffset);
-
-  while (start > 0) {
-    const previous = previousCodePointStart(text, start);
-    if (previous === null || !isWordCodePointAt(text, previous)) break;
-    start = previous;
-  }
-
-  while (end < text.length && isWordCodePointAt(text, end)) end += codePointSizeAt(text, end);
-
-  return { start, end };
-}
-
-function wordProbeOffset(text: string, offset: number): number | null {
-  if (offset < text.length && isWordCodePointAt(text, offset)) return offset;
-
-  const previous = previousCodePointStart(text, offset);
-  if (previous !== null && isWordCodePointAt(text, previous)) return previous;
-
-  return null;
-}
-
-function isWordCodePointAt(text: string, offset: number): boolean {
-  const codePoint = text.codePointAt(offset);
-  if (codePoint === undefined) return false;
-  return /^[\p{L}\p{N}_]$/u.test(String.fromCodePoint(codePoint));
-}
-
-function previousCodePointStart(text: string, offset: number): number | null {
-  if (offset <= 0) return null;
-
-  const previous = offset - 1;
-  const codeUnit = text.charCodeAt(previous);
-  const beforePrevious = previous - 1;
-  const isLowSurrogate = codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
-  if (!isLowSurrogate || beforePrevious < 0) return previous;
-
-  const previousCodeUnit = text.charCodeAt(beforePrevious);
-  const isHighSurrogate = previousCodeUnit >= 0xd800 && previousCodeUnit <= 0xdbff;
-  return isHighSurrogate ? beforePrevious : previous;
-}
-
-function codePointSizeAt(text: string, offset: number): number {
-  const codePoint = text.codePointAt(offset);
-  if (codePoint === undefined) return 0;
-  return codePoint > 0xffff ? 2 : 1;
-}
-
-function mouseSelectionAutoScrollDelta(clientY: number, rect: DOMRect): number {
-  if (rect.height <= 0) return 0;
-  if (clientY < rect.top + MOUSE_SELECTION_SCROLL_ZONE_PX) {
-    return -mouseSelectionScrollStep(rect.top + MOUSE_SELECTION_SCROLL_ZONE_PX - clientY);
-  }
-  if (clientY > rect.bottom - MOUSE_SELECTION_SCROLL_ZONE_PX) {
-    return mouseSelectionScrollStep(clientY - (rect.bottom - MOUSE_SELECTION_SCROLL_ZONE_PX));
-  }
-
-  return 0;
-}
-
-function mouseSelectionScrollStep(distance: number): number {
-  const ratio = distance / MOUSE_SELECTION_SCROLL_ZONE_PX;
-  const scaled = Math.ceil(ratio * MOUSE_SELECTION_MAX_SCROLL_PX);
-  return clamp(scaled, MOUSE_SELECTION_MIN_SCROLL_PX, MOUSE_SELECTION_MAX_SCROLL_PX);
-}
-
-function requestFrame(callback: FrameRequestCallback): number {
-  if (typeof requestAnimationFrame === "function") return requestAnimationFrame(callback);
-  return setTimeout(() => callback(nowMs()), 0) as unknown as number;
-}
-
-function cancelFrame(handle: number): void {
-  if (typeof cancelAnimationFrame === "function") {
-    cancelAnimationFrame(handle);
-    return;
-  }
-
-  clearTimeout(handle);
-}
-
-function nowMs(): number {
-  return globalThis.performance?.now() ?? Date.now();
-}
-
-function eventStartMs(event: Event): number {
-  const start = event.timeStamp;
-  if (!Number.isFinite(start) || start <= 0) return nowMs();
-
-  const now = nowMs();
-  if (start <= now + 1_000) return start;
-
-  const wallClockDelta = Date.now() - start;
-  if (!Number.isFinite(wallClockDelta) || wallClockDelta < 0) return now;
-
-  return Math.max(0, now - wallClockDelta);
-}
-
-function appendTiming(
-  change: DocumentSessionChange,
-  name: string,
-  startMs: number,
-): DocumentSessionChange {
-  return {
-    ...change,
-    timings: [...change.timings, createTiming(name, startMs)],
-  };
-}
-
-function mergeChangeTimings(
-  change: DocumentSessionChange,
-  earlierChange: DocumentSessionChange | null,
-): DocumentSessionChange {
-  if (!earlierChange) return change;
-  return {
-    ...change,
-    timings: [...earlierChange.timings, ...change.timings],
-  };
-}
-
-function createTiming(name: string, startMs: number): EditorTimingMeasurement {
-  return { name, durationMs: nowMs() - startMs };
 }

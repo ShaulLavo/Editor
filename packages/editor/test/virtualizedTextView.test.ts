@@ -210,6 +210,16 @@ describe("VirtualizedTextView", () => {
     expect(replaceData).toHaveBeenCalledWith(1, 0, "X");
   });
 
+  it("does not read horizontal scroll while re-rendering direct rows", () => {
+    view.setText("abc\ndef");
+    view.setScrollMetrics(0, 40);
+    withThrowingScrollLeft(view.scrollElement, () => {
+      view.applyEdit({ from: 3, to: 3, text: "\n" }, "abc\n\ndef");
+    });
+
+    expect(view.getState().mountedRows.map((row) => row.text)).toEqual(["abc", "", "def"]);
+  });
+
   it("snaps viewport fallback points outside vertical bounds to visible line edges", () => {
     view.setText("alpha\nbeta\ngamma");
     view.setScrollMetrics(0, 40);
@@ -240,6 +250,28 @@ describe("VirtualizedTextView", () => {
     view.setSelection(1, 7);
 
     expect(highlightsMap.get("test-selection")?.size).toBe(2);
+  });
+
+  it("positions a collapsed caret without native range measurement", () => {
+    const originalGetClientRects = Range.prototype.getClientRects;
+    Object.defineProperty(Range.prototype, "getClientRects", {
+      configurable: true,
+      value: () => {
+        throw new Error("unexpected native range measurement");
+      },
+    });
+
+    try {
+      view.setText("abcd\ndef");
+      view.setScrollMetrics(0, 40);
+      view.setSelection(2, 2);
+    } finally {
+      restoreRangeGetClientRects(originalGetClientRects);
+    }
+
+    const caret = container.querySelector(".editor-virtualized-caret") as HTMLElement;
+    expect(caret.hidden).toBe(false);
+    expect(caret.style.transform).toBe("translate(52px, 0px)");
   });
 
   it("paints selections only across mounted horizontal chunks", () => {
@@ -549,6 +581,34 @@ function mockClientWidth(element: HTMLElement, width: number): void {
   });
 }
 
+function withThrowingScrollLeft(element: HTMLElement, callback: () => void): void {
+  const descriptor = Object.getOwnPropertyDescriptor(element, "scrollLeft");
+  Object.defineProperty(element, "scrollLeft", {
+    configurable: true,
+    get: () => {
+      throw new Error("unexpected horizontal scroll read");
+    },
+  });
+
+  try {
+    callback();
+  } finally {
+    restoreScrollLeft(element, descriptor);
+  }
+}
+
+function restoreScrollLeft(
+  element: HTMLElement,
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor) {
+    Object.defineProperty(element, "scrollLeft", descriptor);
+    return;
+  }
+
+  Reflect.deleteProperty(element, "scrollLeft");
+}
+
 function mockRect(left: number, top: number, width: number, height: number): DOMRect {
   return {
     bottom: top + height,
@@ -561,4 +621,11 @@ function mockRect(left: number, top: number, width: number, height: number): DOM
     y: top,
     toJSON: () => ({}),
   } as DOMRect;
+}
+
+function restoreRangeGetClientRects(original: Range["getClientRects"]): void {
+  Object.defineProperty(Range.prototype, "getClientRects", {
+    configurable: true,
+    value: original,
+  });
 }
