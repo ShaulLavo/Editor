@@ -45,6 +45,7 @@ export type DocumentSession = {
   redo(): DocumentSessionChange;
   setSelection(anchorOffset: number, headOffset?: number): DocumentSessionChange;
   setTokens(tokens: readonly EditorToken[]): DocumentSessionChange;
+  adoptTokens(tokens: readonly EditorToken[]): DocumentSessionChange;
   getText(): string;
   getTokens(): readonly EditorToken[];
   getSelections(): SelectionSet<PieceTableAnchor>;
@@ -132,8 +133,12 @@ class PieceTableDocumentSession implements DocumentSession {
   }
 
   public setTokens(tokens: readonly EditorToken[]): DocumentSessionChange {
+    return this.adoptTokens([...tokens]);
+  }
+
+  public adoptTokens(tokens: readonly EditorToken[]): DocumentSessionChange {
     const start = nowMs();
-    this.tokens = [...tokens];
+    this.tokens = tokens;
     return appendTiming(this.createChange("none", []), "session.setTokens", start);
   }
 

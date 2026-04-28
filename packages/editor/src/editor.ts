@@ -32,9 +32,16 @@ type MouseSelectionDrag = {
   clientY: number;
 };
 
+type SyntaxFoldProjection = {
+  readonly folds: readonly FoldRange[];
+  readonly keyMap: ReadonlyMap<string, string>;
+};
+
 const MOUSE_SELECTION_SCROLL_ZONE_PX = 40;
 const MOUSE_SELECTION_MAX_SCROLL_PX = 24;
 const MOUSE_SELECTION_MIN_SCROLL_PX = 2;
+const EMPTY_SYNTAX_FOLDS: readonly FoldRange[] = [];
+const EMPTY_FOLD_MARKERS: readonly VirtualizedFoldMarker[] = [];
 
 export function resetEditorInstanceCount(): void {
   editorInstanceCount = 0;
@@ -152,8 +159,7 @@ export class Editor {
   }
 
   setTokens(tokens: readonly EditorToken[]): void {
-    this.tokens = [...tokens];
-    this.view.setTokens(this.tokens);
+    this.adoptTokens([...tokens]);
   }
 
   applyEdit(edit: TextEdit, tokens: readonly EditorToken[]): void {
@@ -173,7 +179,9 @@ export class Editor {
   }
 
   setSyntaxFolds(folds: readonly FoldRange[]): void {
-    this.syntaxFolds = [...folds];
+    if (foldRangesEqual(this.syntaxFolds, folds)) return;
+
+    this.syntaxFolds = folds.length === 0 ? EMPTY_SYNTAX_FOLDS : [...folds];
     this.pruneCollapsedFolds();
     this.syncFoldView();
   }
@@ -694,8 +702,13 @@ export class Editor {
     if (change.kind === "selection" || change.kind === "none") return;
 
     if (change.kind === "edit" && edit && change.edits.length === 1) {
-      this.clearSyntaxFolds();
+      const foldProjection = projectSyntaxFoldsThroughLineEdit(
+        this.syntaxFolds,
+        edit,
+        this.text,
+      );
       this.applyEdit(edit, projectTokensThroughEdit(this.tokens, edit, this.text));
+      this.applySyntaxFoldProjection(foldProjection);
       return;
     }
 
@@ -755,9 +768,9 @@ export class Editor {
     if (syntaxVersion !== this.syntaxVersion) return;
 
     this.syntaxStatus = "ready";
-    const tokenChange = this.session.setTokens(result.tokens);
+    const tokenChange = this.session.adoptTokens(result.tokens);
     const timedChange = appendTiming(tokenChange, "editor.syntax", startedAt);
-    this.setTokens(result.tokens);
+    this.adoptTokens(result.tokens);
     this.setSyntaxFolds(result.folds);
     this.notifyChange(timedChange);
   }
@@ -774,10 +787,27 @@ export class Editor {
   };
 
   private clearSyntaxFolds(): void {
-    this.syntaxFolds = [];
-    this.collapsedFoldKeys.clear();
-    this.view.setFoldMarkers([]);
-    this.view.setFoldMap(null);
+    this.syntaxFolds = EMPTY_SYNTAX_FOLDS;
+    if (this.collapsedFoldKeys.size > 0) this.collapsedFoldKeys.clear();
+    this.view.setFoldState(EMPTY_FOLD_MARKERS, null);
+  }
+
+  private applySyntaxFoldProjection(projection: SyntaxFoldProjection | null): void {
+    if (!projection) return;
+
+    this.remapCollapsedFoldKeys(projection.keyMap);
+    this.setSyntaxFolds(projection.folds);
+  }
+
+  private remapCollapsedFoldKeys(keyMap: ReadonlyMap<string, string>): void {
+    if (this.collapsedFoldKeys.size === 0) return;
+    if (keyMap.size === 0) return;
+
+    const nextKeys = new Set<string>();
+    for (const key of this.collapsedFoldKeys) {
+      nextKeys.add(keyMap.get(key) ?? key);
+    }
+    this.collapsedFoldKeys = nextKeys;
   }
 
   private pruneCollapsedFolds(): void {
@@ -791,8 +821,7 @@ export class Editor {
   private syncFoldView(): void {
     const snapshot = this.session?.getSnapshot();
     if (!snapshot || this.syntaxFolds.length === 0) {
-      this.view.setFoldMarkers([]);
-      this.view.setFoldMap(null);
+      this.view.setFoldState(EMPTY_FOLD_MARKERS, null);
       return;
     }
 
@@ -803,10 +832,13 @@ export class Editor {
       return this.collapsedFoldKeys.has(foldRangeKey(fold));
     });
 
-    this.view.setFoldMarkers(markers);
-    this.view.setFoldMap(
-      collapsedFolds.length > 0 ? createFoldMap(snapshot, collapsedFolds) : null,
-    );
+    const foldMap = collapsedFolds.length > 0 ? createFoldMap(snapshot, collapsedFolds) : null;
+    this.view.setFoldState(markers, foldMap);
+  }
+
+  private adoptTokens(tokens: readonly EditorToken[]): void {
+    this.tokens = tokens;
+    this.view.adoptTokens(tokens);
   }
 
   private applySyntaxError(documentVersion: number, syntaxVersion: number): void {
@@ -952,6 +984,113 @@ function foldMarkerFromRange(
 
 function foldRangeKey(fold: FoldRange): string {
   return `${fold.languageId ?? "plain"}:${fold.type}:${fold.startIndex}:${fold.endIndex}`;
+}
+
+function foldRangesEqual(left: readonly FoldRange[], right: readonly FoldRange[]): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+
+  for (let index = 0; index < left.length; index += 1) {
+    if (!foldRangeEqual(left[index]!, right[index]!)) return false;
+  }
+
+  return true;
+}
+
+function foldRangeEqual(left: FoldRange, right: FoldRange): boolean {
+  return (
+    left.startIndex === right.startIndex &&
+    left.endIndex === right.endIndex &&
+    left.startLine === right.startLine &&
+    left.endLine === right.endLine &&
+    left.type === right.type &&
+    left.languageId === right.languageId
+  );
+}
+
+function projectSyntaxFoldsThroughLineEdit(
+  folds: readonly FoldRange[],
+  edit: TextEdit,
+  previousText: string,
+): SyntaxFoldProjection | null {
+  const lineDelta = editLineDelta(edit, previousText);
+  if (lineDelta === 0) return null;
+  if (folds.length === 0) return null;
+
+  const offsetDelta = edit.text.length - (edit.to - edit.from);
+  const keyMap = new Map<string, string>();
+  const projected = folds.map((fold) =>
+    projectSyntaxFoldThroughLineEdit(fold, edit, offsetDelta, lineDelta, keyMap),
+  );
+
+  if (foldRangesEqual(folds, projected)) return null;
+  return { folds: projected, keyMap };
+}
+
+function projectSyntaxFoldThroughLineEdit(
+  fold: FoldRange,
+  edit: TextEdit,
+  offsetDelta: number,
+  lineDelta: number,
+  keyMap: Map<string, string>,
+): FoldRange {
+  const projected = projectFoldRangeThroughLineEdit(fold, edit, offsetDelta, lineDelta);
+  if (projected === fold) return fold;
+
+  keyMap.set(foldRangeKey(fold), foldRangeKey(projected));
+  return projected;
+}
+
+function projectFoldRangeThroughLineEdit(
+  fold: FoldRange,
+  edit: TextEdit,
+  offsetDelta: number,
+  lineDelta: number,
+): FoldRange {
+  if (edit.to <= fold.startIndex) return shiftFoldRange(fold, offsetDelta, lineDelta);
+  if (edit.from >= fold.endIndex) return fold;
+  if (edit.from > fold.startIndex && edit.to < fold.endIndex) {
+    return resizeFoldRangeEnd(fold, offsetDelta, lineDelta);
+  }
+
+  return fold;
+}
+
+function shiftFoldRange(fold: FoldRange, offsetDelta: number, lineDelta: number): FoldRange {
+  return {
+    ...fold,
+    startIndex: Math.max(0, fold.startIndex + offsetDelta),
+    endIndex: Math.max(0, fold.endIndex + offsetDelta),
+    startLine: Math.max(0, fold.startLine + lineDelta),
+    endLine: Math.max(0, fold.endLine + lineDelta),
+  };
+}
+
+function resizeFoldRangeEnd(
+  fold: FoldRange,
+  offsetDelta: number,
+  lineDelta: number,
+): FoldRange {
+  return {
+    ...fold,
+    endIndex: Math.max(fold.startIndex + 1, fold.endIndex + offsetDelta),
+    endLine: Math.max(fold.startLine + 1, fold.endLine + lineDelta),
+  };
+}
+
+function editLineDelta(edit: TextEdit, previousText: string): number {
+  const deletedText = previousText.slice(edit.from, edit.to);
+  return countLineBreaks(edit.text) - countLineBreaks(deletedText);
+}
+
+function countLineBreaks(text: string): number {
+  let count = 0;
+
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === "\n") count += 1;
+  }
+
+  return count;
 }
 
 function projectTokenThroughEdit(

@@ -87,6 +87,14 @@ function createInsertEvent(data: string): InputEvent {
   });
 }
 
+function createLineBreakEvent(): InputEvent {
+  return new InputEvent("beforeinput", {
+    bubbles: true,
+    cancelable: true,
+    inputType: "insertLineBreak",
+  });
+}
+
 function editorRoot(): HTMLElement {
   return document.querySelector(".editor-virtualized") as HTMLElement;
 }
@@ -1169,6 +1177,86 @@ describe("Editor", () => {
 
       expect(editor.getState().syntaxStatus).toBe("ready");
       expect(tokenHighlights()).toHaveLength(1);
+    });
+
+    it("keeps syntax fold controls until edit syntax finishes", async () => {
+      const text = "if (x) {\n  y();\n}\nz();";
+      const foldEnd = text.indexOf("\nz();");
+      const editResult = createDeferred<EditorSyntaxResult>();
+      setEditorSyntaxSessionFactory(() =>
+        createMockSyntaxSession({
+          refresh: async () =>
+            createSyntaxResult(
+              [],
+              [
+                {
+                  startIndex: 0,
+                  endIndex: foldEnd,
+                  startLine: 0,
+                  endLine: 2,
+                  type: "statement_block",
+                  languageId: "typescript",
+                },
+              ],
+            ),
+          applyChange: () => editResult.promise,
+        }),
+      );
+
+      editor.openDocument({ documentId: "main.ts", text });
+      await flushMicrotasks();
+      editorRoot().dispatchEvent(createInsertEvent("!"));
+
+      expect(editor.getText()).toBe(`${text}!`);
+      expect(foldToggle().dataset.editorFoldState).toBe("expanded");
+
+      editResult.resolve(createSyntaxResult([], []));
+      await flushMicrotasks();
+
+      expect(document.querySelector(".editor-virtualized-fold-toggle:not([hidden])")).toBeNull();
+    });
+
+    it("moves syntax fold controls through line edits while syntax is pending", async () => {
+      const text = "a\nif (x) {\n  y();\n}\nz();";
+      const foldStart = text.indexOf("if");
+      const foldEnd = text.indexOf("\nz();");
+      const editResult = createDeferred<EditorSyntaxResult>();
+      setEditorSyntaxSessionFactory(() =>
+        createMockSyntaxSession({
+          refresh: async () =>
+            createSyntaxResult(
+              [],
+              [
+                {
+                  startIndex: foldStart,
+                  endIndex: foldEnd,
+                  startLine: 1,
+                  endLine: 3,
+                  type: "statement_block",
+                  languageId: "typescript",
+                },
+              ],
+            ),
+          applyChange: () => editResult.promise,
+        }),
+      );
+
+      editor.openDocument({ documentId: "main.ts", text });
+      await flushMicrotasks();
+      foldToggle().dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      setCollapsedDomSelection(0);
+      editorRoot().dispatchEvent(createLineBreakEvent());
+
+      const gutterRow = foldToggle()
+        .closest("[data-editor-virtual-gutter-row]")
+        ?.getAttribute("data-editor-virtual-gutter-row");
+      expect(gutterRow).toBe("2");
+      expect(foldToggle().dataset.editorFoldState).toBe("collapsed");
+      expect(editorRoot().textContent).toContain("...");
+      expect(editorRoot().textContent).not.toContain("  y();");
+
+      editResult.resolve(createSyntaxResult([], []));
+      await flushMicrotasks();
     });
 
     it("ignores stale syntax results after rapid edits", async () => {

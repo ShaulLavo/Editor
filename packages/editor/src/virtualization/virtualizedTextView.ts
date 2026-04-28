@@ -261,15 +261,32 @@ export class VirtualizedTextView {
   }
 
   public setFoldMap(foldMap: FoldMap | null): void {
-    this.foldMap = foldMapMatchesText(foldMap, this.text) ? foldMap : null;
-    this.clearRowTokenState();
-    this.lastRenderedRowsKey = "";
-    this.virtualizer.updateOptions({ count: this.visibleLineCount() });
+    this.setFoldState(this.foldMarkers, foldMap);
   }
 
   public setFoldMarkers(markers: readonly VirtualizedFoldMarker[]): void {
-    this.foldMarkers = normalizeFoldMarkers(markers, this.text.length);
+    this.setFoldState(markers, this.foldMap);
+  }
+
+  public setFoldState(markers: readonly VirtualizedFoldMarker[], foldMap: FoldMap | null): void {
+    const nextFoldMap = foldMapMatchesText(foldMap, this.text) ? foldMap : null;
+    const foldMapChanged = this.foldMap !== nextFoldMap;
+    if (!foldMapChanged && markers.length === 0 && this.foldMarkers.length === 0) return;
+
+    const nextFoldMarkers = normalizeFoldMarkers(markers, this.text.length);
+    const foldMarkersChanged = !foldMarkersEqual(this.foldMarkers, nextFoldMarkers);
+    if (!foldMapChanged && !foldMarkersChanged) return;
+
+    this.foldMarkers = nextFoldMarkers;
+    this.foldMap = nextFoldMap;
+    if (foldMapChanged) this.clearRowTokenState();
+
     this.lastRenderedRowsKey = "";
+    if (foldMapChanged) {
+      this.virtualizer.updateOptions({ count: this.visibleLineCount() });
+      return;
+    }
+
     this.renderSnapshot(this.virtualizer.getSnapshot());
   }
 
@@ -294,16 +311,24 @@ export class VirtualizedTextView {
   }
 
   public setTokens(tokens: readonly EditorToken[]): void {
-    if (editorTokensEqual(this.tokens, tokens)) return;
+    this.adoptTokens([...tokens]);
+  }
+
+  public adoptTokens(tokens: readonly EditorToken[]): void {
+    if (editorTokensEqual(this.tokens, tokens)) {
+      this.tokens = tokens;
+      this.tokenRangesFollowLastTextEdit = false;
+      return;
+    }
 
     if (this.canKeepLiveTokenRanges(tokens)) {
-      this.tokens = [...tokens];
+      this.tokens = tokens;
       this.tokenRangesFollowLastTextEdit = false;
       return;
     }
 
     this.tokenRangesFollowLastTextEdit = false;
-    this.tokens = [...tokens];
+    this.tokens = tokens;
     this.syncTokenGroupsToTokenSet();
     this.renderTokenHighlights();
   }
@@ -1740,6 +1765,33 @@ function editorTokensEqual(left: readonly EditorToken[], right: readonly EditorT
   }
 
   return true;
+}
+
+function foldMarkersEqual(
+  left: readonly VirtualizedFoldMarker[],
+  right: readonly VirtualizedFoldMarker[],
+): boolean {
+  if (left === right) return true;
+
+  const length = left.length;
+  if (length !== right.length) return false;
+
+  for (let index = 0; index < length; index += 1) {
+    if (!foldMarkerEqual(left[index]!, right[index]!)) return false;
+  }
+
+  return true;
+}
+
+function foldMarkerEqual(left: VirtualizedFoldMarker, right: VirtualizedFoldMarker): boolean {
+  return (
+    left.key === right.key &&
+    left.startOffset === right.startOffset &&
+    left.endOffset === right.endOffset &&
+    left.startRow === right.startRow &&
+    left.endRow === right.endRow &&
+    left.collapsed === right.collapsed
+  );
 }
 
 function tokenStylesEqual(left: EditorToken, right: EditorToken): boolean {

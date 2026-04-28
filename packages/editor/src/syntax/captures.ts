@@ -55,14 +55,19 @@ const PREFIX_CAPTURE_STYLES: Record<string, EditorTokenStyle> = {
 };
 
 export const styleForTreeSitterCapture = (captureName: string): EditorTokenStyle | null => {
+  const style = sharedStyleForTreeSitterCapture(captureName);
+  return style ? { ...style } : null;
+};
+
+const sharedStyleForTreeSitterCapture = (captureName: string): EditorTokenStyle | null => {
   const exact = EXACT_CAPTURE_STYLES[captureName];
-  if (exact) return { ...exact };
+  if (exact) return exact;
 
   const prefix = captureName.split(".")[0] ?? "";
   const prefixed = PREFIX_CAPTURE_STYLES[prefix];
   if (!prefixed) return null;
 
-  return { ...prefixed };
+  return prefixed;
 };
 
 export const treeSitterCapturesToEditorTokens = (
@@ -81,7 +86,7 @@ export const treeSitterCapturesToEditorTokens = (
 const captureToEditorToken = (capture: TreeSitterCapture): EditorToken | null => {
   if (capture.endIndex <= capture.startIndex) return null;
 
-  const style = styleForTreeSitterCapture(capture.captureName);
+  const style = sharedStyleForTreeSitterCapture(capture.captureName);
   if (!style) return null;
 
   return {
