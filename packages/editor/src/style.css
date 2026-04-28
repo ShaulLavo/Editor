@@ -33,3 +33,75 @@
   color: inherit;
   background: transparent;
 }
+
+.editor-virtualized {
+  --editor-syntax-attribute: #99f6e4;
+  --editor-syntax-bracket: #d4d4d8;
+  --editor-syntax-comment: #71717a;
+  --editor-syntax-constant: #f0abfc;
+  --editor-syntax-function: #fecdd3;
+  --editor-syntax-keyword: #6ee7b7;
+  --editor-syntax-keyword-declaration: #a78bfa;
+  --editor-syntax-keyword-import: #f9a8d4;
+  --editor-syntax-namespace: #a5f3fc;
+  --editor-syntax-number: #c4b5fd;
+  --editor-syntax-property: #e9d5ff;
+  --editor-syntax-string: #fde68a;
+  --editor-syntax-type: #7dd3fc;
+  --editor-syntax-type-definition: #38bdf8;
+  --editor-syntax-type-parameter: #5eead4;
+  --editor-syntax-variable: #e4e4e7;
+  --editor-syntax-variable-builtin: #fdba74;
+
+  flex: 1;
+  position: relative;
+  overflow: auto;
+  padding: 16px;
+  font-size: 13px;
+  font-family: monospace;
+  white-space: pre;
+  tab-size: 4;
+  color: #d4d4d4;
+  background: #1e1e1e;
+}
+
+.editor-virtualized-spacer {
+  min-width: max-content;
+  position: relative;
+}
+
+.editor-virtualized-row {
+  left: 0;
+  min-width: max-content;
+  position: absolute;
+  right: 0;
+  top: 0;
+  white-space: pre;
+  will-change: transform;
+}
+
+.editor-virtualized-input {
+  height: 1px;
+  left: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: absolute;
+  resize: none;
+  top: 0;
+  width: 1px;
+}
+
+.editor-virtualized-caret {
+  background: #d4d4d4;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  width: 1px;
+}
+
+.editor-virtualized::selection {
+  color: inherit;
+  background: transparent;
+}

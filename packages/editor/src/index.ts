@@ -9,6 +9,7 @@ export * from "./history";
 export * from "./pieceTable";
 export * from "./selections";
 export * from "./syntax";
+export * from "./virtualization";
 export type {
   EditorChangeHandler,
   EditorOpenDocumentOptions,

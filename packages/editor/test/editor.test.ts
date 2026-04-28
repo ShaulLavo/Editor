@@ -79,6 +79,43 @@ function createInsertEvent(data: string): InputEvent {
   });
 }
 
+function editorRoot(): HTMLElement {
+  return document.querySelector(".editor-virtualized") as HTMLElement;
+}
+
+function rowTextNode(row = 0): Text {
+  const element = document.querySelector(`[data-editor-virtual-row="${row}"]`);
+  return element?.firstChild as Text;
+}
+
+function editorInput(): HTMLTextAreaElement {
+  return document.querySelector(".editor-virtualized-input") as HTMLTextAreaElement;
+}
+
+function mockEditorViewport(
+  element: HTMLElement,
+  width: number,
+  height: number,
+  scrollHeight = 200,
+): void {
+  Object.defineProperty(element, "clientHeight", { configurable: true, value: height });
+  Object.defineProperty(element, "scrollHeight", { configurable: true, value: scrollHeight });
+  Object.defineProperty(element, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({
+      bottom: height,
+      height,
+      left: 0,
+      right: width,
+      top: 0,
+      width,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }),
+  });
+}
+
 describe("Editor", () => {
   let container: HTMLElement;
   let editor: Editor;
@@ -104,7 +141,7 @@ describe("Editor", () => {
   describe("setContent", () => {
     it("sets the text content", () => {
       editor.setContent("hello world");
-      expect(container.querySelector("pre")!.textContent).toBe("hello world");
+      expect(editorRoot().textContent).toBe("hello world");
     });
 
     it("clears highlights when setting content", () => {
@@ -162,7 +199,7 @@ describe("Editor", () => {
         { start: 6, end: 8, style: { color: "#ff0000" } },
       ]);
 
-      expect(container.querySelector("pre")!.textContent).toBe("XXabcdef");
+      expect(editorRoot().textContent).toBe("XXabcdef");
     });
 
     it("removes tokens overlapping the edit region", () => {
@@ -210,7 +247,7 @@ describe("Editor", () => {
     it("updates text content correctly", () => {
       editor.setContent("hello world");
       editor.applyEdit({ from: 5, to: 5, text: " beautiful" }, []);
-      expect(container.querySelector("pre")!.textContent).toBe("hello beautiful world");
+      expect(editorRoot().textContent).toBe("hello beautiful world");
     });
   });
 
@@ -225,10 +262,20 @@ describe("Editor", () => {
         data: "!",
         inputType: "insertText",
       });
-      container.querySelector("pre")!.dispatchEvent(event);
+      editorRoot().dispatchEvent(event);
 
       expect(session.getText()).toBe("abc!");
-      expect(container.querySelector("pre")!.textContent).toBe("abc!");
+      expect(editorRoot().textContent).toBe("abc!");
+    });
+
+    it("routes real input-surface events through a document session", () => {
+      const session = createDocumentSession("abc");
+      editor.attachSession(session);
+
+      editorInput().dispatchEvent(createInsertEvent("!"));
+
+      expect(session.getText()).toBe("abc!");
+      expect(editor.getText()).toBe("abc!");
     });
 
     it("measures input timing from the browser event timestamp", () => {
@@ -248,7 +295,7 @@ describe("Editor", () => {
         inputType: "insertText",
       });
       Object.defineProperty(event, "timeStamp", { configurable: true, value: 1 });
-      container.querySelector("pre")!.dispatchEvent(event);
+      editorRoot().dispatchEvent(event);
 
       const timing = changes.at(-1)?.timings.find(({ name }) => name === "input.beforeinput");
       expect(timing?.durationMs).toBeGreaterThan(1);
@@ -259,7 +306,7 @@ describe("Editor", () => {
       editor.attachSession(session);
       session.applyText("!");
 
-      container.querySelector("pre")!.dispatchEvent(
+      editorInput().dispatchEvent(
         new KeyboardEvent("keydown", {
           bubbles: true,
           cancelable: true,
@@ -269,13 +316,13 @@ describe("Editor", () => {
       );
 
       expect(session.getText()).toBe("abc");
-      expect(container.querySelector("pre")!.textContent).toBe("abc");
+      expect(editorRoot().textContent).toBe("abc");
     });
 
     it("keeps browser selections synced to the document session", () => {
       const session = createDocumentSession("abcd");
       editor.attachSession(session);
-      const textNode = container.querySelector("pre")!.firstChild!;
+      const textNode = rowTextNode();
       const range = document.createRange();
       range.setStart(textNode, 1);
       range.setEnd(textNode, 3);
@@ -283,7 +330,7 @@ describe("Editor", () => {
       const selection = window.getSelection()!;
       selection.removeAllRanges();
       selection.addRange(range);
-      container.querySelector("pre")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      editorRoot().dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
 
       const resolved = resolveSelection(
         session.getSnapshot(),
@@ -292,7 +339,7 @@ describe("Editor", () => {
       expect(resolved.startOffset).toBe(1);
       expect(resolved.endOffset).toBe(3);
 
-      container.querySelector("pre")!.dispatchEvent(
+      editorRoot().dispatchEvent(
         new InputEvent("beforeinput", {
           bubbles: true,
           cancelable: true,
@@ -302,13 +349,13 @@ describe("Editor", () => {
       );
 
       expect(session.getText()).toBe("aXd");
-      expect(container.querySelector("pre")!.textContent).toBe("aXd");
+      expect(editorRoot().textContent).toBe("aXd");
     });
 
     it("renders range selections with a custom highlight", () => {
       const session = createDocumentSession("abcd");
       editor.attachSession(session);
-      const textNode = container.querySelector("pre")!.firstChild!;
+      const textNode = rowTextNode();
       const range = document.createRange();
       range.setStart(textNode, 1);
       range.setEnd(textNode, 3);
@@ -316,11 +363,11 @@ describe("Editor", () => {
       const selection = window.getSelection()!;
       selection.removeAllRanges();
       selection.addRange(range);
-      container.querySelector("pre")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      editorRoot().dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
 
       expect(highlightsMap.get("editor-token-0-selection")?.size).toBe(1);
 
-      container.querySelector("pre")!.dispatchEvent(
+      editorRoot().dispatchEvent(
         new InputEvent("beforeinput", {
           bubbles: true,
           cancelable: true,
@@ -335,7 +382,7 @@ describe("Editor", () => {
     it("updates custom selection immediately while dragging", () => {
       const session = createDocumentSession("abcd");
       editor.attachSession(session);
-      const textNode = container.querySelector("pre")!.firstChild!;
+      const textNode = rowTextNode();
       const originalCaretRangeFromPoint = (
         document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
       ).caretRangeFromPoint;
@@ -356,7 +403,7 @@ describe("Editor", () => {
         clientX: 10,
         detail: 1,
       });
-      container.querySelector("pre")!.dispatchEvent(mouseDown);
+      editorRoot().dispatchEvent(mouseDown);
       document.dispatchEvent(new MouseEvent("mousemove", { cancelable: true, clientX: 30 }));
 
       expect(mouseDown.defaultPrevented).toBe(true);
@@ -385,6 +432,192 @@ describe("Editor", () => {
       expect(resolved.endOffset).toBe(3);
     });
 
+    it("continues dragging selection when pointer hit-testing leaves the text", () => {
+      const session = createDocumentSession("abcd");
+      editor.attachSession(session);
+      mockEditorViewport(editorRoot(), 80, 40);
+
+      const textNode = rowTextNode();
+      const originalCaretRangeFromPoint = (
+        document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+      ).caretRangeFromPoint;
+      Object.defineProperty(document, "caretRangeFromPoint", {
+        configurable: true,
+        value: (x: number) => {
+          if (x !== 10) return null;
+
+          const range = document.createRange();
+          range.setStart(textNode, 1);
+          range.setEnd(textNode, 1);
+          return range;
+        },
+      });
+
+      editorRoot().dispatchEvent(
+        new MouseEvent("mousedown", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 10,
+          clientY: 10,
+          detail: 1,
+        }),
+      );
+      document.dispatchEvent(
+        new MouseEvent("mousemove", {
+          cancelable: true,
+          clientX: 80,
+          clientY: 10,
+        }),
+      );
+      document.dispatchEvent(
+        new MouseEvent("mouseup", {
+          cancelable: true,
+          clientX: 80,
+          clientY: 10,
+        }),
+      );
+
+      if (originalCaretRangeFromPoint) {
+        Object.defineProperty(document, "caretRangeFromPoint", {
+          configurable: true,
+          value: originalCaretRangeFromPoint,
+        });
+      } else {
+        Reflect.deleteProperty(document, "caretRangeFromPoint");
+      }
+
+      const resolved = resolveSelection(
+        session.getSnapshot(),
+        session.getSelections().selections[0]!,
+      );
+      expect(resolved.startOffset).toBe(1);
+      expect(resolved.endOffset).toBe(4);
+    });
+
+    it("auto-scrolls while dragging selection past the viewport edge", () => {
+      const session = createDocumentSession("0\n1\n2\n3\n4\n5");
+      editor.attachSession(session);
+      mockEditorViewport(editorRoot(), 80, 40);
+
+      const textNode = rowTextNode();
+      const originalCaretRangeFromPoint = (
+        document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+      ).caretRangeFromPoint;
+      Object.defineProperty(document, "caretRangeFromPoint", {
+        configurable: true,
+        value: (x: number) => {
+          if (x !== 0) return null;
+
+          const range = document.createRange();
+          range.setStart(textNode, 0);
+          range.setEnd(textNode, 0);
+          return range;
+        },
+      });
+
+      editorRoot().dispatchEvent(
+        new MouseEvent("mousedown", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 0,
+          clientY: 5,
+          detail: 1,
+        }),
+      );
+      document.dispatchEvent(
+        new MouseEvent("mousemove", {
+          cancelable: true,
+          clientX: 80,
+          clientY: 45,
+        }),
+      );
+      document.dispatchEvent(
+        new MouseEvent("mouseup", {
+          cancelable: true,
+          clientX: 80,
+          clientY: 45,
+        }),
+      );
+
+      if (originalCaretRangeFromPoint) {
+        Object.defineProperty(document, "caretRangeFromPoint", {
+          configurable: true,
+          value: originalCaretRangeFromPoint,
+        });
+      } else {
+        Reflect.deleteProperty(document, "caretRangeFromPoint");
+      }
+
+      const resolved = resolveSelection(
+        session.getSnapshot(),
+        session.getSelections().selections[0]!,
+      );
+      expect(editorRoot().scrollTop).toBeGreaterThan(0);
+      expect(resolved.endOffset).toBeGreaterThan(4);
+    });
+
+    it("snaps to the bottom visible line end when dragging below the viewport", () => {
+      const session = createDocumentSession("alpha\nbeta");
+      editor.attachSession(session);
+      mockEditorViewport(editorRoot(), 80, 40, 40);
+
+      const textNode = rowTextNode();
+      const originalCaretRangeFromPoint = (
+        document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+      ).caretRangeFromPoint;
+      Object.defineProperty(document, "caretRangeFromPoint", {
+        configurable: true,
+        value: (x: number) => {
+          if (x !== 0) return null;
+
+          const range = document.createRange();
+          range.setStart(textNode, 0);
+          range.setEnd(textNode, 0);
+          return range;
+        },
+      });
+
+      editorRoot().dispatchEvent(
+        new MouseEvent("mousedown", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 0,
+          clientY: 5,
+          detail: 1,
+        }),
+      );
+      document.dispatchEvent(
+        new MouseEvent("mousemove", {
+          cancelable: true,
+          clientX: 8,
+          clientY: 45,
+        }),
+      );
+      document.dispatchEvent(
+        new MouseEvent("mouseup", {
+          cancelable: true,
+          clientX: 8,
+          clientY: 45,
+        }),
+      );
+
+      if (originalCaretRangeFromPoint) {
+        Object.defineProperty(document, "caretRangeFromPoint", {
+          configurable: true,
+          value: originalCaretRangeFromPoint,
+        });
+      } else {
+        Reflect.deleteProperty(document, "caretRangeFromPoint");
+      }
+
+      const resolved = resolveSelection(
+        session.getSnapshot(),
+        session.getSelections().selections[0]!,
+      );
+      expect(resolved.startOffset).toBe(0);
+      expect(resolved.endOffset).toBe(10);
+    });
+
     it("clamps cross-boundary browser selections before text input", () => {
       const before = document.createElement("span");
       before.textContent = "outside before";
@@ -395,7 +628,7 @@ describe("Editor", () => {
 
       const session = createDocumentSession("abcd");
       editor.attachSession(session);
-      const textNode = container.querySelector("pre")!.firstChild!;
+      const textNode = rowTextNode();
       const range = document.createRange();
       range.setStart(before.firstChild!, 0);
       range.setEnd(textNode, 2);
@@ -403,7 +636,7 @@ describe("Editor", () => {
       const selection = window.getSelection()!;
       selection.removeAllRanges();
       selection.addRange(range);
-      container.querySelector("pre")!.dispatchEvent(
+      editorRoot().dispatchEvent(
         new InputEvent("beforeinput", {
           bubbles: true,
           cancelable: true,
@@ -413,7 +646,7 @@ describe("Editor", () => {
       );
 
       expect(session.getText()).toBe("Xcd");
-      expect(container.querySelector("pre")!.textContent).toBe("Xcd");
+      expect(editorRoot().textContent).toBe("Xcd");
       before.remove();
       after.remove();
     });
@@ -422,10 +655,10 @@ describe("Editor", () => {
       const session = createDocumentSession("one\ntwo\nthree");
       editor.attachSession(session);
 
-      const textNode = container.querySelector("pre")!.firstChild!;
+      const textNode = rowTextNode(1);
       const range = document.createRange();
-      range.setStart(textNode, 5);
-      range.setEnd(textNode, 5);
+      range.setStart(textNode, 1);
+      range.setEnd(textNode, 1);
       const originalCaretRangeFromPoint = (
         document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
       ).caretRangeFromPoint;
@@ -434,7 +667,7 @@ describe("Editor", () => {
         value: () => range,
       });
 
-      container.querySelector("pre")!.dispatchEvent(
+      editorRoot().dispatchEvent(
         new MouseEvent("mousedown", {
           bubbles: true,
           cancelable: true,
@@ -459,7 +692,7 @@ describe("Editor", () => {
       expect(resolved.startOffset).toBe(4);
       expect(resolved.endOffset).toBe(7);
 
-      container.querySelector("pre")!.dispatchEvent(
+      editorRoot().dispatchEvent(
         new InputEvent("beforeinput", {
           bubbles: true,
           cancelable: true,
@@ -469,14 +702,14 @@ describe("Editor", () => {
       );
 
       expect(session.getText()).toBe("one\nX\nthree");
-      expect(container.querySelector("pre")!.textContent).toBe("one\nX\nthree");
+      expect(editor.getText()).toBe("one\nX\nthree");
     });
 
     it("selects the full document on quad click", () => {
       const session = createDocumentSession("abcd");
       editor.attachSession(session);
 
-      container.querySelector("pre")!.dispatchEvent(
+      editorRoot().dispatchEvent(
         new MouseEvent("mousedown", {
           bubbles: true,
           cancelable: true,
@@ -491,7 +724,7 @@ describe("Editor", () => {
       expect(resolved.startOffset).toBe(0);
       expect(resolved.endOffset).toBe(4);
 
-      container.querySelector("pre")!.dispatchEvent(
+      editorRoot().dispatchEvent(
         new InputEvent("beforeinput", {
           bubbles: true,
           cancelable: true,
@@ -501,14 +734,14 @@ describe("Editor", () => {
       );
 
       expect(session.getText()).toBe("X");
-      expect(container.querySelector("pre")!.textContent).toBe("X");
+      expect(editorRoot().textContent).toBe("X");
     });
 
     it("selects a word on double click", () => {
       const session = createDocumentSession("alpha beta");
       editor.attachSession(session);
 
-      const textNode = container.querySelector("pre")!.firstChild!;
+      const textNode = rowTextNode();
       const range = document.createRange();
       range.setStart(textNode, 8);
       range.setEnd(textNode, 8);
@@ -520,7 +753,7 @@ describe("Editor", () => {
         value: () => range,
       });
 
-      container.querySelector("pre")!.dispatchEvent(
+      editorRoot().dispatchEvent(
         new MouseEvent("mousedown", {
           bubbles: true,
           cancelable: true,
@@ -545,7 +778,7 @@ describe("Editor", () => {
       expect(resolved.startOffset).toBe(6);
       expect(resolved.endOffset).toBe(10);
 
-      container.querySelector("pre")!.dispatchEvent(
+      editorRoot().dispatchEvent(
         new InputEvent("beforeinput", {
           bubbles: true,
           cancelable: true,
@@ -555,7 +788,7 @@ describe("Editor", () => {
       );
 
       expect(session.getText()).toBe("alpha X");
-      expect(container.querySelector("pre")!.textContent).toBe("alpha X");
+      expect(editorRoot().textContent).toBe("alpha X");
     });
   });
 
@@ -564,7 +797,7 @@ describe("Editor", () => {
       editor.openDocument({ documentId: "note.txt", text: "abc" });
 
       expect(editor.getText()).toBe("abc");
-      expect(container.querySelector("pre")!.textContent).toBe("abc");
+      expect(editorRoot().textContent).toBe("abc");
       expect(editor.getState()).toMatchObject({
         documentId: "note.txt",
         languageId: null,
@@ -583,7 +816,7 @@ describe("Editor", () => {
       });
       editor.openDocument({ documentId: "note.txt", text: "abc" });
 
-      container.querySelector("pre")!.dispatchEvent(
+      editorRoot().dispatchEvent(
         new InputEvent("beforeinput", {
           bubbles: true,
           cancelable: true,
@@ -599,7 +832,7 @@ describe("Editor", () => {
 
     it("routes undo through the owned document session", () => {
       editor.openDocument({ documentId: "note.txt", text: "abc" });
-      container.querySelector("pre")!.dispatchEvent(
+      editorRoot().dispatchEvent(
         new InputEvent("beforeinput", {
           bubbles: true,
           cancelable: true,
@@ -608,7 +841,7 @@ describe("Editor", () => {
         }),
       );
 
-      container.querySelector("pre")!.dispatchEvent(
+      editorRoot().dispatchEvent(
         new KeyboardEvent("keydown", {
           bubbles: true,
           cancelable: true,
@@ -671,7 +904,7 @@ describe("Editor", () => {
 
       editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
       await flushMicrotasks();
-      container.querySelector("pre")!.dispatchEvent(
+      editorRoot().dispatchEvent(
         new InputEvent("beforeinput", {
           bubbles: true,
           cancelable: true,
@@ -701,8 +934,8 @@ describe("Editor", () => {
       editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
       initial.resolve(createSyntaxResult([]));
       await flushMicrotasks();
-      container.querySelector("pre")!.dispatchEvent(createInsertEvent("!"));
-      container.querySelector("pre")!.dispatchEvent(createInsertEvent("?"));
+      editorRoot().dispatchEvent(createInsertEvent("!"));
+      editorRoot().dispatchEvent(createInsertEvent("?"));
 
       secondEdit.resolve(createSyntaxResult([{ start: 0, end: 5, style: { color: "#00ff00" } }]));
       await flushMicrotasks();
@@ -741,7 +974,7 @@ describe("Editor", () => {
       editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
       await flushMicrotasks();
       expect(editor.getState().syntaxStatus).toBe("error");
-      container.querySelector("pre")!.dispatchEvent(createInsertEvent("!"));
+      editorRoot().dispatchEvent(createInsertEvent("!"));
 
       expect(editor.getText()).toBe("const a = 1;!");
     });
@@ -752,16 +985,16 @@ describe("Editor", () => {
       editor.setContent("test");
       editor.setTokens([{ start: 0, end: 4, style: { color: "#ff0000" } }]);
       editor.clear();
-      expect(container.querySelector("pre")!.textContent).toBe("");
+      expect(editorRoot().textContent).toBe("");
       expect(highlightsMap.size).toBe(0);
     });
   });
 
   describe("dispose", () => {
     it("removes elements from DOM", () => {
-      expect(container.querySelector("pre")).not.toBeNull();
+      expect(container.querySelector(".editor-virtualized")).not.toBeNull();
       editor.dispose();
-      expect(container.querySelector("pre")).toBeNull();
+      expect(container.querySelector(".editor-virtualized")).toBeNull();
     });
   });
 });

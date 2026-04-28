@@ -14,25 +14,22 @@ import {
   type EditorSyntaxSession,
   type EditorSyntaxSessionOptions,
 } from "./syntax";
-import type { EditorDocument, EditorToken, EditorTokenStyle, TextEdit } from "./tokens";
-import { buildHighlightRule, clamp, normalizeTokenStyle, serializeTokenStyle } from "./style-utils";
+import type { EditorDocument, EditorToken, TextEdit } from "./tokens";
+import { clamp } from "./style-utils";
+import { VirtualizedTextView } from "./virtualization";
 
 let editorInstanceCount = 0;
-
-type CaretPositionResult = {
-  readonly offsetNode: Node;
-  readonly offset: number;
-};
-
-type DocumentWithCaretHitTesting = Document & {
-  readonly caretPositionFromPoint?: (x: number, y: number) => CaretPositionResult | null;
-  readonly caretRangeFromPoint?: (x: number, y: number) => Range | null;
-};
 
 type MouseSelectionDrag = {
   readonly anchorOffset: number;
   headOffset: number;
+  clientX: number;
+  clientY: number;
 };
+
+const MOUSE_SELECTION_SCROLL_ZONE_PX = 40;
+const MOUSE_SELECTION_MAX_SCROLL_PX = 24;
+const MOUSE_SELECTION_MIN_SCROLL_PX = 2;
 
 export function resetEditorInstanceCount(): void {
   editorInstanceCount = 0;
@@ -103,21 +100,16 @@ export function setEditorSyntaxSessionFactory(
   editorSyntaxSessionFactory = factory ?? createEditorSyntaxSession;
 }
 
-function getHighlightRegistry(): HighlightRegistry {
-  return highlightRegistry ?? CSS.highlights;
+function getHighlightRegistry(): HighlightRegistry | undefined {
+  return highlightRegistry ?? globalThis.CSS?.highlights;
 }
 
 export class Editor {
-  private el: HTMLPreElement;
-  private readonly textNode: Text;
+  private readonly view: VirtualizedTextView;
+  private readonly el: HTMLDivElement;
   private readonly options: EditorOptions;
   private readonly highlightPrefix: string;
-  private readonly selectionHighlightName: string;
-  private readonly styleEl: HTMLStyleElement;
-  private readonly selectionHighlight: Highlight;
-  private selectionHighlightRegistered = false;
-  private highlightNames: string[] = [];
-  private nextGroupId = 0;
+  private text = "";
   private session: DocumentSession | null = null;
   private sessionOptions: EditorSessionOptions = {};
   private documentId: string | null = null;
@@ -127,100 +119,36 @@ export class Editor {
   private documentVersion = 0;
   private syntaxVersion = 0;
   private mouseSelectionDrag: MouseSelectionDrag | null = null;
+  private mouseSelectionAutoScrollFrame = 0;
   private useSessionSelectionForNextInput = false;
-  private trackedTokens: Array<{ start: number; end: number; styleKey: string; range: Range }> = [];
-  private groups = new Map<
-    string,
-    { name: string; highlight: Highlight; style: EditorTokenStyle }
-  >();
 
   constructor(container: HTMLElement, options: EditorOptions = {}) {
     this.options = options;
-    this.el = document.createElement("pre");
-    this.el.className = "editor";
-    this.textNode = document.createTextNode("");
     this.highlightPrefix = `editor-token-${editorInstanceCount++}`;
-    this.selectionHighlightName = `${this.highlightPrefix}-selection`;
-    this.styleEl = document.createElement("style");
-    this.selectionHighlight = new Highlight();
-
-    this.el.appendChild(this.textNode);
-    this.el.tabIndex = 0;
-    this.el.spellcheck = false;
-    document.head.appendChild(this.styleEl);
-    container.appendChild(this.el);
-    this.rebuildStyleRules();
+    this.view = new VirtualizedTextView(container, {
+      className: "editor",
+      highlightRegistry: getHighlightRegistry(),
+      selectionHighlightName: `${this.highlightPrefix}-selection`,
+    });
+    this.el = this.view.scrollElement;
     this.installEditingHandlers();
   }
 
   setContent(text: string): void {
-    this.clearHighlights();
-    this.textNode.data = text;
+    this.text = text;
+    this.view.setText(text);
+    this.view.setTokens([]);
   }
 
   setTokens(tokens: readonly EditorToken[]): void {
-    this.clearHighlights();
-
-    const textLength = this.textNode.length;
-    if (textLength === 0 || tokens.length === 0) return;
-
-    for (const token of tokens) this.addTokenHighlight(token, textLength);
-
-    this.rebuildStyleRules();
+    this.view.setTokens(tokens);
   }
 
   applyEdit(edit: TextEdit, tokens: readonly EditorToken[]): void {
     const { from, to, text } = edit;
-    const deleteCount = to - from;
-    const delta = text.length - deleteCount;
-
-    // Update text — browser auto-adjusts all live Range objects on this node
-    this.textNode.replaceData(from, deleteCount, text);
-
-    const newTextLength = this.textNode.length;
-    const newEditEnd = from + text.length;
-
-    // Remove tracked tokens that overlapped the old edit region
-    const dirtyGroupKeys = new Set<string>();
-    const kept: typeof this.trackedTokens = [];
-
-    for (const tracked of this.trackedTokens) {
-      if (tracked.start < to && tracked.end > from) {
-        const group = this.groups.get(tracked.styleKey);
-        if (group) group.highlight.delete(tracked.range);
-        dirtyGroupKeys.add(tracked.styleKey);
-      } else {
-        if (tracked.start >= to) {
-          tracked.start += delta;
-          tracked.end += delta;
-        }
-        kept.push(tracked);
-      }
-    }
-
-    this.trackedTokens = kept;
-
-    // Add new tokens that cover the edited region
-    for (const token of tokens) {
-      const start = clamp(token.start, 0, newTextLength);
-      const end = clamp(token.end, start, newTextLength);
-      if (start === end || start >= newEditEnd || end <= from) continue;
-
-      const styleKey = this.addTokenHighlight(token, newTextLength);
-      if (styleKey) dirtyGroupKeys.add(styleKey);
-    }
-
-    // Remove groups that are now empty
-    for (const key of dirtyGroupKeys) {
-      const group = this.groups.get(key);
-      if (group && group.highlight.size === 0) {
-        getHighlightRegistry().delete(group.name);
-        this.highlightNames = this.highlightNames.filter((n) => n !== group.name);
-        this.groups.delete(key);
-      }
-    }
-
-    this.rebuildStyleRules();
+    this.text = `${this.text.slice(0, from)}${text}${this.text.slice(to)}`;
+    this.view.setText(this.text);
+    this.setTokens(tokens);
   }
 
   setDocument(document: EditorDocument): void {
@@ -241,7 +169,7 @@ export class Editor {
 
   getState(): EditorState {
     const snapshot = this.session?.getSnapshot();
-    const length = snapshot?.length ?? this.textNode.length;
+    const length = snapshot?.length ?? this.text.length;
     const selection = this.session?.getSelections().selections[0];
     const resolved = snapshot && selection ? resolveSelection(snapshot, selection) : null;
     const point = snapshot ? offsetToPoint(snapshot, resolved?.headOffset ?? length) : null;
@@ -261,7 +189,7 @@ export class Editor {
   }
 
   getText(): string {
-    return this.session?.getText() ?? this.textNode.data;
+    return this.session?.getText() ?? this.text;
   }
 
   attachSession(session: DocumentSession, options: EditorSessionOptions = {}): void {
@@ -272,7 +200,7 @@ export class Editor {
     this.disposeSyntaxSession();
     this.session = session;
     this.sessionOptions = options;
-    this.el.contentEditable = "plaintext-only";
+    this.view.setEditable(true);
     this.setDocument({ text: session.getText(), tokens: session.getTokens() });
     this.syncDomSelection();
   }
@@ -281,7 +209,7 @@ export class Editor {
     this.session = null;
     this.sessionOptions = {};
     this.clearSelectionHighlight();
-    this.el.removeAttribute("contenteditable");
+    this.view.setEditable(false);
   }
 
   clear(): void {
@@ -298,9 +226,7 @@ export class Editor {
     this.uninstallEditingHandlers();
     this.disposeSyntaxSession();
     this.detachSession();
-    this.clearHighlights();
-    this.styleEl.remove();
-    this.el.remove();
+    this.view.dispose();
   }
 
   private resetOwnedDocument(document: EditorOpenDocumentOptions): number {
@@ -325,7 +251,7 @@ export class Editor {
 
     this.session = createDocumentSession(document.text);
     this.sessionOptions = {};
-    this.el.contentEditable = "plaintext-only";
+    this.view.setEditable(true);
     this.setDocument({ text: this.session.getText(), tokens: [] });
     this.syncDomSelection();
     return documentVersion;
@@ -360,6 +286,7 @@ export class Editor {
 
   private handleMouseDown = (event: MouseEvent): void => {
     if (!this.session) return;
+    this.view.focusInput();
     if (event.detail >= 4) {
       this.selectFullDocument(event, "input.quadClick");
       return;
@@ -386,8 +313,13 @@ export class Editor {
     if (event.detail !== 1) return;
 
     event.preventDefault();
-    this.el.focus({ preventScroll: true });
-    this.mouseSelectionDrag = { anchorOffset: offset, headOffset: offset };
+    this.view.focusInput();
+    this.mouseSelectionDrag = {
+      anchorOffset: offset,
+      headOffset: offset,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    };
     this.syncCustomSelectionHighlight(offset, offset);
     this.el.ownerDocument.addEventListener("mousemove", this.updateMouseSelectionDrag);
     this.el.ownerDocument.addEventListener("mouseup", this.finishMouseSelectionDrag);
@@ -397,14 +329,11 @@ export class Editor {
     if (!this.mouseSelectionDrag) return;
     if (!this.session) return;
 
-    const offset = this.textOffsetFromMouseEvent(event);
-    if (offset === null) return;
-
     event.preventDefault();
-    this.mouseSelectionDrag.headOffset = offset;
-    this.syncCustomSelectionHighlight(this.mouseSelectionDrag.anchorOffset, offset);
-    this.session.setSelection(this.mouseSelectionDrag.anchorOffset, offset);
-    this.useSessionSelectionForNextInput = this.mouseSelectionDrag.anchorOffset !== offset;
+    this.mouseSelectionDrag.clientX = event.clientX;
+    this.mouseSelectionDrag.clientY = event.clientY;
+    this.updateMouseSelectionFromDragPoint();
+    this.updateMouseSelectionAutoScroll();
   };
 
   private finishMouseSelectionDrag = (event: MouseEvent): void => {
@@ -414,21 +343,95 @@ export class Editor {
       return;
     }
 
-    const offset = this.textOffsetFromMouseEvent(event) ?? drag.headOffset;
+    drag.clientX = event.clientX;
+    drag.clientY = event.clientY;
+    const offset = this.mouseSelectionOffsetFromPoint(drag.clientX, drag.clientY);
     event.preventDefault();
     this.stopMouseSelectionDrag();
 
     const start = nowMs();
     const change = this.session.setSelection(drag.anchorOffset, offset);
     const syncDomSelection = drag.anchorOffset === offset;
-    if (!syncDomSelection) this.useSessionSelectionForNextInput = true;
+    this.useSessionSelectionForNextInput = true;
     this.applySessionChange(change, "input.selection", start, { syncDomSelection });
   };
 
   private stopMouseSelectionDrag(): void {
     this.mouseSelectionDrag = null;
+    this.stopMouseSelectionAutoScroll();
     this.el.ownerDocument.removeEventListener("mousemove", this.updateMouseSelectionDrag);
     this.el.ownerDocument.removeEventListener("mouseup", this.finishMouseSelectionDrag);
+  }
+
+  private updateMouseSelectionFromDragPoint(): void {
+    const drag = this.mouseSelectionDrag;
+    if (!drag || !this.session) return;
+
+    const offset = this.mouseSelectionOffsetFromPoint(drag.clientX, drag.clientY);
+    drag.headOffset = offset;
+    this.syncCustomSelectionHighlight(drag.anchorOffset, offset);
+    this.session.setSelection(drag.anchorOffset, offset);
+    this.useSessionSelectionForNextInput = drag.anchorOffset !== offset;
+  }
+
+  private mouseSelectionOffsetFromPoint(clientX: number, clientY: number): number {
+    return (
+      this.view.textOffsetFromPoint(clientX, clientY) ??
+      this.view.textOffsetFromViewportPoint(clientX, clientY)
+    );
+  }
+
+  private updateMouseSelectionAutoScroll(): void {
+    const delta = this.mouseSelectionAutoScrollDelta();
+    if (delta === 0 || !this.canMouseSelectionAutoScroll(delta)) {
+      this.stopMouseSelectionAutoScroll();
+      return;
+    }
+
+    this.scrollMouseSelection(delta);
+    this.scheduleMouseSelectionAutoScroll();
+  }
+
+  private mouseSelectionAutoScrollDelta(): number {
+    const drag = this.mouseSelectionDrag;
+    if (!drag) return 0;
+
+    const rect = this.el.getBoundingClientRect();
+    return mouseSelectionAutoScrollDelta(drag.clientY, rect);
+  }
+
+  private canMouseSelectionAutoScroll(delta: number): boolean {
+    const maxScrollTop = Math.max(0, this.el.scrollHeight - this.el.clientHeight);
+    if (delta < 0) return this.el.scrollTop > 0;
+    if (delta > 0) return this.el.scrollTop < maxScrollTop;
+    return false;
+  }
+
+  private scrollMouseSelection(delta: number): void {
+    const maxScrollTop = Math.max(0, this.el.scrollHeight - this.el.clientHeight);
+    const nextScrollTop = clamp(this.el.scrollTop + delta, 0, maxScrollTop);
+    if (nextScrollTop === this.el.scrollTop) return;
+
+    this.el.scrollTop = nextScrollTop;
+    this.view.setScrollMetrics(this.el.scrollTop, this.el.clientHeight);
+    this.updateMouseSelectionFromDragPoint();
+  }
+
+  private scheduleMouseSelectionAutoScroll(): void {
+    if (this.mouseSelectionAutoScrollFrame !== 0) return;
+
+    this.mouseSelectionAutoScrollFrame = requestFrame(() => {
+      this.mouseSelectionAutoScrollFrame = 0;
+      if (!this.mouseSelectionDrag) return;
+      this.updateMouseSelectionAutoScroll();
+    });
+  }
+
+  private stopMouseSelectionAutoScroll(): void {
+    if (this.mouseSelectionAutoScrollFrame === 0) return;
+
+    cancelFrame(this.mouseSelectionAutoScrollFrame);
+    this.mouseSelectionAutoScrollFrame = 0;
   }
 
   private selectFullDocument(event: MouseEvent, timingName: string): void {
@@ -683,15 +686,13 @@ export class Editor {
     if (!selection) return;
 
     const resolved = resolveSelection(this.session.getSnapshot(), selection);
-    const start = clamp(resolved.startOffset, 0, this.textNode.length);
-    const end = clamp(resolved.endOffset, start, this.textNode.length);
-    const range = document.createRange();
-    range.setStart(this.textNode, start);
-    range.setEnd(this.textNode, end);
+    const start = clamp(resolved.startOffset, 0, this.text.length);
+    const end = clamp(resolved.endOffset, start, this.text.length);
+    const range = this.view.createRange(start, end);
 
     const domSelection = window.getSelection();
     domSelection?.removeAllRanges();
-    domSelection?.addRange(range);
+    if (range) domSelection?.addRange(range);
     this.syncCustomSelectionHighlight(start, end);
   }
 
@@ -716,63 +717,23 @@ export class Editor {
   };
 
   private syncCustomSelectionHighlight(anchorOffset: number, headOffset: number): void {
-    const start = clamp(Math.min(anchorOffset, headOffset), 0, this.textNode.length);
-    const end = clamp(Math.max(anchorOffset, headOffset), start, this.textNode.length);
-    if (start === end) {
-      this.clearSelectionHighlight();
-      return;
-    }
-
-    const range = document.createRange();
-    range.setStart(this.textNode, start);
-    range.setEnd(this.textNode, end);
-
-    this.ensureSelectionHighlightRegistered();
-    this.selectionHighlight.clear();
-    this.selectionHighlight.add(range);
+    this.view.setSelection(anchorOffset, headOffset);
   }
 
   private clearSelectionHighlight(): void {
-    if (!this.selectionHighlightRegistered) return;
-
-    this.selectionHighlight.clear();
-    getHighlightRegistry().delete(this.selectionHighlightName);
-    this.selectionHighlightRegistered = false;
-  }
-
-  private ensureSelectionHighlightRegistered(): void {
-    if (this.selectionHighlightRegistered) return;
-
-    getHighlightRegistry().set(this.selectionHighlightName, this.selectionHighlight);
-    this.selectionHighlightRegistered = true;
+    this.view.clearSelection();
   }
 
   private domBoundaryToTextOffset(node: Node, offset: number): number | null {
-    if (node === this.textNode) return clamp(offset, 0, this.textNode.length);
-    if (node === this.el) return elementBoundaryToTextOffset(offset, this.textNode.length);
-    if (this.el.contains(node)) return this.internalBoundaryToTextOffset(node, offset);
+    const viewOffset = this.view.textOffsetFromDomBoundary(node, offset);
+    if (viewOffset !== null) return viewOffset;
+
+    if (node === this.el) return elementBoundaryToTextOffset(offset, this.text.length);
     return this.externalBoundaryToTextOffset(node, offset);
   }
 
   private textOffsetFromMouseEvent(event: MouseEvent): number | null {
-    const documentWithCaret = this.el.ownerDocument as DocumentWithCaretHitTesting;
-    const position = documentWithCaret.caretPositionFromPoint?.(event.clientX, event.clientY);
-    if (position) return this.domBoundaryToTextOffset(position.offsetNode, position.offset);
-
-    const range = documentWithCaret.caretRangeFromPoint?.(event.clientX, event.clientY);
-    if (range) return this.domBoundaryToTextOffset(range.startContainer, range.startOffset);
-
-    return null;
-  }
-
-  private internalBoundaryToTextOffset(node: Node, offset: number): number | null {
-    if (!node.contains(this.textNode)) return null;
-
-    const child = childContainingNode(node, this.textNode);
-    const childIndex = child ? childNodeIndex(node, child) : -1;
-    if (childIndex === -1) return null;
-
-    return elementBoundaryToTextOffset(offset <= childIndex ? 0 : 1, this.textNode.length);
+    return this.view.textOffsetFromPoint(event.clientX, event.clientY);
   }
 
   private externalBoundaryToTextOffset(node: Node, offset: number): number | null {
@@ -780,57 +741,13 @@ export class Editor {
       const child = childContainingNode(node, this.el);
       const childIndex = child ? childNodeIndex(node, child) : -1;
       if (childIndex === -1) return null;
-      return elementBoundaryToTextOffset(offset <= childIndex ? 0 : 1, this.textNode.length);
+      return elementBoundaryToTextOffset(offset <= childIndex ? 0 : 1, this.text.length);
     }
 
     const position = node.compareDocumentPosition(this.el);
     if ((position & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) return 0;
-    if ((position & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return this.textNode.length;
+    if ((position & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return this.text.length;
     return null;
-  }
-
-  private addTokenHighlight(token: EditorToken, textLength: number): string | null {
-    const start = clamp(token.start, 0, textLength);
-    const end = clamp(token.end, start, textLength);
-    if (start === end) return null;
-
-    const style = normalizeTokenStyle(token.style);
-    if (!style) return null;
-
-    const styleKey = serializeTokenStyle(style);
-
-    if (!this.groups.has(styleKey)) {
-      const name = `${this.highlightPrefix}-${this.nextGroupId++}`;
-      this.groups.set(styleKey, { name, highlight: new Highlight(), style });
-      getHighlightRegistry().set(name, this.groups.get(styleKey)!.highlight);
-      this.highlightNames.push(name);
-    }
-
-    const group = this.groups.get(styleKey)!;
-    const range = document.createRange();
-    range.setStart(this.textNode, start);
-    range.setEnd(this.textNode, end);
-    group.highlight.add(range);
-    this.trackedTokens.push({ start, end, styleKey, range });
-    return styleKey;
-  }
-
-  private clearHighlights() {
-    for (const name of this.highlightNames) getHighlightRegistry().delete(name);
-
-    this.highlightNames = [];
-    this.trackedTokens = [];
-    this.groups.clear();
-    this.nextGroupId = 0;
-    this.rebuildStyleRules();
-  }
-
-  private rebuildStyleRules() {
-    const rules: string[] = [
-      `::highlight(${this.selectionHighlightName}) { background-color: rgba(56, 189, 248, 0.35); }`,
-    ];
-    for (const { name, style } of this.groups.values()) rules.push(buildHighlightRule(name, style));
-    this.styleEl.textContent = rules.join("\n");
   }
 }
 
@@ -916,6 +833,38 @@ function codePointSizeAt(text: string, offset: number): number {
   const codePoint = text.codePointAt(offset);
   if (codePoint === undefined) return 0;
   return codePoint > 0xffff ? 2 : 1;
+}
+
+function mouseSelectionAutoScrollDelta(clientY: number, rect: DOMRect): number {
+  if (rect.height <= 0) return 0;
+  if (clientY < rect.top + MOUSE_SELECTION_SCROLL_ZONE_PX) {
+    return -mouseSelectionScrollStep(rect.top + MOUSE_SELECTION_SCROLL_ZONE_PX - clientY);
+  }
+  if (clientY > rect.bottom - MOUSE_SELECTION_SCROLL_ZONE_PX) {
+    return mouseSelectionScrollStep(clientY - (rect.bottom - MOUSE_SELECTION_SCROLL_ZONE_PX));
+  }
+
+  return 0;
+}
+
+function mouseSelectionScrollStep(distance: number): number {
+  const ratio = distance / MOUSE_SELECTION_SCROLL_ZONE_PX;
+  const scaled = Math.ceil(ratio * MOUSE_SELECTION_MAX_SCROLL_PX);
+  return clamp(scaled, MOUSE_SELECTION_MIN_SCROLL_PX, MOUSE_SELECTION_MAX_SCROLL_PX);
+}
+
+function requestFrame(callback: FrameRequestCallback): number {
+  if (typeof requestAnimationFrame === "function") return requestAnimationFrame(callback);
+  return setTimeout(() => callback(nowMs()), 0) as unknown as number;
+}
+
+function cancelFrame(handle: number): void {
+  if (typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(handle);
+    return;
+  }
+
+  clearTimeout(handle);
 }
 
 function nowMs(): number {
