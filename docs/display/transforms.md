@@ -4,9 +4,12 @@
 
 Buffer coordinates (row/column in actual text) differ from screen coordinates. Folded code, expanded tabs, wrapped lines, and block decorations create divergence. The editor must convert between these spaces.
 
-## Hypothesis: Composable Layered Transforms
+## Decision: Proceed With Layered Transforms
 
-Exploring whether display transforms can be a chain of composable layers, each with own state, edit response, and bidirectional coordinate conversion. **Hypothesis under validation, not committed architecture.**
+FoldMap validated the core contract: a layer can own local state, update that state against a new
+snapshot, and emit output-space invalidations tight enough for the layer above to avoid global
+recomputation. The decision is **go** for the layered abstraction, with the constraint that future
+layers still need their own validation before the approach is considered locked for every transform.
 
 ### Alternatives considered
 
@@ -14,11 +17,11 @@ Exploring whether display transforms can be a chain of composable layers, each w
 2. **Virtual document model (VS Code-style):** Conceptually clean, memory-intensive.
 3. **Ad-hoc per consumer:** Doesn't scale.
 
-### Why exploring layers
+### Why layers remain viable
 
 - Each layer independently testable
 - Additive extensibility
-- Validated by Zed at scale
+- FoldMap validates tight invalidation for hidden regions, boundary edits, and external edits
 
 **Honest constraint:** Some transforms (tabs, wrapping) may need to be fused in practice.
 
@@ -48,7 +51,9 @@ Typed ranges: `InvalidatedRange<T>` with `start`, `end`, `lineCountDelta`.
 - **Parameterized by `T`:** type system enforces coordinate space matching
 - **Empty ranges:** no-op, layer absorbed the edit
 
-Protocol is proposed, not locked. FoldMap is the experiment.
+FoldMap now implements this protocol with `InvalidatedRange<FoldPoint>` records. The protocol is
+validated for the fold layer, but future wrapping, tab, and block-decoration layers still need
+separate measurements.
 
 ---
 
@@ -62,9 +67,9 @@ Sorted array of fold ranges (start/end Anchors). Converts between buffer Points 
 
 | Edit location | Output invalidation |
 |---|---|
-| Inside fold (not touching boundaries) | None |
-| Touching fold boundary | Placeholder if fold survives; full region if fold destroyed |
-| Outside any fold | Coordinate-shifted pass-through |
+| Inside fold (not touching boundaries) | None; anchors refresh against the next snapshot |
+| Touching fold boundary | Placeholder if fold survives; placeholder expands if fold is destroyed |
+| Outside any fold | Coordinate-shifted pass-through in `FoldPoint` space |
 | Fold toggled | Fold's output range |
 
 Smallest recomputable unit: a single fold region.
@@ -73,8 +78,10 @@ Smallest recomputable unit: a single fold region.
 
 Can FoldMap produce tight enough invalidation that a layer above would not need to globally recompute?
 
-**If yes:** proceed with additional layers.
-**If no:** collapse to monolithic mapper.
+**Decision:** go. FoldMap gives no output invalidation for edits hidden inside folds, local
+placeholder invalidation for surviving boundary edits, expansion invalidation when a fold is
+destroyed, and pass-through invalidation for external edits. This is precise enough to continue to a
+second validation layer instead of collapsing immediately to a monolithic mapper.
 
 ### Deferred until after FoldMap
 

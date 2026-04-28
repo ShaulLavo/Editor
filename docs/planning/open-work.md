@@ -17,11 +17,11 @@ Consolidated validation, design, and measurement tasks.
 
 ## Display Validation
 
-- FoldMap end-to-end prototype
-- FoldMap invalidation precision (go/no-go)
-- Conversion benchmark through FoldMap
-- Fold-boundary edge cases
-- If FoldMap succeeds: design next layer (likely wrapping)
+- FoldMap end-to-end prototype complete
+- FoldMap invalidation precision complete; go decision made for a second validation layer
+- Conversion benchmark through FoldMap complete via `bun run bench:fold-map` in `packages/editor`
+- Fold-boundary edge cases covered: nested, document edges, boundary edits, and edits inside folds
+- Design next layer, likely wrapping, and validate whether it stays independent or needs fusion
 - Define virtual row and horizontal chunk records for browser-backed rendering
 - Build fixed-row virtualizer math and tests before wiring it into the editor
 - Validate native browser selection, caret, and hit-testing on mounted virtual rows

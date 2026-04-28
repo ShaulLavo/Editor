@@ -70,7 +70,8 @@ work, and every syntax result is snapshot-tagged and stale-droppable. See
 
 ## Phase 5: Display Transform Validation
 
-FoldMap as first layer. Go/no-go for the layered abstraction.
+FoldMap as first layer. Go/no-go for the layered abstraction: **go for the next validation layer**,
+with future transforms still measured independently.
 
 | Deliverable | Acceptance Criteria |
 |---|---|

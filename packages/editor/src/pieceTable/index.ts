@@ -4,6 +4,7 @@ export type {
   AnchorLiveness,
   Piece,
   PieceBufferId,
+  PieceTableEdit,
   PieceTableSnapshot,
   Point,
   RealAnchor,

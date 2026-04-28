@@ -4,8 +4,8 @@ Last updated: 2026-04-28
 
 ## Current Status
 
-Phase 2 validation is complete. Phase 3 selection core is implemented locally on top of the Phase 1
-storage foundation and Phase 2 anchor system.
+Phase 5 FoldMap validation is complete enough to make the display-transform call: proceed with the
+layered abstraction for the next validation layer, while still measuring future layers independently.
 
 Latest committed Phase 1 work:
 
@@ -140,13 +140,19 @@ Validation after Phase 3:
 
 ### Phase 5: Display Transform Validation
 
-- Prototype `FoldMap`.
-- Implement `FoldPoint`.
-- Validate bidirectional conversion.
-- Validate invalidation precision.
-- Cover fold edge cases: boundaries, nesting, document edges, and edits inside folds.
-- Benchmark single-layer transform overhead.
-- Make the go/no-go decision for layered display transforms.
+- Prototyped `FoldMap`.
+- Implemented `FoldPoint`.
+- Validated bidirectional conversion for visible positions.
+- Added a typed invalidation protocol using `InvalidatedRange<FoldPoint>`.
+- Added FoldMap edit updates that refresh anchor-backed fold ranges against the next snapshot.
+- Validated invalidation precision:
+  - edits inside folded interiors emit no output invalidation
+  - surviving boundary edits invalidate only the placeholder
+  - destroyed folds expand the placeholder invalidation
+  - outside edits pass through in `FoldPoint` space
+- Covered fold edge cases: boundaries, nesting, document edges, and edits inside folds.
+- Added `bench:fold-map` for single-layer conversion overhead.
+- Made the go/no-go decision: **go** for a second validation layer, with future transforms still measured independently.
 
 ### Phase 6: Additional Transforms
 
