@@ -304,7 +304,9 @@ const collapseSelectionsAfterEdits = (
 
   for (const range of ranges) {
     const caretOffset = range.start + delta + text.length;
-    selections.push(createAnchorSelection(snapshot, caretOffset, caretOffset));
+    selections.push(
+      createAnchorSelection(snapshot, caretOffset, caretOffset, { cursorBias: "left" }),
+    );
     delta += text.length - rangeLength(range);
   }
 

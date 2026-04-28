@@ -114,15 +114,14 @@
 }
 
 .editor-virtualized-input {
-  height: 1px;
-  left: 0;
-  opacity: 0;
+  height: 20px;
+  left: -10000px;
+  opacity: 1;
   overflow: hidden;
-  pointer-events: none;
   position: absolute;
   resize: none;
   top: 0;
-  width: 1px;
+  width: 200px;
 }
 
 .editor-virtualized-caret {

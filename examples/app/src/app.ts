@@ -80,6 +80,7 @@ class DirectoryController implements AppController {
     this.currentSelectedPath = filePath;
     localStorage.setItem(SELECTED_FILE_KEY, filePath);
     this.editor.openDocument({ documentId: filePath, text: content });
+    this.editor.focus();
     this.updateStatus();
   };
 
@@ -143,13 +144,21 @@ function restoreCachedDirectory(controller: AppController, topBar: TopBar): void
 async function openDirectoryFromPicker(controller: AppController, topBar: TopBar): Promise<void> {
   try {
     const handle = await window.showDirectoryPicker();
-    await cacheHandle(handle);
+    await cacheDirectoryHandle(handle);
     await controller.openDirectory(handle);
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") return; // user cancelled the picker
     console.error("Failed to open directory");
     topBar.setMessage("Failed to open directory");
     return;
+  }
+}
+
+async function cacheDirectoryHandle(handle: FileSystemDirectoryHandle): Promise<void> {
+  try {
+    await cacheHandle(handle);
+  } catch (err) {
+    console.warn("Failed to cache directory handle", err);
   }
 }
 

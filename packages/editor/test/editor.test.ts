@@ -71,6 +71,10 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
+async function flushTimers(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function createInsertEvent(data: string): InputEvent {
   return new InputEvent("beforeinput", {
     bubbles: true,
@@ -89,8 +93,26 @@ function rowTextNode(row = 0): Text {
   return element?.firstChild as Text;
 }
 
+function setCollapsedDomSelection(offset: number): void {
+  const range = document.createRange();
+  const textNode = rowTextNode();
+  range.setStart(textNode, offset);
+  range.setEnd(textNode, offset);
+
+  const selection = window.getSelection()!;
+  selection.removeAllRanges();
+  selection.addRange(range);
+  editorRoot().dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+}
+
 function editorInput(): HTMLTextAreaElement {
   return document.querySelector(".editor-virtualized-input") as HTMLTextAreaElement;
+}
+
+function tokenHighlights(): Highlight[] {
+  return [...highlightsMap]
+    .filter(([name]) => name.includes("-token-"))
+    .map(([, highlight]) => highlight);
 }
 
 function mockEditorViewport(
@@ -253,6 +275,15 @@ describe("Editor", () => {
   });
 
   describe("attachSession", () => {
+    it("focuses the real input surface", () => {
+      const session = createDocumentSession("abc");
+      editor.attachSession(session);
+
+      editor.focus();
+
+      expect(document.activeElement).toBe(editorInput());
+    });
+
     it("routes text input through a document session", () => {
       const session = createDocumentSession("abc");
       editor.attachSession(session);
@@ -277,6 +308,42 @@ describe("Editor", () => {
 
       expect(session.getText()).toBe("abc!");
       expect(editor.getText()).toBe("abc!");
+    });
+
+    it("falls back to keydown text when native beforeinput never arrives", async () => {
+      const session = createDocumentSession("abc");
+      editor.attachSession(session);
+      editor.focus();
+
+      editorInput().dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "X",
+        }),
+      );
+      await flushTimers();
+
+      expect(session.getText()).toBe("abcX");
+      expect(editor.getText()).toBe("abcX");
+    });
+
+    it("falls back to keydown line breaks when native beforeinput never arrives", async () => {
+      const session = createDocumentSession("abc");
+      editor.attachSession(session);
+      editor.focus();
+
+      editorInput().dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Enter",
+        }),
+      );
+      await flushTimers();
+
+      expect(session.getText()).toBe("abc\n");
+      expect(editor.getText()).toBe("abc\n");
     });
 
     it("measures input timing from the browser event timestamp", () => {
@@ -982,6 +1049,33 @@ describe("Editor", () => {
       expect(changes).toEqual(["const a = 1;!"]);
       expect(editor.getState().syntaxStatus).toBe("ready");
       expect(highlightsMap.size).toBe(1);
+    });
+
+    it("keeps projected syntax highlights until edit syntax finishes", async () => {
+      const editResult = createDeferred<EditorSyntaxResult>();
+      setEditorSyntaxSessionFactory(() =>
+        createMockSyntaxSession({
+          refresh: async () =>
+            createSyntaxResult([{ start: 0, end: 5, style: { color: "#ff0000" } }]),
+          applyChange: () => editResult.promise,
+        }),
+      );
+
+      editor.openDocument({ documentId: "main.ts", text: "world" });
+      await flushMicrotasks();
+      setCollapsedDomSelection(2);
+      editorRoot().dispatchEvent(createInsertEvent("X"));
+
+      const ranges = [...tokenHighlights()[0]!];
+      expect(editor.getText()).toBe("woXrld");
+      expect(ranges).toHaveLength(1);
+      expect(ranges[0]!.startOffset).toBe(0);
+
+      editResult.resolve(createSyntaxResult([{ start: 0, end: 6, style: { color: "#00ff00" } }]));
+      await flushMicrotasks();
+
+      expect(editor.getState().syntaxStatus).toBe("ready");
+      expect(tokenHighlights()).toHaveLength(1);
     });
 
     it("ignores stale syntax results after rapid edits", async () => {

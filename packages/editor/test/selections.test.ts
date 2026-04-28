@@ -98,6 +98,20 @@ describe("selections", () => {
     ]);
   });
 
+  it("keeps collapsed cursors after inserted text for repeated typing", () => {
+    const snapshot = createPieceTableSnapshot("abcdef");
+    const set = createSelectionSet([createAnchorSelection(snapshot, 3)], true);
+
+    const first = applyTextToSelections(snapshot, set, "X");
+    const second = applyTextToSelections(first.snapshot, first.selections, "Y");
+
+    expect(getPieceTableText(second.snapshot)).toBe("abcXYdef");
+    expect(resolveSelection(second.snapshot, second.selections.selections[0]!)).toMatchObject({
+      startOffset: 5,
+      endOffset: 5,
+    });
+  });
+
   it("backspaces collapsed cursors by code point", () => {
     const snapshot = createPieceTableSnapshot("a😀b");
     const set = createSelectionSet([createAnchorSelection(snapshot, 3)]);

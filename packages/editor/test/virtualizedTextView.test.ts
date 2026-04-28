@@ -1,9 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VirtualizedTextView, type VirtualizedTextHighlightRegistry } from "../src";
 
 const highlightsMap = new Map<string, Highlight>();
 let registrySets = 0;
 let registryDeletes = 0;
+let highlightClears = 0;
+let highlightAdds = 0;
+let highlightDeletes = 0;
 const mockRegistry: VirtualizedTextHighlightRegistry = {
   set: (name, highlight) => {
     registrySets += 1;
@@ -15,7 +18,22 @@ const mockRegistry: VirtualizedTextHighlightRegistry = {
   },
 };
 
-class MockHighlight extends Set<Range> {}
+class MockHighlight extends Set<Range> {
+  add(range: Range): this {
+    highlightAdds += 1;
+    return super.add(range);
+  }
+
+  delete(range: Range): boolean {
+    highlightDeletes += 1;
+    return super.delete(range);
+  }
+
+  clear(): void {
+    highlightClears += 1;
+    super.clear();
+  }
+}
 
 describe("VirtualizedTextView", () => {
   let container: HTMLElement;
@@ -25,6 +43,9 @@ describe("VirtualizedTextView", () => {
     highlightsMap.clear();
     registrySets = 0;
     registryDeletes = 0;
+    highlightClears = 0;
+    highlightAdds = 0;
+    highlightDeletes = 0;
     // @ts-expect-error happy-dom does not provide Highlight.
     globalThis.Highlight = MockHighlight;
     container = document.createElement("div");
@@ -112,6 +133,25 @@ describe("VirtualizedTextView", () => {
     expect(view.textOffsetFromDomBoundary(row!.textNode, 2)).toBe(6);
   });
 
+  it("patches same-line edits without replacing the whole row text node", () => {
+    view.setText("abc\ndef");
+    view.setScrollMetrics(0, 40);
+    const rowZeroBefore = view.getState().mountedRows.find((row) => row.index === 0)!;
+    const rowOneBefore = view.getState().mountedRows.find((row) => row.index === 1)!;
+    const replaceData = vi.spyOn(rowZeroBefore.textNode, "replaceData");
+
+    view.applyEdit({ from: 1, to: 1, text: "X" }, "aXbc\ndef");
+
+    const rowZeroAfter = view.getState().mountedRows.find((row) => row.index === 0)!;
+    const rowOneAfter = view.getState().mountedRows.find((row) => row.index === 1)!;
+    expect(rowZeroAfter.textNode).toBe(rowZeroBefore.textNode);
+    expect(rowZeroAfter.text).toBe("aXbc");
+    expect(rowZeroAfter.textNode.data).toBe("aXbc");
+    expect(rowOneAfter.textNode).toBe(rowOneBefore.textNode);
+    expect(rowOneAfter.startOffset).toBe(5);
+    expect(replaceData).toHaveBeenCalledWith(1, 0, "X");
+  });
+
   it("snaps viewport fallback points outside vertical bounds to visible line edges", () => {
     view.setText("alpha\nbeta\ngamma");
     view.setScrollMetrics(0, 40);
@@ -164,6 +204,44 @@ describe("VirtualizedTextView", () => {
     const tokenHighlight = [...highlightsMap.keys()].find((name) => name.includes("-token-"));
     expect(tokenHighlight).toBeDefined();
     expect(highlightsMap.get(tokenHighlight!)?.size).toBe(1);
+  });
+
+  it("skips token highlight work when same-line edits only move existing token ranges", () => {
+    view.setText("world");
+    view.setScrollMetrics(0, 20);
+    view.setTokens([{ start: 0, end: 5, style: { color: "#ff0000" } }]);
+
+    const tokenHighlightName = tokenHighlightNames()[0]!;
+    const tokenHighlight = highlightsMap.get(tokenHighlightName)!;
+    const addCount = highlightAdds;
+    const deleteCount = highlightDeletes;
+    highlightClears = 0;
+
+    view.applyEdit({ from: 2, to: 2, text: "X" }, "woXrld");
+    view.setTokens([{ start: 0, end: 6, style: { color: "#ff0000" } }]);
+
+    const ranges = [...tokenHighlight];
+    expect(highlightsMap.get(tokenHighlightName)).toBe(tokenHighlight);
+    expect(highlightClears).toBe(0);
+    expect(highlightAdds).toBe(addCount);
+    expect(highlightDeletes).toBe(deleteCount);
+    expect(ranges).toHaveLength(1);
+  });
+
+  it("does not repaint when the token list is unchanged", () => {
+    const tokens = [{ start: 0, end: 5, style: { color: "#ff0000" } }];
+    view.setText("world");
+    view.setScrollMetrics(0, 20);
+    view.setTokens(tokens);
+
+    const addCount = highlightAdds;
+    const deleteCount = highlightDeletes;
+    highlightClears = 0;
+    view.setTokens([{ start: 0, end: 5, style: { color: "#ff0000" } }]);
+
+    expect(highlightClears).toBe(0);
+    expect(highlightAdds).toBe(addCount);
+    expect(highlightDeletes).toBe(deleteCount);
   });
 
   it("keeps token highlight registry entries stable while scrolling recycled rows", () => {

@@ -1,4 +1,4 @@
-import type { EditorToken, EditorTokenStyle } from "../tokens";
+import type { EditorToken, EditorTokenStyle, TextEdit } from "../tokens";
 import {
   buildHighlightRule,
   clamp,
@@ -68,6 +68,13 @@ type MountedVirtualizedTextRow = VirtualizedTextRow & {
   readonly textRevision: number;
 };
 
+type SameLineEditPatch = {
+  readonly rowIndex: number;
+  readonly localFrom: number;
+  readonly deleteLength: number;
+  readonly text: string;
+};
+
 const DEFAULT_ROW_HEIGHT = 20;
 const DEFAULT_OVERSCAN = 24;
 // TODO: Size the gutter to the widest visible row marker instead of a constant.
@@ -102,6 +109,7 @@ export class VirtualizedTextView {
   private maxVisualColumnsSeen = 0;
   private lastWidthScanStart = 0;
   private lastWidthScanEnd = -1;
+  private tokenRangesFollowLastTextEdit = false;
 
   public constructor(container: HTMLElement, options: VirtualizedTextViewOptions = {}) {
     const rowHeight = options.rowHeight ?? DEFAULT_ROW_HEIGHT;
@@ -148,6 +156,7 @@ export class VirtualizedTextView {
   public setText(text: string): void {
     this.text = text;
     this.textRevision += 1;
+    this.tokenRangesFollowLastTextEdit = false;
     this.lineStarts = computeLineStarts(text);
     this.clampStoredSelection();
     this.lastRenderedRowsKey = "";
@@ -155,7 +164,26 @@ export class VirtualizedTextView {
     this.virtualizer.updateOptions({ count: this.lineStarts.length });
   }
 
+  public applyEdit(edit: TextEdit, nextText: string): void {
+    const patch = this.sameLineEditPatch(edit);
+    if (!patch) {
+      this.setText(nextText);
+      return;
+    }
+
+    this.applySameLineEdit(patch, nextText);
+  }
+
   public setTokens(tokens: readonly EditorToken[]): void {
+    if (editorTokensEqual(this.tokens, tokens)) return;
+
+    if (this.canKeepLiveTokenRanges(tokens)) {
+      this.tokens = [...tokens];
+      this.tokenRangesFollowLastTextEdit = false;
+      return;
+    }
+
+    this.tokenRangesFollowLastTextEdit = false;
     this.tokens = [...tokens];
     this.syncTokenGroupsToTokenSet();
     this.renderTokenHighlights();
@@ -175,6 +203,8 @@ export class VirtualizedTextView {
 
     this.inputElement.value = "";
     this.inputElement.focus({ preventScroll: true });
+    this.inputElement.setSelectionRange(0, 0);
+    this.inputElement.ownerDocument.getSelection()?.removeAllRanges();
   }
 
   public setScrollMetrics(scrollTop: number, viewportHeight: number): void {
@@ -364,6 +394,87 @@ export class VirtualizedTextView {
       row.element.style.transform = `translate3d(0, ${item.start}px, 0)`;
     }
     if (row.text !== text) row.textNode.data = text;
+  }
+
+  private applySameLineEdit(patch: SameLineEditPatch, nextText: string): void {
+    const snapshot = this.virtualizer.getSnapshot();
+    this.text = nextText;
+    this.textRevision += 1;
+    this.tokenRangesFollowLastTextEdit = true;
+    this.lineStarts = computeLineStarts(nextText);
+    this.clampStoredSelection();
+    this.resetContentWidthScan();
+    this.updateContentWidth(snapshot.virtualItems);
+    this.updateMountedRowsAfterSameLineEdit(snapshot.virtualItems, patch);
+  }
+
+  private updateMountedRowsAfterSameLineEdit(
+    items: readonly FixedRowVirtualItem[],
+    patch: SameLineEditPatch,
+  ): void {
+    for (const item of items) {
+      const row = this.rowElements.get(item.index);
+      if (!row) continue;
+      this.updateRowAfterSameLineEdit(row, item, patch);
+    }
+  }
+
+  private updateRowAfterSameLineEdit(
+    row: MountedVirtualizedTextRow,
+    item: FixedRowVirtualItem,
+    patch: SameLineEditPatch,
+  ): void {
+    const text = this.lineText(item.index);
+    const startOffset = this.lineStartOffset(item.index);
+    const endOffset = this.lineEndOffset(item.index);
+
+    this.updateRowElementForSameLineEdit(row, item, text, patch);
+    updateMutableRow(row, {
+      endOffset,
+      height: item.size,
+      index: item.index,
+      startOffset,
+      text,
+      textRevision: this.textRevision,
+      top: item.start,
+    });
+  }
+
+  private updateRowElementForSameLineEdit(
+    row: MountedVirtualizedTextRow,
+    item: FixedRowVirtualItem,
+    text: string,
+    patch: SameLineEditPatch,
+  ): void {
+    if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
+    this.updateGutterRowElement(row, item);
+    if (row.height !== item.size) {
+      row.element.style.height = `${item.size}px`;
+      row.element.style.lineHeight = `${item.size}px`;
+    }
+    if (row.top !== item.start) {
+      row.element.style.transform = `translate3d(0, ${item.start}px, 0)`;
+    }
+    this.updateRowTextForSameLineEdit(row, item, text, patch);
+  }
+
+  private updateRowTextForSameLineEdit(
+    row: MountedVirtualizedTextRow,
+    item: FixedRowVirtualItem,
+    text: string,
+    patch: SameLineEditPatch,
+  ): void {
+    if (item.index !== patch.rowIndex) {
+      if (row.text !== text) row.textNode.data = text;
+      return;
+    }
+
+    if (row.textNode.data !== row.text) {
+      row.textNode.data = text;
+      return;
+    }
+
+    row.textNode.replaceData(patch.localFrom, patch.deleteLength, patch.text);
   }
 
   private updateGutterRowElement(row: MountedVirtualizedTextRow, item: FixedRowVirtualItem): void {
@@ -575,19 +686,24 @@ export class VirtualizedTextView {
   }
 
   private renderTokenHighlights(): void {
-    this.clearTokenHighlightRanges();
-    if (!this.highlightRegistry) return;
-    if (this.tokens.length === 0) return;
-    if (this.text.length === 0) return;
+    const previousRanges = this.captureTokenHighlightRanges();
+    if (!this.highlightRegistry || this.tokens.length === 0 || this.text.length === 0) {
+      this.deleteCapturedTokenRanges(previousRanges);
+      return;
+    }
 
     const mountedRange = this.mountedOffsetRange();
-    if (!mountedRange) return;
+    if (!mountedRange) {
+      this.deleteCapturedTokenRanges(previousRanges);
+      return;
+    }
 
     for (const token of this.tokens) {
       if (!rangesIntersect(token.start, token.end, mountedRange.start, mountedRange.end)) continue;
       this.addTokenRanges(token);
     }
 
+    this.deleteCapturedTokenRanges(previousRanges);
     this.rebuildStyleRules();
   }
 
@@ -695,6 +811,16 @@ export class VirtualizedTextView {
     this.rebuildStyleRules();
   }
 
+  private canKeepLiveTokenRanges(tokens: readonly EditorToken[]): boolean {
+    if (!this.tokenRangesFollowLastTextEdit) return false;
+    if (this.tokens.length !== tokens.length) return false;
+
+    return this.tokens.every((token, index) => {
+      const nextToken = tokens[index];
+      return nextToken ? tokenStylesEqual(token, nextToken) : false;
+    });
+  }
+
   private clearMountedHighlightRanges(): void {
     this.clearTokenHighlightRanges();
     this.clearSelectionHighlightRanges();
@@ -703,6 +829,25 @@ export class VirtualizedTextView {
   private clearTokenHighlightRanges(): void {
     for (const group of this.tokenGroups.values()) {
       group.highlight.clear();
+    }
+  }
+
+  private captureTokenHighlightRanges(): Map<TokenGroup, readonly AbstractRange[]> {
+    const ranges = new Map<TokenGroup, readonly AbstractRange[]>();
+    for (const group of this.tokenGroups.values()) {
+      ranges.set(group, [...group.highlight]);
+    }
+
+    return ranges;
+  }
+
+  private deleteCapturedTokenRanges(
+    ranges: ReadonlyMap<TokenGroup, readonly AbstractRange[]>,
+  ): void {
+    for (const [group, capturedRanges] of ranges) {
+      for (const range of capturedRanges) {
+        group.highlight.delete(range);
+      }
     }
   }
 
@@ -736,7 +881,10 @@ export class VirtualizedTextView {
       rules.push(buildHighlightRule(group.name, group.style));
     }
 
-    this.styleEl.textContent = rules.join("\n");
+    const nextRules = rules.join("\n");
+    if (this.styleEl.textContent === nextRules) return;
+
+    this.styleEl.textContent = nextRules;
   }
 
   private lineStartOffset(row: number): number {
@@ -751,6 +899,20 @@ export class VirtualizedTextView {
 
   private lineText(row: number): string {
     return this.text.slice(this.lineStartOffset(row), this.lineEndOffset(row));
+  }
+
+  private sameLineEditPatch(edit: TextEdit): SameLineEditPatch | null {
+    if (edit.from < 0 || edit.to < edit.from || edit.to > this.text.length) return null;
+    if (edit.text.includes("\n")) return null;
+    if (this.text.slice(edit.from, edit.to).includes("\n")) return null;
+
+    const rowIndex = this.rowForOffset(edit.from);
+    return {
+      rowIndex,
+      localFrom: edit.from - this.lineStartOffset(rowIndex),
+      deleteLength: edit.to - edit.from,
+      text: edit.text,
+    };
   }
 
   private rowForOffset(offset: number): number {
@@ -895,6 +1057,25 @@ function createInputElement(container: HTMLElement): HTMLTextAreaElement {
   input.spellcheck = false;
   input.setAttribute("aria-label", "Editor input");
   return input;
+}
+
+function editorTokensEqual(left: readonly EditorToken[], right: readonly EditorToken[]): boolean {
+  if (left.length !== right.length) return false;
+
+  return left.every((token, index) => {
+    const rightToken = right[index];
+    if (!rightToken) return false;
+    if (token.start !== rightToken.start || token.end !== rightToken.end) return false;
+    return tokenStylesEqual(token, rightToken);
+  });
+}
+
+function tokenStylesEqual(left: EditorToken, right: EditorToken): boolean {
+  const leftStyle = normalizeTokenStyle(left.style);
+  const rightStyle = normalizeTokenStyle(right.style);
+  if (!leftStyle || !rightStyle) return leftStyle === rightStyle;
+
+  return serializeTokenStyle(leftStyle) === serializeTokenStyle(rightStyle);
 }
 
 function computeLineStarts(text: string): number[] {

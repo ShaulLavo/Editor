@@ -27,6 +27,8 @@ type MouseSelectionDrag = {
   clientY: number;
 };
 
+type EditorInputDebugDetails = Record<string, unknown>;
+
 const MOUSE_SELECTION_SCROLL_ZONE_PX = 40;
 const MOUSE_SELECTION_MAX_SCROLL_PX = 24;
 const MOUSE_SELECTION_MIN_SCROLL_PX = 2;
@@ -116,11 +118,13 @@ export class Editor {
   private languageId: EditorSyntaxLanguageId | null = null;
   private syntaxStatus: EditorSyntaxStatus = "plain";
   private syntaxSession: EditorSyntaxSession | null = null;
+  private tokens: readonly EditorToken[] = [];
   private documentVersion = 0;
   private syntaxVersion = 0;
   private mouseSelectionDrag: MouseSelectionDrag | null = null;
   private mouseSelectionAutoScrollFrame = 0;
   private useSessionSelectionForNextInput = false;
+  private nativeInputGeneration = 0;
 
   constructor(container: HTMLElement, options: EditorOptions = {}) {
     this.options = options;
@@ -137,17 +141,18 @@ export class Editor {
   setContent(text: string): void {
     this.text = text;
     this.view.setText(text);
-    this.view.setTokens([]);
+    this.setTokens([]);
   }
 
   setTokens(tokens: readonly EditorToken[]): void {
-    this.view.setTokens(tokens);
+    this.tokens = [...tokens];
+    this.view.setTokens(this.tokens);
   }
 
   applyEdit(edit: TextEdit, tokens: readonly EditorToken[]): void {
     const { from, to, text } = edit;
     this.text = `${this.text.slice(0, from)}${text}${this.text.slice(to)}`;
-    this.view.setText(this.text);
+    this.view.applyEdit(edit, this.text);
     this.setTokens(tokens);
   }
 
@@ -190,6 +195,10 @@ export class Editor {
 
   getText(): string {
     return this.session?.getText() ?? this.text;
+  }
+
+  focus(): void {
+    this.view.focusInput();
   }
 
   attachSession(session: DocumentSession, options: EditorSessionOptions = {}): void {
@@ -266,26 +275,123 @@ export class Editor {
   private installEditingHandlers(): void {
     this.el.addEventListener("mousedown", this.handleMouseDown);
     this.el.addEventListener("beforeinput", this.handleBeforeInput);
+    this.view.inputElement.addEventListener(
+      "beforeinput",
+      this.handleNativeInputBeforeInputCapture,
+      {
+        capture: true,
+      },
+    );
+    this.view.inputElement.addEventListener("input", this.handleNativeInputInputCapture, {
+      capture: true,
+    });
     this.el.addEventListener("paste", this.handlePaste);
     this.el.addEventListener("keydown", this.handleKeyDown);
+    this.el.ownerDocument.addEventListener("keydown", this.handleDocumentKeyDownCapture, {
+      capture: true,
+    });
+    this.view.inputElement.addEventListener("keydown", this.handleNativeInputKeyDownCapture, {
+      capture: true,
+    });
     this.el.addEventListener("keyup", this.syncSessionSelectionFromDom);
     this.el.addEventListener("mouseup", this.syncSessionSelectionFromDom);
+    this.view.inputElement.addEventListener("focus", this.handleInputFocus);
+    this.view.inputElement.addEventListener("blur", this.handleInputBlur);
     this.el.ownerDocument.addEventListener("selectionchange", this.syncCustomSelectionFromDom);
   }
 
   private uninstallEditingHandlers(): void {
     this.el.removeEventListener("mousedown", this.handleMouseDown);
     this.el.removeEventListener("beforeinput", this.handleBeforeInput);
+    this.view.inputElement.removeEventListener(
+      "beforeinput",
+      this.handleNativeInputBeforeInputCapture,
+      { capture: true },
+    );
+    this.view.inputElement.removeEventListener("input", this.handleNativeInputInputCapture, {
+      capture: true,
+    });
     this.el.removeEventListener("paste", this.handlePaste);
     this.el.removeEventListener("keydown", this.handleKeyDown);
+    this.el.ownerDocument.removeEventListener("keydown", this.handleDocumentKeyDownCapture, {
+      capture: true,
+    });
+    this.view.inputElement.removeEventListener("keydown", this.handleNativeInputKeyDownCapture, {
+      capture: true,
+    });
     this.el.removeEventListener("keyup", this.syncSessionSelectionFromDom);
     this.el.removeEventListener("mouseup", this.syncSessionSelectionFromDom);
+    this.view.inputElement.removeEventListener("focus", this.handleInputFocus);
+    this.view.inputElement.removeEventListener("blur", this.handleInputBlur);
     this.el.ownerDocument.removeEventListener("selectionchange", this.syncCustomSelectionFromDom);
     this.stopMouseSelectionDrag();
   }
 
+  private handleInputFocus = (): void => {
+    this.debugInput("input.focus");
+  };
+
+  private handleInputBlur = (): void => {
+    this.debugInput("input.blur");
+  };
+
+  private handleDocumentKeyDownCapture = (event: KeyboardEvent): void => {
+    this.debugInput("document.keydown.capture", {
+      defaultPrevented: event.defaultPrevented,
+      key: event.key,
+      path: describeEventPath(event),
+      target: describeNode(event.target instanceof Node ? event.target : null),
+    });
+  };
+
+  private handleNativeInputKeyDownCapture = (event: KeyboardEvent): void => {
+    this.debugInput("native.keydown.capture", {
+      defaultPrevented: event.defaultPrevented,
+      inputSelectionEnd: this.view.inputElement.selectionEnd,
+      inputSelectionStart: this.view.inputElement.selectionStart,
+      inputValueLength: this.view.inputElement.value.length,
+      key: event.key,
+      readOnlyAttribute: this.view.inputElement.hasAttribute("readonly"),
+    });
+
+    queueMicrotask(() => {
+      this.debugInput("native.keydown.microtask", {
+        defaultPrevented: event.defaultPrevented,
+        inputSelectionEnd: this.view.inputElement.selectionEnd,
+        inputSelectionStart: this.view.inputElement.selectionStart,
+        inputValueLength: this.view.inputElement.value.length,
+        key: event.key,
+      });
+    });
+  };
+
+  private handleNativeInputBeforeInputCapture = (event: InputEvent): void => {
+    this.nativeInputGeneration += 1;
+    this.debugInput("native.beforeinput.capture", {
+      data: event.data,
+      defaultPrevented: event.defaultPrevented,
+      inputType: event.inputType,
+      isComposing: event.isComposing,
+    });
+  };
+
+  private handleNativeInputInputCapture = (event: InputEvent): void => {
+    this.nativeInputGeneration += 1;
+    this.debugInput("native.input.capture", {
+      data: event.data,
+      defaultPrevented: event.defaultPrevented,
+      inputType: event.inputType,
+      inputValue: this.view.inputElement.value,
+      isComposing: event.isComposing,
+    });
+  };
+
   private handleMouseDown = (event: MouseEvent): void => {
-    if (!this.session) return;
+    this.debugInput("mouse.down", this.debugMouseEvent(event));
+    if (!this.session) {
+      this.debugInput("mouse.down.ignored", { reason: "no-session" });
+      return;
+    }
     this.view.focusInput();
     if (event.detail >= 4) {
       this.selectFullDocument(event, "input.quadClick");
@@ -293,7 +399,11 @@ export class Editor {
     }
 
     const offset = this.textOffsetFromMouseEvent(event);
-    if (offset === null) return;
+    this.debugInput("mouse.offset", { offset });
+    if (offset === null) {
+      this.debugInput("mouse.down.ignored", { reason: "no-offset" });
+      return;
+    }
 
     if (event.detail === 3) {
       this.selectLineAtOffset(event, offset);
@@ -309,8 +419,14 @@ export class Editor {
   };
 
   private startMouseSelectionDrag(event: MouseEvent, offset: number): void {
-    if (event.button !== 0) return;
-    if (event.detail !== 1) return;
+    if (event.button !== 0) {
+      this.debugInput("mouse.drag.ignored", { reason: "non-primary-button", button: event.button });
+      return;
+    }
+    if (event.detail !== 1) {
+      this.debugInput("mouse.drag.ignored", { reason: "not-single-click", detail: event.detail });
+      return;
+    }
 
     event.preventDefault();
     this.view.focusInput();
@@ -320,6 +436,7 @@ export class Editor {
       clientX: event.clientX,
       clientY: event.clientY,
     };
+    this.debugInput("mouse.drag.start", { offset });
     this.syncCustomSelectionHighlight(offset, offset);
     this.el.ownerDocument.addEventListener("mousemove", this.updateMouseSelectionDrag);
     this.el.ownerDocument.addEventListener("mouseup", this.finishMouseSelectionDrag);
@@ -353,6 +470,11 @@ export class Editor {
     const change = this.session.setSelection(drag.anchorOffset, offset);
     const syncDomSelection = drag.anchorOffset === offset;
     this.useSessionSelectionForNextInput = true;
+    this.debugInput("mouse.drag.finish", {
+      anchorOffset: drag.anchorOffset,
+      headOffset: offset,
+      syncDomSelection,
+    });
     this.applySessionChange(change, "input.selection", start, { syncDomSelection });
   };
 
@@ -477,10 +599,21 @@ export class Editor {
   }
 
   private handleBeforeInput = (event: InputEvent): void => {
-    if (!this.session) return;
+    this.debugInput("beforeinput", {
+      data: event.data,
+      inputType: event.inputType,
+      isComposing: event.isComposing,
+    });
+    if (!this.session) {
+      this.debugInput("beforeinput.ignored", { reason: "no-session" });
+      return;
+    }
 
     const text = event.data ?? "";
-    if (event.inputType !== "insertText" && event.inputType !== "insertLineBreak") return;
+    if (event.inputType !== "insertText" && event.inputType !== "insertLineBreak") {
+      this.debugInput("beforeinput.ignored", { reason: "unsupported-input-type" });
+      return;
+    }
 
     const start = eventStartMs(event);
     const selectionChange = this.selectionChangeBeforeEdit();
@@ -491,6 +624,7 @@ export class Editor {
       "input.beforeinput",
       start,
     );
+    this.debugInput("beforeinput.applied", { inserted });
   };
 
   private handlePaste = (event: ClipboardEvent): void => {
@@ -510,7 +644,20 @@ export class Editor {
   };
 
   private handleKeyDown = (event: KeyboardEvent): void => {
-    if (!this.session) return;
+    this.debugInput("key.down", {
+      key: event.key,
+      code: event.code,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      path: describeEventPath(event),
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      target: describeNode(event.target instanceof Node ? event.target : null),
+    });
+    if (!this.session) {
+      this.debugInput("key.down.ignored", { reason: "no-session" });
+      return;
+    }
 
     if (this.handleUndoRedo(event)) return;
     if (event.key === "Backspace") {
@@ -525,17 +672,49 @@ export class Editor {
       return;
     }
 
-    if (event.key !== "Delete") return;
+    if (event.key === "Delete") {
+      const start = eventStartMs(event);
+      const selectionChange = this.selectionChangeBeforeEdit();
+      event.preventDefault();
+      this.applySessionChange(
+        mergeChangeTimings(this.session.deleteSelection(), selectionChange),
+        "input.delete",
+        start,
+      );
+      return;
+    }
 
-    const start = eventStartMs(event);
-    const selectionChange = this.selectionChangeBeforeEdit();
-    event.preventDefault();
-    this.applySessionChange(
-      mergeChangeTimings(this.session.deleteSelection(), selectionChange),
-      "input.delete",
-      start,
-    );
+    const fallbackText = keyboardFallbackText(event);
+    if (fallbackText === null) return;
+
+    this.scheduleKeyboardTextFallback(event, fallbackText);
   };
+
+  private scheduleKeyboardTextFallback(event: KeyboardEvent, text: string): void {
+    const start = eventStartMs(event);
+    const nativeInputGeneration = this.nativeInputGeneration;
+    this.debugInput("key.fallback.scheduled", { text });
+
+    this.el.ownerDocument.defaultView?.setTimeout(() => {
+      if (!this.session) {
+        this.debugInput("key.fallback.cancelled", { reason: "no-session", text });
+        return;
+      }
+      if (this.nativeInputGeneration !== nativeInputGeneration) {
+        this.debugInput("key.fallback.cancelled", { reason: "native-input", text });
+        return;
+      }
+
+      const selectionChange = this.selectionChangeBeforeEdit();
+      this.view.inputElement.value = "";
+      this.applySessionChange(
+        mergeChangeTimings(this.session.applyText(text), selectionChange),
+        "input.keydownFallback",
+        start,
+      );
+      this.debugInput("key.fallback.applied", { text });
+    }, 0);
+  }
 
   private handleUndoRedo(event: KeyboardEvent): boolean {
     if (!this.session) return false;
@@ -549,9 +728,22 @@ export class Editor {
   }
 
   private syncSessionSelectionFromDom = (_event: Event): void => {
-    if (!this.session) return;
-    if (this.mouseSelectionDrag) return;
-    if (this.useSessionSelectionForNextInput) return;
+    if (!this.session) {
+      this.debugInput("dom.selection-sync.ignored", { reason: "no-session" });
+      return;
+    }
+    if (this.mouseSelectionDrag) {
+      this.debugInput("dom.selection-sync.ignored", { reason: "mouse-drag" });
+      return;
+    }
+    if (this.useSessionSelectionForNextInput) {
+      this.debugInput("dom.selection-sync.ignored", { reason: "session-selection-authoritative" });
+      return;
+    }
+    if (this.isInputFocused()) {
+      this.debugInput("dom.selection-sync.ignored", { reason: "input-focused" });
+      return;
+    }
 
     const start = nowMs();
     const change = this.updateSessionSelectionFromDom();
@@ -561,6 +753,7 @@ export class Editor {
     const timedChange = appendTiming(change, "input.selection", start);
     this.sessionOptions.onChange?.(timedChange);
     this.notifyChangeWithTiming(timedChange);
+    this.debugInput("dom.selection-sync.applied");
   };
 
   private updateSessionSelectionFromDom(): DocumentSessionChange | null {
@@ -568,9 +761,13 @@ export class Editor {
 
     const readStart = nowMs();
     const offsets = this.readDomSelectionOffsets();
-    if (!offsets) return null;
+    if (!offsets) {
+      this.debugInput("dom.selection-read.empty");
+      return null;
+    }
 
     this.syncCustomSelectionHighlight(offsets.anchorOffset, offsets.headOffset);
+    this.debugInput("dom.selection-read", offsets);
     return appendTiming(
       this.session.setSelection(offsets.anchorOffset, offsets.headOffset),
       "editor.readDomSelection",
@@ -579,8 +776,17 @@ export class Editor {
   }
 
   private selectionChangeBeforeEdit(): DocumentSessionChange | null {
-    if (!this.useSessionSelectionForNextInput) return this.updateSessionSelectionFromDom();
+    if (this.isInputFocused()) {
+      this.debugInput("selection.before-edit.skipped", { reason: "input-focused" });
+      this.useSessionSelectionForNextInput = false;
+      return null;
+    }
+    if (!this.useSessionSelectionForNextInput) {
+      this.debugInput("selection.before-edit.read-dom");
+      return this.updateSessionSelectionFromDom();
+    }
 
+    this.debugInput("selection.before-edit.skipped", { reason: "session-selection-authoritative" });
     this.useSessionSelectionForNextInput = false;
     return null;
   }
@@ -610,8 +816,14 @@ export class Editor {
   private renderSessionChange(change: DocumentSessionChange): void {
     const edit = change.edits[0];
     if (change.kind === "selection" || change.kind === "none") return;
+    this.debugInput("render.session-change", {
+      editCount: change.edits.length,
+      edits: change.edits,
+      kind: change.kind,
+      nextTextLength: change.text.length,
+    });
     if (change.kind === "edit" && edit && change.edits.length === 1) {
-      this.applyEdit(edit, []);
+      this.applyEdit(edit, projectTokensThroughEdit(this.tokens, edit, this.text));
       return;
     }
 
@@ -695,10 +907,21 @@ export class Editor {
     const end = clamp(resolved.endOffset, start, this.text.length);
     const range = this.view.createRange(start, end);
 
+    if (this.isInputFocused()) {
+      this.syncCustomSelectionHighlight(start, end);
+      this.debugInput("dom.selection-sync.skipped", {
+        end,
+        reason: "input-focused",
+        start,
+      });
+      return;
+    }
+
     const domSelection = window.getSelection();
     domSelection?.removeAllRanges();
     if (range) domSelection?.addRange(range);
     this.syncCustomSelectionHighlight(start, end);
+    this.debugInput("dom.selection-sync.rendered", { end, start });
   }
 
   private readDomSelectionOffsets(): { anchorOffset: number; headOffset: number } | null {
@@ -714,7 +937,16 @@ export class Editor {
 
   private syncCustomSelectionFromDom = (): void => {
     if (!this.session) return;
-    if (this.useSessionSelectionForNextInput) return;
+    if (this.useSessionSelectionForNextInput) {
+      this.debugInput("dom.custom-selection.ignored", {
+        reason: "session-selection-authoritative",
+      });
+      return;
+    }
+    if (this.isInputFocused()) {
+      this.debugInput("dom.custom-selection.ignored", { reason: "input-focused" });
+      return;
+    }
 
     const offsets = this.readDomSelectionOffsets();
     if (!offsets) return;
@@ -730,6 +962,59 @@ export class Editor {
     this.view.clearSelection();
   }
 
+  private isInputFocused(): boolean {
+    return this.el.ownerDocument.activeElement === this.view.inputElement;
+  }
+
+  private debugMouseEvent(event: MouseEvent): EditorInputDebugDetails {
+    return {
+      button: event.button,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      detail: event.detail,
+      target: describeNode(event.target instanceof Node ? event.target : null),
+    };
+  }
+
+  private debugInput(label: string, details: EditorInputDebugDetails = {}): void {
+    console.log(
+      "[editor input]",
+      JSON.stringify({
+        label,
+        ...this.debugInputState(),
+        ...details,
+      }),
+    );
+  }
+
+  private debugInputState(): EditorInputDebugDetails {
+    return {
+      activeElement: describeElement(this.el.ownerDocument.activeElement),
+      documentId: this.documentId,
+      domSelection: describeSelection(this.el.ownerDocument.getSelection()),
+      inputFocused: this.isInputFocused(),
+      inputReadOnly: this.view.inputElement.readOnly,
+      sessionSelection: this.debugSessionSelection(),
+      textLength: this.getText().length,
+      useSessionSelectionForNextInput: this.useSessionSelectionForNextInput,
+    };
+  }
+
+  private debugSessionSelection(): EditorInputDebugDetails | null {
+    if (!this.session) return null;
+
+    const selection = this.session.getSelections().selections[0];
+    if (!selection) return null;
+
+    const resolved = resolveSelection(this.session.getSnapshot(), selection);
+    return {
+      anchorOffset: resolved.anchorOffset,
+      endOffset: resolved.endOffset,
+      headOffset: resolved.headOffset,
+      startOffset: resolved.startOffset,
+    };
+  }
+
   private domBoundaryToTextOffset(node: Node, offset: number): number | null {
     const viewOffset = this.view.textOffsetFromDomBoundary(node, offset);
     if (viewOffset !== null) return viewOffset;
@@ -739,7 +1024,10 @@ export class Editor {
   }
 
   private textOffsetFromMouseEvent(event: MouseEvent): number | null {
-    return this.view.textOffsetFromPoint(event.clientX, event.clientY);
+    return (
+      this.view.textOffsetFromPoint(event.clientX, event.clientY) ??
+      this.view.textOffsetFromViewportPoint(event.clientX, event.clientY)
+    );
   }
 
   private externalBoundaryToTextOffset(node: Node, offset: number): number | null {
@@ -760,6 +1048,140 @@ export class Editor {
 function isUndoRedoEvent(event: KeyboardEvent): boolean {
   if (event.key.toLowerCase() !== "z") return false;
   return event.metaKey || event.ctrlKey;
+}
+
+function keyboardFallbackText(event: KeyboardEvent): string | null {
+  if (event.defaultPrevented) return null;
+  if (event.isComposing) return null;
+  if (event.metaKey || event.ctrlKey || event.altKey) return null;
+  if (event.key === "Enter") return "\n";
+  if (event.key.length !== 1) return null;
+
+  return event.key;
+}
+
+function projectTokensThroughEdit(
+  tokens: readonly EditorToken[],
+  edit: TextEdit,
+  previousText: string,
+): readonly EditorToken[] {
+  const delta = edit.text.length - (edit.to - edit.from);
+  const projected: EditorToken[] = [];
+
+  for (const token of tokens) {
+    const next = projectTokenThroughEdit(token, edit, previousText, delta);
+    if (!next || next.end <= next.start) continue;
+    projected.push(next);
+  }
+
+  return projected;
+}
+
+function projectTokenThroughEdit(
+  token: EditorToken,
+  edit: TextEdit,
+  previousText: string,
+  delta: number,
+): EditorToken | null {
+  if (edit.from === edit.to) return projectTokenThroughInsertion(token, edit, previousText);
+  if (token.end <= edit.from) return token;
+  if (token.start >= edit.to) return shiftToken(token, delta);
+  if (!canResizeTokenAcrossEdit(token, edit)) return null;
+
+  return { ...token, end: token.end + delta };
+}
+
+function projectTokenThroughInsertion(
+  token: EditorToken,
+  edit: TextEdit,
+  previousText: string,
+): EditorToken {
+  if (shouldExpandTokenForInsertion(token, edit, previousText)) {
+    return { ...token, end: token.end + edit.text.length };
+  }
+  if (token.start >= edit.from) return shiftToken(token, edit.text.length);
+
+  return token;
+}
+
+function canResizeTokenAcrossEdit(token: EditorToken, edit: TextEdit): boolean {
+  if (edit.text.includes("\n")) return false;
+  return token.start < edit.from && edit.to < token.end;
+}
+
+function shouldExpandTokenForInsertion(
+  token: EditorToken,
+  edit: TextEdit,
+  previousText: string,
+): boolean {
+  if (edit.text.length === 0) return false;
+  if (edit.text.includes("\n")) return false;
+  if (token.start < edit.from && edit.from < token.end) return true;
+  if (!isWordLikeText(edit.text)) return false;
+  if (token.end === edit.from) return isWordBeforeOffset(previousText, edit.from);
+  if (token.start === edit.from) {
+    return (
+      !isWordBeforeOffset(previousText, edit.from) && isWordCodePointAt(previousText, edit.from)
+    );
+  }
+
+  return false;
+}
+
+function shiftToken(token: EditorToken, delta: number): EditorToken {
+  return {
+    ...token,
+    start: token.start + delta,
+    end: token.end + delta,
+  };
+}
+
+function isWordLikeText(text: string): boolean {
+  return /^[\p{L}\p{N}_]+$/u.test(text);
+}
+
+function isWordBeforeOffset(text: string, offset: number): boolean {
+  const previous = previousCodePointStart(text, offset);
+  if (previous === null) return false;
+  return isWordCodePointAt(text, previous);
+}
+
+function describeElement(element: Element | null): string | null {
+  if (!element) return null;
+
+  const id = element.id ? `#${element.id}` : "";
+  const className = typeof element.className === "string" ? element.className : "";
+  const classes = className ? `.${className.trim().replaceAll(/\s+/g, ".")}` : "";
+  return `${element.tagName.toLowerCase()}${id}${classes}`;
+}
+
+function describeNode(node: Node | null): string | null {
+  if (!node) return null;
+  if (node instanceof Element) return describeElement(node);
+  if (node.nodeType === Node.TEXT_NODE) return "#text";
+  return node.nodeName;
+}
+
+function describeSelection(selection: Selection | null): EditorInputDebugDetails | null {
+  if (!selection || selection.rangeCount === 0) return null;
+
+  return {
+    anchorNode: describeNode(selection.anchorNode),
+    anchorOffset: selection.anchorOffset,
+    focusNode: describeNode(selection.focusNode),
+    focusOffset: selection.focusOffset,
+    isCollapsed: selection.isCollapsed,
+    rangeCount: selection.rangeCount,
+  };
+}
+
+function describeEventPath(event: Event): readonly (string | null)[] {
+  return event
+    .composedPath()
+    .slice(0, 5)
+    .map((node) => {
+      return node instanceof Node ? describeNode(node) : String(node);
+    });
 }
 
 function elementBoundaryToTextOffset(offset: number, textLength: number): number {
