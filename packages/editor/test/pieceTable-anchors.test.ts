@@ -23,11 +23,11 @@ import {
   undoEditorHistory,
 } from "../src/history.ts";
 
-import type { Anchor as AnchorType, PieceTableSnapshot } from "../src/pieceTable";
+import type { PieceTableAnchor, PieceTableSnapshot } from "../src/pieceTable";
 
 const expectIndexedMatchesLinear = (
   snapshot: PieceTableSnapshot,
-  anchors: readonly AnchorType[],
+  anchors: readonly PieceTableAnchor[],
 ): void => {
   for (const anchor of anchors) {
     expect(resolveAnchor(snapshot, anchor)).toEqual(resolveAnchorLinear(snapshot, anchor));

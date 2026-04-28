@@ -577,13 +577,13 @@ function tokenHighlightNames(): string[] {
   return [...highlightsMap.keys()].filter((name) => name.includes("-token-"));
 }
 
-function tokenHighlightRanges(): Range[] {
+function tokenHighlightRanges(): AbstractRange[] {
   return tokenHighlightNames().flatMap((name) => [...highlightsMap.get(name)!]);
 }
 
 function tokenHighlightRangeForNode(
   node: Text,
-): { readonly highlight: Highlight; readonly range: Range } | undefined {
+): { readonly highlight: Highlight; readonly range: AbstractRange } | undefined {
   for (const name of tokenHighlightNames()) {
     const highlight = highlightsMap.get(name)!;
     const range = [...highlight].find((candidate) => candidate.startContainer === node);

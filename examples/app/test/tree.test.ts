@@ -12,9 +12,16 @@ describe("renderDir", () => {
       fileHandle("alpha.ts", "a"),
     ]);
 
-    await renderDir(root, container, (path, content) => selectedFiles.push({ path, content }), {
-      selectedPath: "alpha.ts",
-    });
+    await renderDir(
+      root,
+      container,
+      (path, content) => {
+        selectedFiles.push({ path, content });
+      },
+      {
+        selectedPath: "alpha.ts",
+      },
+    );
 
     expect(entryLabels(container)).toEqual(["src", "alpha.ts", "zeta.ts"]);
     expect(selectedFiles).toEqual([{ path: "alpha.ts", content: "a" }]);
@@ -74,5 +81,5 @@ function directoryHandle(
     entries: async function* () {
       for (const child of children) yield [child.name, child] as const;
     },
-  } as FileSystemDirectoryHandle;
+  } as unknown as FileSystemDirectoryHandle;
 }

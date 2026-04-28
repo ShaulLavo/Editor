@@ -83,5 +83,5 @@ function directoryHandle(
     entries: async function* () {
       for (const child of children) yield [child.name, child] as const;
     },
-  } as FileSystemDirectoryHandle;
+  } as unknown as FileSystemDirectoryHandle;
 }

@@ -233,7 +233,7 @@ function tokenHighlights(): Highlight[] {
     .map(([, highlight]) => highlight);
 }
 
-function tokenHighlightRanges(): Range[] {
+function tokenHighlightRanges(): AbstractRange[] {
   return tokenHighlights().flatMap((highlight) => [...highlight]);
 }
 

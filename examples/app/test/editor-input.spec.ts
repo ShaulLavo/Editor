@@ -149,7 +149,8 @@ test("focuses the editor for typing after selecting a file", async ({ page }) =>
       },
     };
 
-    window.showDirectoryPicker = async () => directoryHandle as FileSystemDirectoryHandle;
+    window.showDirectoryPicker = async () =>
+      directoryHandle as unknown as FileSystemDirectoryHandle;
   });
   await page.goto("/");
 
