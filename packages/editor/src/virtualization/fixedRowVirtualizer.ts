@@ -1,5 +1,3 @@
-//TODO actual horizontal chunking
-
 export type FixedRowVisibleRange = {
   readonly start: number;
   readonly end: number;

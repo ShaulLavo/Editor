@@ -81,8 +81,9 @@
 
 .editor-virtualized-gutter-row {
   align-items: center;
-  display: flex;
-  justify-content: flex-end;
+  column-gap: 2px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 10px;
   left: 0;
   padding-right: 4px;
   position: absolute;
@@ -95,8 +96,46 @@
   color: #71717a;
   font-size: 11px;
   font-weight: 600;
+  justify-self: end;
   line-height: inherit;
   tab-size: 4;
+}
+
+.editor-virtualized-fold-toggle {
+  align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: #a1a1aa;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  height: 14px;
+  justify-self: center;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  pointer-events: auto;
+  width: 10px;
+}
+
+.editor-virtualized-fold-toggle[hidden] {
+  display: inline-flex;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.editor-virtualized-fold-toggle::before {
+  content: "v";
+  font-size: 9px;
+}
+
+.editor-virtualized-fold-toggle[data-editor-fold-state="collapsed"]::before {
+  content: ">";
+}
+
+.editor-virtualized-fold-toggle:hover {
+  color: #e4e4e7;
 }
 
 .editor-virtualized-line-number::before {
@@ -111,6 +150,22 @@
   top: 0;
   white-space: pre;
   will-change: transform;
+}
+
+.editor-virtualized-row-chunk {
+  white-space: pre;
+}
+
+.editor-virtualized-row-spacer {
+  display: inline-block;
+  height: 1px;
+  pointer-events: none;
+}
+
+.editor-virtualized-fold-placeholder {
+  color: #a1a1aa;
+  padding-left: 6px;
+  user-select: none;
 }
 
 .editor-virtualized-input {
@@ -131,6 +186,16 @@
   position: absolute;
   top: 0;
   width: 2px;
+}
+
+.editor-virtualized-metric-probe {
+  font: inherit;
+  left: -10000px;
+  line-height: inherit;
+  position: absolute;
+  tab-size: inherit;
+  visibility: hidden;
+  white-space: pre;
 }
 
 .editor-virtualized::selection {

@@ -42,10 +42,13 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-function createSyntaxResult(tokens = [{ start: 0, end: 5, style: { color: "#ff0000" } }]) {
+function createSyntaxResult(
+  tokens = [{ start: 0, end: 5, style: { color: "#ff0000" } }],
+  folds: EditorSyntaxResult["folds"] = [],
+) {
   return {
     captures: [],
-    folds: [],
+    folds,
     brackets: [],
     errors: [],
     injections: [],
@@ -113,6 +116,12 @@ function tokenHighlights(): Highlight[] {
   return [...highlightsMap]
     .filter(([name]) => name.includes("-token-"))
     .map(([, highlight]) => highlight);
+}
+
+function foldToggle(): HTMLButtonElement {
+  return document.querySelector(
+    ".editor-virtualized-fold-toggle:not([hidden])",
+  ) as HTMLButtonElement;
 }
 
 function mockEditorViewport(
@@ -1021,6 +1030,90 @@ describe("Editor", () => {
       ]);
       expect(editor.getState().syntaxStatus).toBe("ready");
       expect(highlightsMap.size).toBe(1);
+    });
+
+    it("renders syntax fold controls and toggles collapsed rows", async () => {
+      const text = "if (x) {\n  y();\n}\nz();";
+      const foldEnd = text.indexOf("\nz();");
+      setEditorSyntaxSessionFactory(() =>
+        createMockSyntaxSession({
+          refresh: async () =>
+            createSyntaxResult(
+              [],
+              [
+                {
+                  startIndex: 0,
+                  endIndex: foldEnd,
+                  startLine: 0,
+                  endLine: 2,
+                  type: "statement_block",
+                  languageId: "typescript",
+                },
+              ],
+            ),
+        }),
+      );
+
+      editor.openDocument({ documentId: "main.ts", text });
+      await flushMicrotasks();
+
+      expect(foldToggle().dataset.editorFoldState).toBe("expanded");
+      expect(editorRoot().textContent).toContain("  y();");
+
+      foldToggle().dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+      expect(foldToggle().dataset.editorFoldState).toBe("collapsed");
+      expect(editorRoot().textContent).toContain("...");
+      expect(editorRoot().textContent).not.toContain("  y();");
+
+      foldToggle().dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+      expect(foldToggle().dataset.editorFoldState).toBe("expanded");
+      expect(editorRoot().textContent).toContain("  y();");
+    });
+
+    it("hides fold controls on rows without fold candidates", async () => {
+      const text = "if (x) {\n  y();\n}\nz();";
+      const foldEnd = text.indexOf("\nz();");
+      setEditorSyntaxSessionFactory(() =>
+        createMockSyntaxSession({
+          refresh: async () =>
+            createSyntaxResult(
+              [],
+              [
+                {
+                  startIndex: 0,
+                  endIndex: foldEnd,
+                  startLine: 0,
+                  endLine: 2,
+                  type: "statement_block",
+                  languageId: "typescript",
+                },
+              ],
+            ),
+        }),
+      );
+
+      editor.openDocument({ documentId: "main.ts", text });
+      await flushMicrotasks();
+
+      const buttons = [
+        ...document.querySelectorAll<HTMLButtonElement>(".editor-virtualized-fold-toggle"),
+      ];
+      const visible = buttons.filter((button) => !button.hidden);
+      const hidden = buttons.filter((button) => button.hidden);
+
+      expect(visible).toHaveLength(1);
+      expect(hidden.length).toBeGreaterThan(0);
+      expect(hidden.every((button) => button.disabled && button.tabIndex === -1)).toBe(true);
+      expect(
+        visible[0]
+          ?.closest("[data-editor-virtual-gutter-row]")
+          ?.getAttribute("data-editor-virtual-gutter-row"),
+      ).toBe("0");
+      expect(
+        visible[0]?.previousElementSibling?.classList.contains("editor-virtualized-line-number"),
+      ).toBe(true);
     });
 
     it("refreshes syntax after edits", async () => {

@@ -1,0 +1,159 @@
+import { performance } from "node:perf_hooks";
+import { Window } from "happy-dom";
+
+import { VirtualizedTextView } from "../src";
+
+type Sample = {
+  readonly name: string;
+  readonly durationMs: number;
+  readonly mountedRows: number;
+  readonly mountedCharacters: number;
+  readonly contentWidth: number;
+};
+
+const LARGE_LINE_COUNT = 100_000;
+const LONG_LINE_LENGTH = 50_000;
+const ROW_HEIGHT = 20;
+const VIEWPORT_HEIGHT = 400;
+const VIEWPORT_WIDTH = 800;
+const LONG_LINE_CHUNK_SIZE = 2_048;
+const MAX_MOUNTED_ROWS = 64;
+const MAX_MOUNTED_LONG_LINE_CHARACTERS = LONG_LINE_CHUNK_SIZE * 2;
+
+class BenchmarkHighlight extends Set<Range> {}
+
+const formatMs = (value: number): string => `${value.toFixed(3)}ms`;
+
+function installDom(): Document {
+  const window = new Window({
+    url: "http://localhost/",
+  });
+  const global = globalThis as typeof globalThis & {
+    document: Document;
+    window: Window;
+    HTMLElement: typeof HTMLElement;
+    HTMLDivElement: typeof HTMLDivElement;
+    HTMLSpanElement: typeof HTMLSpanElement;
+    HTMLTextAreaElement: typeof HTMLTextAreaElement;
+    Node: typeof Node;
+    Text: typeof Text;
+    Range: typeof Range;
+    Highlight: typeof BenchmarkHighlight;
+  };
+
+  global.window = window;
+  global.document = window.document;
+  global.HTMLElement = window.HTMLElement;
+  global.HTMLDivElement = window.HTMLDivElement;
+  global.HTMLSpanElement = window.HTMLSpanElement;
+  global.HTMLTextAreaElement = window.HTMLTextAreaElement;
+  global.Node = window.Node;
+  global.Text = window.Text;
+  global.Range = window.Range;
+  global.Highlight = BenchmarkHighlight;
+  return window.document;
+}
+
+function createView(document: Document): VirtualizedTextView {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const view = new VirtualizedTextView(container, {
+    rowHeight: ROW_HEIGHT,
+    overscan: 12,
+    longLineChunkSize: LONG_LINE_CHUNK_SIZE,
+    longLineChunkThreshold: LONG_LINE_CHUNK_SIZE,
+    horizontalOverscanColumns: 0,
+  });
+
+  mockViewport(view.scrollElement, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+  return view;
+}
+
+function mockViewport(element: HTMLElement, width: number, height: number): void {
+  Object.defineProperty(element, "clientWidth", { configurable: true, value: width });
+  Object.defineProperty(element, "clientHeight", { configurable: true, value: height });
+}
+
+function buildLargeDocument(): string {
+  return Array.from({ length: LARGE_LINE_COUNT }, (_, index) => `line-${index}`).join("\n");
+}
+
+function measureLargeDocument(view: VirtualizedTextView): Sample {
+  const text = buildLargeDocument();
+  const start = performance.now();
+  view.setText(text);
+  view.setScrollMetrics(0, VIEWPORT_HEIGHT);
+  view.setScrollMetrics(500_000, VIEWPORT_HEIGHT);
+  view.setScrollMetrics(1_500_000, VIEWPORT_HEIGHT);
+
+  return sample("large-document", view, start);
+}
+
+function measureLongLine(view: VirtualizedTextView): Sample {
+  const text = "x".repeat(LONG_LINE_LENGTH);
+  const start = performance.now();
+  view.setText(text);
+  view.setScrollMetrics(0, VIEWPORT_HEIGHT);
+
+  for (const column of [0, 5_000, 10_000, 25_000, 49_000]) {
+    view.scrollElement.scrollLeft = column * view.getState().metrics.characterWidth;
+    view.setScrollMetrics(0, VIEWPORT_HEIGHT);
+  }
+
+  return sample("long-line", view, start);
+}
+
+function sample(name: string, view: VirtualizedTextView, start: number): Sample {
+  const state = view.getState();
+  return {
+    name,
+    durationMs: performance.now() - start,
+    mountedRows: state.mountedRows.length,
+    mountedCharacters: mountedCharacters(state.mountedRows),
+    contentWidth: state.contentWidth,
+  };
+}
+
+function mountedCharacters(
+  rows: readonly { readonly chunks: readonly { readonly text: string }[] }[],
+): number {
+  let count = 0;
+  for (const row of rows) {
+    for (const chunk of row.chunks) count += chunk.text.length;
+  }
+
+  return count;
+}
+
+function printSample(sample: Sample): void {
+  console.log(`${sample.name} virtualization benchmark`);
+  console.log(`duration: ${formatMs(sample.durationMs)}`);
+  console.log(`mounted rows: ${sample.mountedRows}`);
+  console.log(`mounted characters: ${sample.mountedCharacters}`);
+  console.log(`content width: ${sample.contentWidth.toLocaleString()}px`);
+}
+
+function assertVirtualization(sample: Sample): void {
+  if (sample.name === "large-document" && sample.mountedRows > MAX_MOUNTED_ROWS) {
+    throw new Error(`mounted ${sample.mountedRows} rows; expected <= ${MAX_MOUNTED_ROWS}`);
+  }
+
+  if (sample.name === "long-line" && sample.mountedCharacters > MAX_MOUNTED_LONG_LINE_CHARACTERS) {
+    throw new Error(
+      `mounted ${sample.mountedCharacters} long-line characters; expected <= ${MAX_MOUNTED_LONG_LINE_CHARACTERS}`,
+    );
+  }
+}
+
+const document = installDom();
+const largeView = createView(document);
+const largeSample = measureLargeDocument(largeView);
+printSample(largeSample);
+assertVirtualization(largeSample);
+largeView.dispose();
+
+const longLineView = createView(document);
+const longLineSample = measureLongLine(longLineView);
+printSample(longLineSample);
+assertVirtualization(longLineSample);
+longLineView.dispose();

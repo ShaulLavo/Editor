@@ -4,6 +4,7 @@ import type {
   EditorTimingMeasurement,
 } from "./documentSession";
 import { createDocumentSession } from "./documentSession";
+import { createFoldMap, type FoldMap } from "./foldMap";
 import { offsetToPoint } from "./pieceTable";
 import { resolveSelection } from "./selections";
 import {
@@ -13,10 +14,11 @@ import {
   type EditorSyntaxResult,
   type EditorSyntaxSession,
   type EditorSyntaxSessionOptions,
+  type FoldRange,
 } from "./syntax";
 import type { EditorDocument, EditorToken, TextEdit } from "./tokens";
 import { clamp } from "./style-utils";
-import { VirtualizedTextView } from "./virtualization";
+import { VirtualizedTextView, type VirtualizedFoldMarker } from "./virtualization";
 
 let editorInstanceCount = 0;
 
@@ -117,6 +119,8 @@ export class Editor {
   private syntaxStatus: EditorSyntaxStatus = "plain";
   private syntaxSession: EditorSyntaxSession | null = null;
   private tokens: readonly EditorToken[] = [];
+  private syntaxFolds: readonly FoldRange[] = [];
+  private collapsedFoldKeys = new Set<string>();
   private documentVersion = 0;
   private syntaxVersion = 0;
   private mouseSelectionDrag: MouseSelectionDrag | null = null;
@@ -130,6 +134,7 @@ export class Editor {
     this.view = new VirtualizedTextView(container, {
       className: "editor",
       highlightRegistry: getHighlightRegistry(),
+      onFoldToggle: this.handleFoldToggle,
       selectionHighlightName: `${this.highlightPrefix}-selection`,
     });
     this.el = this.view.scrollElement;
@@ -140,6 +145,7 @@ export class Editor {
     this.text = text;
     this.view.setText(text);
     this.setTokens([]);
+    this.clearSyntaxFolds();
   }
 
   setTokens(tokens: readonly EditorToken[]): void {
@@ -157,6 +163,16 @@ export class Editor {
   setDocument(document: EditorDocument): void {
     this.setContent(document.text);
     this.setTokens(document.tokens ?? []);
+  }
+
+  setFoldMap(foldMap: FoldMap | null): void {
+    this.view.setFoldMap(foldMap);
+  }
+
+  setSyntaxFolds(folds: readonly FoldRange[]): void {
+    this.syntaxFolds = [...folds];
+    this.pruneCollapsedFolds();
+    this.syncFoldView();
   }
 
   openDocument(document: EditorOpenDocumentOptions): void {
@@ -675,10 +691,12 @@ export class Editor {
     if (change.kind === "selection" || change.kind === "none") return;
 
     if (change.kind === "edit" && edit && change.edits.length === 1) {
+      this.clearSyntaxFolds();
       this.applyEdit(edit, projectTokensThroughEdit(this.tokens, edit, this.text));
       return;
     }
 
+    this.clearSyntaxFolds();
     this.setDocument({ text: change.text, tokens: [] });
   }
 
@@ -737,7 +755,55 @@ export class Editor {
     const tokenChange = this.session.setTokens(result.tokens);
     const timedChange = appendTiming(tokenChange, "editor.syntax", startedAt);
     this.setTokens(result.tokens);
+    this.setSyntaxFolds(result.folds);
     this.notifyChange(timedChange);
+  }
+
+  private handleFoldToggle = (marker: VirtualizedFoldMarker): void => {
+    if (this.collapsedFoldKeys.has(marker.key)) {
+      this.collapsedFoldKeys.delete(marker.key);
+      this.syncFoldView();
+      return;
+    }
+
+    this.collapsedFoldKeys.add(marker.key);
+    this.syncFoldView();
+  };
+
+  private clearSyntaxFolds(): void {
+    this.syntaxFolds = [];
+    this.collapsedFoldKeys.clear();
+    this.view.setFoldMarkers([]);
+    this.view.setFoldMap(null);
+  }
+
+  private pruneCollapsedFolds(): void {
+    const foldKeys = new Set(this.syntaxFolds.map((fold) => foldRangeKey(fold)));
+    for (const key of this.collapsedFoldKeys) {
+      if (foldKeys.has(key)) continue;
+      this.collapsedFoldKeys.delete(key);
+    }
+  }
+
+  private syncFoldView(): void {
+    const snapshot = this.session?.getSnapshot();
+    if (!snapshot || this.syntaxFolds.length === 0) {
+      this.view.setFoldMarkers([]);
+      this.view.setFoldMap(null);
+      return;
+    }
+
+    const markers = this.syntaxFolds.map((fold) =>
+      foldMarkerFromRange(fold, this.collapsedFoldKeys),
+    );
+    const collapsedFolds = this.syntaxFolds.filter((fold) => {
+      return this.collapsedFoldKeys.has(foldRangeKey(fold));
+    });
+
+    this.view.setFoldMarkers(markers);
+    this.view.setFoldMap(
+      collapsedFolds.length > 0 ? createFoldMap(snapshot, collapsedFolds) : null,
+    );
   }
 
   private applySyntaxError(documentVersion: number, syntaxVersion: number): void {
@@ -864,6 +930,25 @@ function projectTokensThroughEdit(
   }
 
   return projected;
+}
+
+function foldMarkerFromRange(
+  fold: FoldRange,
+  collapsedFoldKeys: ReadonlySet<string>,
+): VirtualizedFoldMarker {
+  const key = foldRangeKey(fold);
+  return {
+    key,
+    startOffset: fold.startIndex,
+    endOffset: fold.endIndex,
+    startRow: fold.startLine,
+    endRow: fold.endLine,
+    collapsed: collapsedFoldKeys.has(key),
+  };
+}
+
+function foldRangeKey(fold: FoldRange): string {
+  return `${fold.languageId ?? "plain"}:${fold.type}:${fold.startIndex}:${fold.endIndex}`;
 }
 
 function projectTokenThroughEdit(

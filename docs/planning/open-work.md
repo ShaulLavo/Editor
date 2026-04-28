@@ -21,14 +21,16 @@ Consolidated validation, design, and measurement tasks.
 - FoldMap invalidation precision complete; go decision made for a second validation layer
 - Conversion benchmark through FoldMap complete via `bun run bench:fold-map` in `packages/editor`
 - Fold-boundary edge cases covered: nested, document edges, boundary edits, and edits inside folds
+- Virtual row and horizontal chunk records for browser-backed rendering complete
+- Fixed-row virtualizer math and tests complete
+- Native browser selection, caret, and hit-testing validation over mounted virtual rows complete
+- Vertical virtualization with browser scroll height and overscanned row windows complete
+- Horizontal chunking for long lines without full DOM materialization complete
+- CSS Highlight API paints visible syntax/selection ranges over mounted content and chunks
+- Syntax fold candidates render gutter controls and toggle collapsed FoldMap rows
+- Initial 2D virtualization benchmark complete for 100K-line documents and 50K-character lines via `bun run bench:virtualization` in `packages/editor`
 - Design next layer, likely wrapping, and validate whether it stays independent or needs fusion
-- Define virtual row and horizontal chunk records for browser-backed rendering
-- Build fixed-row virtualizer math and tests before wiring it into the editor
-- Validate native browser selection, caret, and hit-testing on mounted virtual rows
-- Validate vertical virtualization with browser scroll height and overscanned row windows
-- Validate horizontal chunking for long lines without full DOM materialization
-- Verify CSS Highlight API can paint visible syntax/selection ranges over mounted content
-- Benchmark 2D virtualization with long documents, 50K-character lines, dense decorations, and wide scroll windows
+- Extend 2D virtualization benchmarks to dense decorations and wider scroll-window scenarios
 
 ## Scheduling Validation
 

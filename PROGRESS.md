@@ -4,8 +4,9 @@ Last updated: 2026-04-28
 
 ## Current Status
 
-Phase 5 FoldMap validation is complete enough to make the display-transform call: proceed with the
-layered abstraction for the next validation layer, while still measuring future layers independently.
+Phase 6 browser-backed virtualization is implemented for fixed-height rows, long-line horizontal
+chunks, browser metric probes, native mounted-row geometry validation, syntax-driven fold toggles,
+FoldMap-fed virtual rows, and large-document/long-line benchmarks.
 
 Latest committed Phase 1 work:
 
@@ -154,7 +155,21 @@ Validation after Phase 3:
 - Added `bench:fold-map` for single-layer conversion overhead.
 - Made the go/no-go decision: **go** for a second validation layer, with future transforms still measured independently.
 
-### Phase 6: Additional Transforms
+### Phase 6: Browser Layout + 2D Virtualization
+
+- Added browser metric probes for row height and character width.
+- Added mounted row records with horizontal chunk records.
+- Added long-line horizontal chunking so 50K-character lines mount only viewport-adjacent chunks.
+- Kept CSS Highlight syntax and selection painting scoped to mounted rows and chunks.
+- Switched caret positioning to native `Range` geometry when mounted, with an estimated fallback.
+- Added mounted-row native geometry validation for caret, selection, and hit testing.
+- Added FoldMap-backed virtual row mapping without changing buffer offsets.
+- Added syntax-driven fold gutter controls and collapsed-row placeholders.
+- Added `Editor.setFoldMap` and `VirtualizedTextView.setFoldMap`.
+- Added browser and happy-dom tests for vertical virtualization, horizontal chunking, native geometry, selection/highlight behavior, and FoldMap integration.
+- Added `bench:virtualization` for 100K-line documents and 50K-character lines.
+
+### Phase 7: Additional Transforms
 
 - Conditional on Phase 5 succeeding.
 - Likely candidates: wrapping and decoration-related transforms.
@@ -166,7 +181,6 @@ Validation after Phase 3:
 - Main-thread versus worker layout split is still open.
 - Tree-sitter worker protocol, parser/query loading, memory policy, and worker scheduling are not designed yet.
 - Scheduler design is not started.
-- Viewport and virtualization design is not started.
 - Decoration system design is deferred.
 - Undo/redo stack wiring has a minimal snapshot+selection helper; worker transaction ownership remains open.
 - Collaboration is not a current goal, but storage choices preserve future compatibility.

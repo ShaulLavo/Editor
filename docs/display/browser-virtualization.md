@@ -85,9 +85,10 @@ For this codebase, translate those ideas to framework-free TypeScript.
 
 ## Acceptance Criteria
 
-- No independent text layout engine.
-- No full-document DOM for large files in the virtualized path.
-- Browser selection/caret hit testing remains authoritative.
-- CSS Highlight selection behavior matches the pre-virtualized editor.
-- 10K, 50K, and 100K-line files scroll without mounting offscreen rows.
-- Long lines do not force full horizontal paint work once horizontal chunking is enabled.
+- No independent text layout engine. Implemented for fixed-height rows and long-line chunks.
+- No full-document DOM for large files in the virtualized path. Implemented and benchmarked at 100K lines.
+- Browser selection/caret hit testing remains authoritative. Mounted-row validation runs in browser tests.
+- CSS Highlight selection behavior matches the pre-virtualized editor. Covered over mounted rows and chunks.
+- Fold controls are syntax-driven and collapsed regions render placeholders while FoldMap supplies visible rows.
+- 10K, 50K, and 100K-line files scroll without mounting offscreen rows. 100K-line benchmark covered.
+- Long lines do not force full horizontal paint work once horizontal chunking is enabled. 50K-character benchmark covered.

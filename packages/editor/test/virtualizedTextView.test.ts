@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VirtualizedTextView, type VirtualizedTextHighlightRegistry } from "../src";
+import {
+  createFoldMap,
+  createPieceTableSnapshot,
+  measureBrowserTextMetrics,
+  VirtualizedTextView,
+  type VirtualizedTextHighlightRegistry,
+} from "../src";
 
 const highlightsMap = new Map<string, Highlight>();
 let registrySets = 0;
@@ -124,6 +130,57 @@ describe("VirtualizedTextView", () => {
     expect(view.getState().contentWidth).toBe(widthAfterLongLine);
   });
 
+  it("mounts only horizontal chunks around the viewport for very long lines", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 0,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      longLineChunkSize: 1_000,
+      longLineChunkThreshold: 1_000,
+      horizontalOverscanColumns: 0,
+    });
+    mockClientWidth(view.scrollElement, 80);
+
+    view.setText("x".repeat(5_000));
+    view.setScrollMetrics(0, 20);
+    const firstChunk = view.getState().mountedRows[0]?.chunks[0];
+
+    expect(firstChunk?.localStart).toBe(0);
+    expect(firstChunk?.textNode.length).toBe(1_000);
+    expect(container.querySelector(".editor-virtualized-row")?.textContent?.length).toBe(1_000);
+
+    view.scrollElement.scrollLeft = 2_400 * view.getState().metrics.characterWidth;
+    view.setScrollMetrics(0, 20);
+    const scrolledChunk = view.getState().mountedRows[0]?.chunks[0];
+
+    expect(scrolledChunk?.localStart).toBeGreaterThan(0);
+    expect(scrolledChunk?.textNode.length).toBeLessThanOrEqual(1_000);
+  });
+
+  it("maps chunked DOM boundaries back to document offsets", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 0,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      longLineChunkSize: 1_000,
+      longLineChunkThreshold: 1_000,
+      horizontalOverscanColumns: 0,
+    });
+    mockClientWidth(view.scrollElement, 80);
+    view.scrollElement.scrollLeft = 2_400 * view.getState().metrics.characterWidth;
+    view.setText("x".repeat(5_000));
+    view.setScrollMetrics(0, 20);
+
+    const chunk = view.getState().mountedRows[0]?.chunks[0];
+
+    expect(chunk).toBeDefined();
+    expect(view.textOffsetFromDomBoundary(chunk!.textNode, 5)).toBe(chunk!.startOffset + 5);
+  });
+
   it("maps mounted DOM text boundaries back to document offsets", () => {
     view.setText("abc\ndef\nxyz");
     view.setScrollMetrics(0, 80);
@@ -184,6 +241,25 @@ describe("VirtualizedTextView", () => {
     expect(highlightsMap.get("test-selection")?.size).toBe(2);
   });
 
+  it("paints selections only across mounted horizontal chunks", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 0,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      longLineChunkSize: 1_000,
+      longLineChunkThreshold: 1_000,
+      horizontalOverscanColumns: 0,
+    });
+    mockClientWidth(view.scrollElement, 80);
+    view.setText("x".repeat(5_000));
+    view.setScrollMetrics(0, 20);
+    view.setSelection(0, 5_000);
+
+    expect(highlightsMap.get("test-selection")?.size).toBe(1);
+  });
+
   it("repaints stored selections when new rows mount", () => {
     view.setText(createLines(200));
     view.setScrollMetrics(0, 40);
@@ -204,6 +280,24 @@ describe("VirtualizedTextView", () => {
     const tokenHighlight = [...highlightsMap.keys()].find((name) => name.includes("-token-"));
     expect(tokenHighlight).toBeDefined();
     expect(highlightsMap.get(tokenHighlight!)?.size).toBe(1);
+  });
+
+  it("splits token highlights across intersecting mounted rows", () => {
+    view.setText("alpha\nbeta\ngamma");
+    view.setScrollMetrics(0, 80);
+    view.setTokens([{ start: 2, end: 10, style: { color: "#ff0000" } }]);
+
+    const tokenHighlightName = tokenHighlightNames()[0]!;
+    const ranges = [...highlightsMap.get(tokenHighlightName)!];
+    const rows = view.getState().mountedRows;
+
+    expect(ranges).toHaveLength(2);
+    expect(ranges[0]!.startContainer).toBe(rows[0]!.textNode);
+    expect(ranges[0]!.startOffset).toBe(2);
+    expect(ranges[0]!.endOffset).toBe(5);
+    expect(ranges[1]!.startContainer).toBe(rows[1]!.textNode);
+    expect(ranges[1]!.startOffset).toBe(0);
+    expect(ranges[1]!.endOffset).toBe(4);
   });
 
   it("skips token highlight work when same-line edits only move existing token ranges", () => {
@@ -300,6 +394,58 @@ describe("VirtualizedTextView", () => {
     expect(registrySets).toBe(setCount);
     expect(registryDeletes).toBe(deleteCount);
   });
+
+  it("uses FoldMap to mount folded virtual rows without changing buffer offsets", () => {
+    const text = "a\nb\nc\nd";
+    const snapshot = createPieceTableSnapshot(text);
+    const map = createFoldMap(snapshot, [
+      { startIndex: 2, endIndex: 4, startLine: 1, endLine: 2, type: "block" },
+    ]);
+
+    view.setText(text);
+    view.setFoldMap(map);
+    view.setScrollMetrics(0, 80);
+
+    const rows = view.getState().mountedRows;
+    expect(view.getState().foldMapActive).toBe(true);
+    expect(view.getState().totalHeight).toBe(60);
+    expect(rows.map((row) => row.index)).toEqual([0, 1, 2]);
+    expect(rows.map((row) => row.bufferRow)).toEqual([0, 1, 3]);
+    expect(rows.map((row) => row.text)).toEqual(["a", "b", "d"]);
+
+    const hiddenOffsetRange = view.createRange(4, 4);
+    expect(hiddenOffsetRange?.startContainer).toBe(rows[1]!.textNode);
+    expect(hiddenOffsetRange?.startOffset).toBe(1);
+  });
+
+  it("validates native geometry ranges over mounted rows", () => {
+    view.setText("abc\ndef");
+    view.setScrollMetrics(0, 40);
+
+    expect(view.validateMountedNativeGeometry()).toMatchObject({
+      caretChecks: 2,
+      selectionChecks: 2,
+      failures: [],
+      ok: true,
+    });
+  });
+
+  it("measures browser row and character metrics from a DOM probe", () => {
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+      if (this.classList.contains("editor-virtualized-metric-probe")) {
+        return mockRect(0, 0, 160, 24);
+      }
+
+      return original.call(this);
+    };
+
+    const metrics = measureBrowserTextMetrics(container);
+    HTMLElement.prototype.getBoundingClientRect = original;
+
+    expect(metrics.rowHeight).toBe(24);
+    expect(metrics.characterWidth).toBe(10);
+  });
 });
 
 function createLines(count: number): string {
@@ -336,4 +482,25 @@ function mockViewport(element: HTMLElement, width: number, height: number): void
       toJSON: () => ({}),
     }),
   });
+}
+
+function mockClientWidth(element: HTMLElement, width: number): void {
+  Object.defineProperty(element, "clientWidth", {
+    configurable: true,
+    value: width,
+  });
+}
+
+function mockRect(left: number, top: number, width: number, height: number): DOMRect {
+  return {
+    bottom: top + height,
+    height,
+    left,
+    right: left + width,
+    top,
+    width,
+    x: left,
+    y: top,
+    toJSON: () => ({}),
+  } as DOMRect;
 }

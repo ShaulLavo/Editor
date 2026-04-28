@@ -89,6 +89,10 @@ Make visible-range rendering first-class without building a parallel text layout
 layout is the visual source of truth; the editor virtualizes the rows and horizontal chunks it asks
 the browser to lay out.
 
+Status: initial implementation complete for fixed-height rows, browser metric probes, mounted-row
+native geometry validation, long-line horizontal chunking, syntax-driven fold toggles, FoldMap-fed
+virtual rows, CSS Highlight painting over mounted chunks, and large-document/long-line benchmarks.
+
 See also: [Browser Layout + 2D Virtualizer Plan](../display/browser-virtualization.md).
 Viewport and mounted-highlight work is frame-coalesced on the main thread. Worker requests for
 visible rows/chunks supersede offscreen and stale requests. See [Scheduling](scheduling.md).
