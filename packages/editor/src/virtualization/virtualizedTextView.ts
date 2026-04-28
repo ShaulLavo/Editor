@@ -110,7 +110,7 @@ export class VirtualizedTextView {
 
     this.highlightRegistry = options.highlightRegistry ?? getDefaultHighlightRegistry();
     this.selectionHighlightName = options.selectionHighlightName ?? DEFAULT_SELECTION_HIGHLIGHT;
-    this.selectionHighlight = createHighlight();
+    this.selectionHighlight = new Highlight();
     this.styleEl = container.ownerDocument.createElement("style");
     this.scrollElement = createScrollElement(container, options.className);
     this.inputElement = createInputElement(container);
@@ -635,7 +635,7 @@ export class VirtualizedTextView {
     if (existing) return existing;
 
     const name = `${this.selectionHighlightName}-token-${this.nextTokenGroupId++}`;
-    const highlight = createHighlight();
+    const highlight = new Highlight();
     if (!highlight) return null;
 
     const group = { name, highlight, style };
@@ -985,11 +985,6 @@ function pointVerticalDirection(clientY: number, top: number, bottom: number): n
 function getDefaultHighlightRegistry(): HighlightRegistry | null {
   const css = globalThis.CSS as { highlights?: HighlightRegistry } | undefined;
   return css?.highlights ?? null;
-}
-
-function createHighlight(): Highlight | null {
-  if (typeof Highlight === "undefined") return null;
-  return new Highlight();
 }
 
 function rangesIntersect(startA: number, endA: number, startB: number, endB: number): boolean {
