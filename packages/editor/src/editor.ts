@@ -1242,7 +1242,7 @@ export class Editor {
       return;
     }
 
-    const range = this.view.createRange(start, end);
+    const range = this.view.createRange(start, end, { scrollIntoView: false });
     const domSelection = window.getSelection();
     domSelection?.removeAllRanges();
     if (range) domSelection?.addRange(range);

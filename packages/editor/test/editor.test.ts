@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { detectPlatform } from "@tanstack/hotkeys";
 import {
   createDocumentSession,
@@ -442,6 +442,23 @@ describe("Editor", () => {
       expect(document.activeElement).toBe(editorInput());
     });
 
+    it("preserves the viewport when focusing the real input surface", () => {
+      const root = editorRoot();
+      const session = createDocumentSession("abc");
+      editor.attachSession(session);
+      root.scrollTop = 120;
+      root.scrollLeft = 16;
+      vi.spyOn(editorInput(), "setSelectionRange").mockImplementation(() => {
+        root.scrollTop = 0;
+        root.scrollLeft = 0;
+      });
+
+      editor.focus();
+
+      expect(root.scrollTop).toBe(120);
+      expect(root.scrollLeft).toBe(16);
+    });
+
     it("routes text input through a document session", () => {
       const session = createDocumentSession("abc");
       editor.attachSession(session);
@@ -601,6 +618,17 @@ describe("Editor", () => {
 
       expect(copy.getText()).toBe("abc");
       expect(copy.event.defaultPrevented).toBe(true);
+    });
+
+    it("opens long documents without revealing the initial end selection", () => {
+      const root = editorRoot();
+      const text = Array.from({ length: 80 }, (_value, index) => `line ${index}`).join("\n");
+      mockEditorViewport(root, 80, 40, 2_000);
+
+      editor.openDocument({ text });
+
+      expect(editor.getState().cursor).toEqual({ row: 79, column: 7 });
+      expect(root.scrollTop).toBe(0);
     });
 
     it("scrolls to the bottom of pasted text", () => {

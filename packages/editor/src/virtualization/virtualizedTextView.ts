@@ -100,6 +100,10 @@ export type {
 
 type RevealBlock = "nearest" | "end";
 
+type CreateRangeOptions = {
+  readonly scrollIntoView?: boolean;
+};
+
 type TokenRenderEntry = {
   readonly start: number;
   readonly end: number;
@@ -317,10 +321,14 @@ export class VirtualizedTextView {
   public focusInput(): void {
     if (this.inputElement.readOnly) return;
 
+    const scrollTop = this.scrollElement.scrollTop;
+    const scrollLeft = this.scrollElement.scrollLeft;
+    this.positionInputInViewport(scrollTop, scrollLeft);
     this.inputElement.value = "";
     this.inputElement.focus({ preventScroll: true });
     this.inputElement.setSelectionRange(0, 0);
     this.inputElement.ownerDocument.getSelection()?.removeAllRanges();
+    this.restoreScrollPosition(scrollTop, scrollLeft);
   }
 
   public setScrollMetrics(scrollTop: number, viewportHeight: number): void {
@@ -401,8 +409,12 @@ export class VirtualizedTextView {
     return Math.max(1, Math.floor(this.scrollElement.clientHeight / this.getRowHeight()) - 1);
   }
 
-  public createRange(startOffset: number, endOffset: number): Range | null {
-    this.ensureOffsetMounted(startOffset);
+  public createRange(
+    startOffset: number,
+    endOffset: number,
+    options: CreateRangeOptions = {},
+  ): Range | null {
+    if (options.scrollIntoView !== false) this.ensureOffsetMounted(startOffset);
 
     const start = this.resolveMountedOffset(startOffset);
     const end = this.resolveMountedOffset(endOffset);
@@ -1150,6 +1162,23 @@ export class VirtualizedTextView {
     if (targetLeft >= this.scrollElement.scrollLeft && targetLeft <= viewportRight) return;
 
     this.scrollElement.scrollLeft = Math.max(0, targetLeft - this.gutterWidth());
+  }
+
+  private positionInputInViewport(scrollTop: number, scrollLeft: number): void {
+    setStyleValue(this.inputElement, "top", `${scrollTop}px`);
+    setStyleValue(this.inputElement, "left", `${scrollLeft}px`);
+  }
+
+  private restoreScrollPosition(scrollTop: number, scrollLeft: number): void {
+    if (this.scrollElement.scrollTop === scrollTop && this.scrollElement.scrollLeft === scrollLeft)
+      return;
+
+    this.scrollElement.scrollTop = scrollTop;
+    this.scrollElement.scrollLeft = scrollLeft;
+    this.virtualizer.setScrollMetrics({
+      scrollTop: this.scrollElement.scrollTop,
+      viewportHeight: this.scrollElement.clientHeight,
+    });
   }
 
   private scrollOffsetIntoView(offset: number): void {

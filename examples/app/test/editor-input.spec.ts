@@ -7,6 +7,7 @@ const coreEntry = `/@fs/${fileURLToPath(
 
 type TestWindow = Window & {
   __editor?: {
+    focus(): void;
     getText(): string;
   };
   __editorInputEvents?: string[];
@@ -159,4 +160,39 @@ test("focuses the editor for typing after selecting a file", async ({ page }) =>
   await page.keyboard.type("XYZ");
 
   await expect(page.locator(".editor-virtualized")).toContainText("abcXYZ");
+});
+
+test("preserves scroll when refocusing a scrolled editor", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(async (entry) => {
+    const { Editor } = await import(entry);
+    const app = document.querySelector("#app");
+    if (!app) throw new Error("Missing app root");
+
+    app.innerHTML = [
+      '<button id="outside">Outside</button>',
+      '<div id="host" style="display:flex;height:160px;width:700px"></div>',
+    ].join("");
+    const host = document.querySelector("#host");
+    if (!(host instanceof HTMLElement)) throw new Error("Missing editor host");
+
+    const editor = new Editor(host);
+    const text = Array.from({ length: 200 }, (_value, index) => `line ${index}`).join("\n");
+    editor.openDocument({ documentId: "note.txt", text });
+    (window as TestWindow).__editor = editor;
+
+    const root = document.querySelector(".editor-virtualized");
+    if (!(root instanceof HTMLElement)) throw new Error("Missing editor root");
+    root.scrollTop = 900;
+  }, coreEntry);
+
+  await page.locator("#outside").focus();
+  await page.evaluate(() => {
+    (window as TestWindow).__editor?.focus();
+  });
+  await page.waitForTimeout(50);
+
+  await expect
+    .poll(() => page.evaluate(() => document.querySelector(".editor-virtualized")?.scrollTop))
+    .toBe(900);
 });
