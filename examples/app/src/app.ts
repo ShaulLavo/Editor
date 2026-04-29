@@ -161,7 +161,7 @@ export function mountApp(): void {
       html(),
       css(),
       json(),
-      createShikiHighlighterPlugin({ theme: "github-dark" }),
+      // createShikiHighlighterPlugin({ theme: "github-dark" }),
       createMinimapPlugin(),
     ],
     onChange: (state) => {
