@@ -1,7 +1,8 @@
 import type { PieceTableSnapshot } from "../../pieceTable/pieceTableTypes";
 import type { TextEdit } from "../../tokens";
+import type { TreeSitterLanguageDescriptor, TreeSitterLanguageId } from "./registry";
 
-export type TreeSitterLanguageId = "javascript" | "typescript" | "tsx" | "html" | "css" | "json";
+export type { TreeSitterLanguageId } from "./registry";
 
 export type TreeSitterCapture = {
   readonly startIndex: number;
@@ -74,6 +75,11 @@ export type TreeSitterInitRequest = {
   readonly type: "init";
 };
 
+export type TreeSitterRegisterLanguagesRequest = {
+  readonly type: "registerLanguages";
+  readonly languages: readonly TreeSitterLanguageDescriptor[];
+};
+
 export type TreeSitterParseRequest = {
   readonly type: "parse";
   readonly documentId: string;
@@ -134,6 +140,7 @@ export type TreeSitterDisposeRequest = {
 
 export type TreeSitterWorkerRequestPayload =
   | TreeSitterInitRequest
+  | TreeSitterRegisterLanguagesRequest
   | TreeSitterParseRequest
   | TreeSitterEditRequest
   | TreeSitterSelectionRequest

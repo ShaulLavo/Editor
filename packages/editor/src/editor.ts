@@ -27,8 +27,11 @@ import { appendTiming, eventStartMs, mergeChangeTimings, nowMs } from "./editor/
 import { projectTokensThroughEdit } from "./editor/tokenProjection";
 import type { EditorCommandContext, EditorCommandId } from "./editor/commands";
 import type {
+  EditorEditInput,
+  EditorEditOptions,
   EditorOptions,
   EditorOpenDocumentOptions,
+  EditorSetTextOptions,
   EditorSessionOptions,
   EditorState,
   EditorSyntaxSessionFactory,
@@ -52,7 +55,6 @@ import {
 import { SelectionGoal, resolveSelection, type ResolvedSelection } from "./selections";
 import {
   createEditorSyntaxSession,
-  inferEditorSyntaxLanguage,
   type EditorSyntaxLanguageId,
   type EditorSyntaxResult,
   type EditorSyntaxSession,
@@ -68,8 +70,13 @@ import { computeLineStarts } from "./virtualization/virtualizedTextViewHelpers";
 
 export type {
   EditorChangeHandler,
+  EditorEditHistoryMode,
+  EditorEditInput,
+  EditorEditOptions,
+  EditorEditSelection,
   EditorOpenDocumentOptions,
   EditorOptions,
+  EditorSetTextOptions,
   EditorSessionChangeHandler,
   EditorSessionOptions,
   EditorState,
@@ -191,6 +198,7 @@ export class Editor {
       this.createViewContributionContext(container),
     );
     this.installEditingHandlers();
+    this.initializeDefaultText();
   }
 
   setContent(text: string): void {
@@ -225,10 +233,48 @@ export class Editor {
     this.foldState.setSyntaxFolds(folds);
   }
 
-  openDocument(document: EditorOpenDocumentOptions): void {
-    const documentVersion = this.resetOwnedDocument(document);
+  setText(text: string, options: EditorSetTextOptions = {}): void {
+    const documentVersion = this.resetOwnedDocument(
+      { text, languageId: options.languageId },
+      {
+        documentId: null,
+        persistentIdentity: false,
+      },
+    );
     this.notifyChange(null);
     this.refreshSyntax(documentVersion, null);
+  }
+
+  edit(editOrEdits: EditorEditInput, options: EditorEditOptions = {}): void {
+    this.ensureAnonymousSession();
+    if (!this.session) return;
+
+    const edits = normalizeEditorEditInput(editOrEdits);
+    const change = this.session.applyEdits(edits, options);
+    if (change.kind === "none") return;
+
+    this.applySessionChange(change, "editor.edit", nowMs());
+  }
+
+  openDocument(document: EditorOpenDocumentOptions): void {
+    const documentVersion = this.resetOwnedDocument(document, {
+      documentId: document.documentId ?? null,
+      persistentIdentity: true,
+    });
+    this.notifyChange(null);
+    this.refreshSyntax(documentVersion, null);
+  }
+
+  private ensureAnonymousSession(): void {
+    if (this.session) return;
+
+    this.resetOwnedDocument(
+      { text: "", languageId: null },
+      {
+        documentId: null,
+        persistentIdentity: false,
+      },
+    );
   }
 
   clearDocument(): void {
@@ -318,31 +364,34 @@ export class Editor {
     this.view.dispose();
   }
 
-  private resetOwnedDocument(document: EditorOpenDocumentOptions): number {
+  private resetOwnedDocument(
+    document: EditorOpenDocumentOptions,
+    options: { readonly documentId: string | null; readonly persistentIdentity: boolean },
+  ): number {
     this.documentVersion += 1;
     const documentVersion = this.documentVersion;
-    this.documentId = document.documentId ?? null;
-    this.languageId =
-      document.languageId === undefined
-        ? inferEditorSyntaxLanguage(document.documentId)
-        : document.languageId;
+    this.documentId =
+      options.documentId ??
+      (options.persistentIdentity ? this.generatedDocumentId(documentVersion) : null);
+    this.languageId = document.languageId ?? null;
     this.syntaxStatus = this.languageId ? "loading" : "plain";
     this.disposeSyntaxSession();
     this.disposeHighlighterSession();
 
-    const documentId = this.documentId ?? `${this.highlightPrefix}-${documentVersion}`;
+    const internalDocumentId = this.documentId ?? this.generatedOpenSessionId(documentVersion);
     this.session = createDocumentSession(document.text);
     this.sessionOptions = {};
     this.highlighterSession = this.pluginHost.createHighlighterSession({
-      documentId,
+      documentId: internalDocumentId,
       languageId: this.languageId,
       text: document.text,
       snapshot: this.session.getSnapshot(),
     });
     this.syntaxSession = this.languageId
       ? editorSyntaxSessionFactory({
-          documentId,
+          documentId: internalDocumentId,
           languageId: this.languageId,
+          languageResolver: this.pluginHost,
           includeHighlights: !this.highlighterSession,
           text: document.text,
           snapshot: this.session.getSnapshot(),
@@ -353,6 +402,26 @@ export class Editor {
     this.syncDomSelection();
     this.notifyViewContributions("document", null);
     return documentVersion;
+  }
+
+  private initializeDefaultText(): void {
+    if (this.options.defaultText === undefined) return;
+
+    this.resetOwnedDocument(
+      { text: this.options.defaultText, languageId: null },
+      {
+        documentId: null,
+        persistentIdentity: false,
+      },
+    );
+  }
+
+  private generatedDocumentId(documentVersion: number): string {
+    return `${this.highlightPrefix}-document-${documentVersion}`;
+  }
+
+  private generatedOpenSessionId(documentVersion: number): string {
+    return `${this.highlightPrefix}-open-${documentVersion}`;
   }
 
   private disposeSyntaxSession(): void {
@@ -387,6 +456,8 @@ export class Editor {
       scrollWidth: viewState.scrollWidth,
       clientHeight: viewState.viewportHeight,
       clientWidth: viewState.viewportWidth,
+      borderBoxHeight: viewState.borderBoxHeight,
+      borderBoxWidth: viewState.borderBoxWidth,
       visibleRange: viewState.visibleRange,
     };
 
@@ -1319,6 +1390,15 @@ function viewContributionKindForChange(
 ): EditorViewContributionUpdateKind {
   if (change.kind === "selection") return "selection";
   return "content";
+}
+
+function normalizeEditorEditInput(editOrEdits: EditorEditInput): readonly TextEdit[] {
+  if (isEditorEditList(editOrEdits)) return editOrEdits;
+  return [editOrEdits];
+}
+
+function isEditorEditList(editOrEdits: EditorEditInput): editOrEdits is readonly TextEdit[] {
+  return Array.isArray(editOrEdits);
 }
 
 function codePointOffset(text: string, offset: number, direction: "left" | "right"): number {

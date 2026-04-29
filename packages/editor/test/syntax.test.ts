@@ -1,32 +1,22 @@
 import { describe, expect, it } from "vitest";
 
-import { applyBatchToPieceTable, createPieceTableSnapshot } from "../src";
 import {
-  inferEditorSyntaxLanguage,
+  applyBatchToPieceTable,
+  createPieceTableSnapshot,
+  createTreeSitterLanguagePlugin,
+  EditorPluginHost,
+  TreeSitterLanguageRegistry,
+  type TreeSitterLanguageContribution,
+} from "../src";
+import {
   resolveTreeSitterLanguageAlias,
-  TREE_SITTER_LANGUAGE_DESCRIPTORS,
+  resolveTreeSitterLanguageContribution,
   styleForTreeSitterCapture,
   treeSitterCapturesToEditorTokens,
 } from "../src/syntax";
 import { createTextDiffEdit, createTreeSitterEditPayload } from "../src/syntax/session";
 
 describe("Tree-sitter syntax capture conversion", () => {
-  it("infers supported language ids from document ids", () => {
-    expect(inferEditorSyntaxLanguage("file.ts")).toBe("typescript");
-    expect(inferEditorSyntaxLanguage("component.tsx")).toBe("tsx");
-    expect(inferEditorSyntaxLanguage("index.js")).toBe("javascript");
-    expect(inferEditorSyntaxLanguage("module.mjs")).toBe("javascript");
-    expect(inferEditorSyntaxLanguage("config.cts")).toBe("typescript");
-    expect(inferEditorSyntaxLanguage("index.html")).toBe("html");
-    expect(inferEditorSyntaxLanguage("style.css")).toBe("css");
-    expect(inferEditorSyntaxLanguage("data.json")).toBe("json");
-    expect(inferEditorSyntaxLanguage("image.png")).toBeNull();
-    expect(inferEditorSyntaxLanguage("Makefile")).toBeNull();
-    expect(inferEditorSyntaxLanguage("COMPONENT.TSX")).toBe("tsx");
-    expect(inferEditorSyntaxLanguage("file.test.ts")).toBe("typescript");
-    expect(inferEditorSyntaxLanguage(undefined)).toBeNull();
-  });
-
   it("maps known capture names to editor token styles", () => {
     expect(styleForTreeSitterCapture("keyword.declaration")).toEqual({
       color: "var(--editor-syntax-keyword-declaration)",
@@ -37,22 +27,76 @@ describe("Tree-sitter syntax capture conversion", () => {
     expect(styleForTreeSitterCapture("unknown.scope")).toBeNull();
   });
 
-  it("exposes registry descriptors for supported parser and query assets", () => {
-    expect(TREE_SITTER_LANGUAGE_DESCRIPTORS.map((descriptor) => descriptor.id)).toEqual([
-      "javascript",
-      "typescript",
-      "tsx",
-      "html",
-      "css",
-      "json",
+  it("resolves registered aliases and descriptors", async () => {
+    const registry = createTestLanguageRegistry();
+    const descriptor = await registry.resolveTreeSitterLanguage("ts");
+
+    expect(descriptor).toMatchObject({
+      id: "typescript",
+      wasmUrl: "/typescript.wasm",
+      extensions: [".ts", ".cts", ".mts", ".tsx"],
+      aliases: ["typescript", "ts", "tsx"],
+      highlightQuerySource: "(identifier) @variable",
+    });
+    expect(resolveTreeSitterLanguageAlias("js", registry)).toBe("javascript");
+    expect(resolveTreeSitterLanguageAlias("css", registry)).toBeNull();
+    expect(resolveTreeSitterLanguageAlias("sql", registry)).toBeNull();
+  });
+
+  it("supports async language asset loaders", async () => {
+    const descriptor = await resolveTreeSitterLanguageContribution({
+      id: "rust",
+      extensions: ["rs"],
+      aliases: ["rust"],
+      load: async () => ({
+        wasmUrl: "/rust.wasm",
+        highlightQuerySource: "(identifier) @variable",
+      }),
+    });
+
+    expect(descriptor).toMatchObject({
+      id: "rust",
+      extensions: [".rs"],
+      aliases: ["rust"],
+      wasmUrl: "/rust.wasm",
+    });
+  });
+
+  it("rejects duplicate language ids unless replacement is explicit", async () => {
+    const registry = new TreeSitterLanguageRegistry();
+    const original = registry.registerLanguage(testLanguage("typescript", [".ts"]));
+
+    expect(() => registry.registerLanguage(testLanguage("typescript", [".tsx"]))).toThrow(
+      /already registered/,
+    );
+
+    const replacement = registry.registerLanguage(testLanguage("typescript", [".mts"]), {
+      replace: true,
+    });
+    await expect(registry.resolveTreeSitterLanguage("typescript")).resolves.toMatchObject({
+      extensions: [".mts"],
+    });
+
+    replacement.dispose();
+    await expect(registry.resolveTreeSitterLanguage("typescript")).resolves.toMatchObject({
+      extensions: [".ts"],
+    });
+
+    original.dispose();
+    await expect(registry.resolveTreeSitterLanguage("typescript")).resolves.toBeNull();
+  });
+
+  it("registers language contributions through editor plugins", async () => {
+    const host = new EditorPluginHost([
+      createTreeSitterLanguagePlugin([testLanguage("sql", [".sql"])], { name: "sql-language" }),
     ]);
-    for (const descriptor of TREE_SITTER_LANGUAGE_DESCRIPTORS) {
-      expect(descriptor.wasmUrl).toContain(".wasm");
-      expect(descriptor.highlightQuerySource.length).toBeGreaterThan(0);
-    }
-    expect(resolveTreeSitterLanguageAlias("js")).toBe("javascript");
-    expect(resolveTreeSitterLanguageAlias("css")).toBe("css");
-    expect(resolveTreeSitterLanguageAlias("sql")).toBeNull();
+
+    await expect(host.resolveTreeSitterLanguage("sql")).resolves.toMatchObject({
+      id: "sql",
+      wasmUrl: "/sql.wasm",
+    });
+    host.dispose();
+    await expect(host.resolveTreeSitterLanguage("sql")).resolves.toBeNull();
   });
 
   it("converts non-empty captures to editor tokens", () => {
@@ -167,3 +211,28 @@ describe("Tree-sitter syntax capture conversion", () => {
     ]);
   });
 });
+
+function createTestLanguageRegistry(): TreeSitterLanguageRegistry {
+  const registry = new TreeSitterLanguageRegistry();
+  registry.registerLanguage(
+    testLanguage("javascript", [".js", ".cjs", ".jsx", ".mjs"], ["javascript", "js", "jsx"]),
+  );
+  registry.registerLanguage(
+    testLanguage("typescript", [".ts", ".cts", ".mts", ".tsx"], ["typescript", "ts", "tsx"]),
+  );
+  return registry;
+}
+
+function testLanguage(
+  id: string,
+  extensions: readonly string[],
+  aliases: readonly string[] = [id],
+): TreeSitterLanguageContribution {
+  return {
+    id,
+    extensions,
+    aliases,
+    wasmUrl: `/${id}.wasm`,
+    highlightQuerySource: "(identifier) @variable",
+  };
+}

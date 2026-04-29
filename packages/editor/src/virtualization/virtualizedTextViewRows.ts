@@ -843,6 +843,8 @@ export function syncVirtualizerMetricsFromScrollElement(view: VirtualizedTextVie
   view.virtualizer.setScrollMetrics({
     scrollTop: view.scrollElement.scrollTop,
     scrollLeft: view.scrollElement.scrollLeft,
+    borderBoxHeight: snapshot.borderBoxHeight,
+    borderBoxWidth: snapshot.borderBoxWidth,
     viewportHeight: snapshot.viewportHeight,
     viewportWidth: snapshot.viewportWidth,
   });

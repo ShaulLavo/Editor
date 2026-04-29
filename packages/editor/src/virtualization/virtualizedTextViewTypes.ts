@@ -69,6 +69,8 @@ export type VirtualizedTextViewState = {
   readonly scrollLeft: number;
   readonly scrollTop: number;
   readonly scrollWidth: number;
+  readonly borderBoxHeight: number;
+  readonly borderBoxWidth: number;
   readonly totalHeight: number;
   readonly viewportHeight: number;
   readonly viewportWidth: number;

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { detectPlatform } from "@tanstack/hotkeys";
 import {
   createDocumentSession,
+  createTreeSitterLanguagePlugin,
   Editor,
   resetEditorInstanceCount,
   resolveSelection,
@@ -116,6 +117,21 @@ function createViewContributionPlugin(events: ViewContributionEvent[]): EditorPl
         }),
       }),
   };
+}
+
+function createTestLanguagePlugin(): EditorPlugin {
+  return createTreeSitterLanguagePlugin([
+    {
+      id: "typescript",
+      extensions: [".ts"],
+      aliases: ["typescript", "ts"],
+      wasmUrl: "/typescript.wasm",
+    },
+  ]);
+}
+
+function withTestLanguagePlugins(...plugins: readonly EditorPlugin[]): readonly EditorPlugin[] {
+  return [createTestLanguagePlugin(), ...plugins];
 }
 
 type ViewContributionEvent = {
@@ -338,7 +354,7 @@ describe("Editor", () => {
     resetEditorInstanceCount();
     container = document.createElement("div");
     document.body.appendChild(container);
-    editor = new Editor(container);
+    editor = new Editor(container, { plugins: withTestLanguagePlugins() });
   });
 
   afterEach(() => {
@@ -346,6 +362,50 @@ describe("Editor", () => {
     container.remove();
     setHighlightRegistry(undefined);
     setEditorSyntaxSessionFactory(undefined);
+  });
+
+  describe("constructor", () => {
+    it("creates anonymous initial text without notifying a change", () => {
+      const states: EditorState[] = [];
+      editor.dispose();
+
+      editor = new Editor(container, {
+        defaultText: "abc",
+        onChange: (state) => states.push(state),
+      });
+
+      expect(editor.getText()).toBe("abc");
+      expect(editorRoot().textContent).toBe("abc");
+      expect(editor.getState()).toMatchObject({
+        documentId: null,
+        languageId: null,
+        length: 3,
+        canUndo: false,
+        canRedo: false,
+      });
+      expect(states).toHaveLength(0);
+    });
+
+    it("treats empty defaultText as an editable anonymous buffer", () => {
+      editor.dispose();
+      editor = new Editor(container, { defaultText: "" });
+
+      editorRoot().dispatchEvent(
+        new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          data: "x",
+          inputType: "insertText",
+        }),
+      );
+
+      expect(editor.getText()).toBe("x");
+      expect(editor.getState()).toMatchObject({
+        documentId: null,
+        length: 1,
+        canUndo: true,
+      });
+    });
   });
 
   describe("setContent", () => {
@@ -686,7 +746,7 @@ describe("Editor", () => {
     });
 
     it("copies the full document after Mod+A", () => {
-      editor.openDocument({ text: "abc" });
+      editor.setText("abc");
 
       dispatchEditorKey("a", primaryModifier());
       const copy = createCopyEvent();
@@ -701,7 +761,7 @@ describe("Editor", () => {
       const text = Array.from({ length: 80 }, (_value, index) => `line ${index}`).join("\n");
       mockEditorViewport(root, 80, 40, 2_000);
 
-      editor.openDocument({ text });
+      editor.setText(text);
 
       expect(editor.getState().cursor).toEqual({ row: 79, column: 7 });
       expect(root.scrollTop).toBe(0);
@@ -709,7 +769,7 @@ describe("Editor", () => {
 
     it("scrolls to the bottom of pasted text", () => {
       const pasted = Array.from({ length: 8 }, (_value, index) => `line ${index}`).join("\n");
-      editor.openDocument({ text: "" });
+      editor.setText("");
       mockEditorViewport(editorRoot(), 80, 40);
       editor.focus();
 
@@ -776,7 +836,7 @@ describe("Editor", () => {
     it("can disable default keymap bindings", () => {
       editor.dispose();
       editor = new Editor(container, { keymap: { enabled: false } });
-      editor.openDocument({ text: "abc" });
+      editor.setText("abc");
 
       dispatchEditorKey("ArrowLeft");
 
@@ -1321,6 +1381,20 @@ describe("Editor", () => {
   });
 
   describe("openDocument", () => {
+    it("sets anonymous text buffers without document identity", () => {
+      editor.setText("abc", { languageId: "typescript" });
+
+      expect(editor.getText()).toBe("abc");
+      expect(editorRoot().textContent).toBe("abc");
+      expect(editor.getState()).toMatchObject({
+        documentId: null,
+        languageId: "typescript",
+        length: 3,
+        canUndo: false,
+        canRedo: false,
+      });
+    });
+
     it("opens editable documents and exposes editor state", () => {
       editor.openDocument({ documentId: "note.txt", text: "abc" });
 
@@ -1398,14 +1472,112 @@ describe("Editor", () => {
       expect(highlightsMap.size).toBe(0);
     });
 
-    it("infers language and applies initial syntax highlights", async () => {
+    it("applies focused programmatic edits", () => {
+      editor.setText("abcdef");
+
+      editor.edit({ from: 1, to: 4, text: "X" });
+
+      expect(editor.getText()).toBe("aXef");
+      expect(editor.getState()).toMatchObject({
+        canUndo: true,
+        cursor: { row: 0, column: 4 },
+      });
+    });
+
+    it("creates an anonymous buffer before editing when needed", () => {
+      editor.edit({ from: 0, to: 0, text: "hi" });
+
+      expect(editor.getText()).toBe("hi");
+      expect(editor.getState()).toMatchObject({
+        documentId: null,
+        length: 2,
+        canUndo: true,
+      });
+    });
+
+    it("applies batch edits as one editor change and one undo step", () => {
+      const changes: DocumentSessionChange[] = [];
+      editor.dispose();
+      editor = new Editor(container, {
+        onChange: (_state, change) => {
+          if (change) changes.push(change);
+        },
+      });
+      editor.setText("abcd");
+
+      editor.edit([
+        { from: 3, to: 3, text: "Y" },
+        { from: 1, to: 2, text: "X" },
+      ]);
+
+      expect(editor.getText()).toBe("aXcYd");
+      expect(changes).toHaveLength(1);
+      expect(changes[0]?.edits).toEqual([
+        { from: 1, to: 2, text: "X" },
+        { from: 3, to: 3, text: "Y" },
+      ]);
+
+      editor.dispatchCommand("undo");
+      expect(editor.getText()).toBe("abcd");
+    });
+
+    it("skips undo history for configured programmatic edits", () => {
+      editor.setText("abc");
+
+      editor.edit({ from: 3, to: 3, text: "!" }, { history: "skip" });
+
+      expect(editor.getText()).toBe("abc!");
+      expect(editor.getState().canUndo).toBe(false);
+    });
+
+    it("does not clear existing redo history for skipped programmatic edits", () => {
+      editor.setText("abc");
+      editor.edit({ from: 3, to: 3, text: "!" });
+      editor.dispatchCommand("undo");
+
+      expect(editor.getState().canRedo).toBe(true);
+      editor.edit({ from: 3, to: 3, text: "?" }, { history: "skip" });
+
+      expect(editor.getText()).toBe("abc?");
+      expect(editor.getState().canRedo).toBe(true);
+    });
+
+    it("rejects invalid and overlapping programmatic edits without changing text", () => {
+      editor.setText("abcd");
+
+      expect(() => {
+        editor.edit([
+          { from: 1, to: 3, text: "X" },
+          { from: 2, to: 4, text: "Y" },
+        ]);
+      }).toThrow(RangeError);
+      expect(() => {
+        editor.edit({ from: 10, to: 10, text: "!" });
+      }).toThrow(RangeError);
+      expect(editor.getText()).toBe("abcd");
+    });
+
+    it("supports explicit post-edit selections", () => {
+      editor.setText("abcdef");
+
+      editor.edit({ from: 0, to: 3, text: "let" }, { selection: { anchor: 1, head: 3 } });
+
+      expect(editor.getState().cursor).toEqual({ row: 0, column: 3 });
+      expect(window.getSelection()?.toString()).toBe("et");
+    });
+
+    it("uses explicit language ids for syntax highlights", async () => {
       const created: EditorSyntaxSessionOptions[] = [];
       setEditorSyntaxSessionFactory((options) => {
         created.push(options);
         return createMockSyntaxSession();
       });
 
-      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
       await flushMicrotasks();
 
       expect(created).toEqual([
@@ -1420,6 +1592,24 @@ describe("Editor", () => {
       expect(highlightsMap.size).toBe(1);
     });
 
+    it("does not infer language from document ids", async () => {
+      const created: EditorSyntaxSessionOptions[] = [];
+      setEditorSyntaxSessionFactory((options) => {
+        created.push(options);
+        return createMockSyntaxSession();
+      });
+
+      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      await flushMicrotasks();
+
+      expect(created).toEqual([]);
+      expect(editor.getState()).toMatchObject({
+        languageId: null,
+        syntaxStatus: "plain",
+      });
+      expect(highlightsMap.size).toBe(0);
+    });
+
     it("uses plugin highlights instead of Tree-sitter tokens", async () => {
       const created: EditorSyntaxSessionOptions[] = [];
       const highlighter = createMockHighlighterSession({
@@ -1427,7 +1617,9 @@ describe("Editor", () => {
           createHighlightResult([{ start: 6, end: 7, style: { color: "#00ff00" } }]),
       });
       editor.dispose();
-      editor = new Editor(container, { plugins: [createHighlighterPlugin(highlighter)] });
+      editor = new Editor(container, {
+        plugins: withTestLanguagePlugins(createHighlighterPlugin(highlighter)),
+      });
       setEditorSyntaxSessionFactory((options) => {
         created.push(options);
         return createMockSyntaxSession({
@@ -1436,7 +1628,11 @@ describe("Editor", () => {
         });
       });
 
-      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
       await flushMicrotasks();
 
       expect(created[0]).toEqual(expect.objectContaining({ includeHighlights: false }));
@@ -1452,7 +1648,9 @@ describe("Editor", () => {
           createHighlightResult([{ start: 3, end: 4, style: { color: "#00ff00" } }]),
       });
       editor.dispose();
-      editor = new Editor(container, { plugins: [createHighlighterPlugin(highlighter)] });
+      editor = new Editor(container, {
+        plugins: withTestLanguagePlugins(createHighlighterPlugin(highlighter)),
+      });
       setEditorSyntaxSessionFactory(() =>
         createMockSyntaxSession({
           refresh: async () =>
@@ -1472,7 +1670,7 @@ describe("Editor", () => {
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text });
+      editor.openDocument({ documentId: "main.ts", languageId: "typescript", text });
       await flushMicrotasks();
 
       expect(foldToggle().dataset.editorFoldState).toBe("expanded");
@@ -1501,7 +1699,7 @@ describe("Editor", () => {
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text });
+      editor.openDocument({ documentId: "main.ts", languageId: "typescript", text });
       await flushMicrotasks();
 
       expect(foldToggle().dataset.editorFoldState).toBe("expanded");
@@ -1541,7 +1739,7 @@ describe("Editor", () => {
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text });
+      editor.openDocument({ documentId: "main.ts", languageId: "typescript", text });
       await flushMicrotasks();
 
       const buttons = [
@@ -1574,7 +1772,11 @@ describe("Editor", () => {
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
       await flushMicrotasks();
       editorRoot().dispatchEvent(
         new InputEvent("beforeinput", {
@@ -1603,7 +1805,7 @@ describe("Editor", () => {
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text: "world" });
+      editor.openDocument({ documentId: "main.ts", languageId: "typescript", text: "world" });
       await flushMicrotasks();
       setCollapsedDomSelection(2);
       editorRoot().dispatchEvent(createInsertEvent("X"));
@@ -1645,7 +1847,7 @@ describe("Editor", () => {
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text });
+      editor.openDocument({ documentId: "main.ts", languageId: "typescript", text });
       await flushMicrotasks();
       editorRoot().dispatchEvent(createInsertEvent("!"));
 
@@ -1701,7 +1903,7 @@ describe("Editor", () => {
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text });
+      editor.openDocument({ documentId: "main.ts", languageId: "typescript", text });
       await flushMicrotasks();
       editorRoot().dispatchEvent(createInsertEvent("!"));
       editorRoot().dispatchEvent(
@@ -1752,7 +1954,7 @@ describe("Editor", () => {
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text });
+      editor.openDocument({ documentId: "main.ts", languageId: "typescript", text });
       await flushMicrotasks();
       foldToggle().dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
       setCollapsedDomSelection(0);
@@ -1783,7 +1985,11 @@ describe("Editor", () => {
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
       await flushMicrotasks();
       editorRoot().dispatchEvent(createInsertEvent("!"));
       editorRoot().dispatchEvent(createInsertEvent("?"));
@@ -1806,7 +2012,11 @@ describe("Editor", () => {
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
       initial.resolve(createSyntaxResult([]));
       await flushMicrotasks();
       editorRoot().dispatchEvent(createInsertEvent("!"));
@@ -1834,7 +2044,9 @@ describe("Editor", () => {
         },
       });
       editor.dispose();
-      editor = new Editor(container, { plugins: [createHighlighterPlugin(highlighter)] });
+      editor = new Editor(container, {
+        plugins: withTestLanguagePlugins(createHighlighterPlugin(highlighter)),
+      });
       setEditorSyntaxSessionFactory(() =>
         createMockSyntaxSession({
           refresh: async () => createSyntaxResult([]),
@@ -1842,7 +2054,11 @@ describe("Editor", () => {
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
       await flushMicrotasks();
       editorRoot().dispatchEvent(createInsertEvent("!"));
       editorRoot().dispatchEvent(createInsertEvent("?"));
@@ -1862,7 +2078,9 @@ describe("Editor", () => {
         },
       });
       editor.dispose();
-      editor = new Editor(container, { plugins: [createHighlighterPlugin(highlighter)] });
+      editor = new Editor(container, {
+        plugins: withTestLanguagePlugins(createHighlighterPlugin(highlighter)),
+      });
       setEditorSyntaxSessionFactory(() =>
         createMockSyntaxSession({
           refresh: async () => createSyntaxResult([]),
@@ -1870,7 +2088,11 @@ describe("Editor", () => {
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
       await flushMicrotasks();
       editorRoot().dispatchEvent(createInsertEvent("!"));
       editorRoot().dispatchEvent(
@@ -1899,7 +2121,9 @@ describe("Editor", () => {
         applyChange: () => editResults.shift()!.promise,
       });
       editor.dispose();
-      editor = new Editor(container, { plugins: [createHighlighterPlugin(highlighter)] });
+      editor = new Editor(container, {
+        plugins: withTestLanguagePlugins(createHighlighterPlugin(highlighter)),
+      });
       setEditorSyntaxSessionFactory(() =>
         createMockSyntaxSession({
           refresh: async () => createSyntaxResult([]),
@@ -1907,7 +2131,11 @@ describe("Editor", () => {
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
       await flushMicrotasks();
       editorRoot().dispatchEvent(createInsertEvent("!"));
       await flushSyntaxDebounce();
@@ -1933,14 +2161,20 @@ describe("Editor", () => {
         },
       });
       editor.dispose();
-      editor = new Editor(container, { plugins: [createHighlighterPlugin(highlighter)] });
+      editor = new Editor(container, {
+        plugins: withTestLanguagePlugins(createHighlighterPlugin(highlighter)),
+      });
       setEditorSyntaxSessionFactory(() =>
         createMockSyntaxSession({
           refresh: async () => createSyntaxResult([]),
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
       await flushMicrotasks();
 
       expect(editor.getState().syntaxStatus).toBe("ready");
@@ -1962,6 +2196,23 @@ describe("Editor", () => {
       expect(highlightsMap.size).toBe(0);
     });
 
+    it("keeps explicit but unregistered languages editable", async () => {
+      editor.dispose();
+      editor = new Editor(container);
+
+      editor.openDocument({ documentId: "main.rs", languageId: "rust", text: "fn main() {}" });
+      await flushMicrotasks();
+      editorRoot().dispatchEvent(createLineBreakEvent());
+      await flushSyntaxDebounce();
+
+      expect(editor.getText()).toBe("fn main() {}\n");
+      expect(editor.getState()).toMatchObject({
+        languageId: "rust",
+        syntaxStatus: "ready",
+      });
+      expect(highlightsMap.size).toBe(0);
+    });
+
     it("marks syntax errors without blocking editing", async () => {
       setEditorSyntaxSessionFactory(() =>
         createMockSyntaxSession({
@@ -1971,7 +2222,11 @@ describe("Editor", () => {
         }),
       );
 
-      editor.openDocument({ documentId: "main.ts", text: "const a = 1;" });
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
       await flushMicrotasks();
       expect(editor.getState().syntaxStatus).toBe("error");
       editorRoot().dispatchEvent(createInsertEvent("!"));

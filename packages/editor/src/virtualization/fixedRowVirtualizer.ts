@@ -14,6 +14,8 @@ export type FixedRowVirtualizerSnapshot = {
   readonly scrollLeft: number;
   readonly viewportWidth: number;
   readonly viewportHeight: number;
+  readonly borderBoxWidth: number;
+  readonly borderBoxHeight: number;
   readonly totalSize: number;
   readonly visibleRange: FixedRowVisibleRange;
   readonly virtualItems: readonly FixedRowVirtualItem[];
@@ -30,6 +32,8 @@ export type FixedRowVirtualizerOptions = {
 export type FixedRowScrollMetrics = {
   readonly scrollTop: number;
   readonly viewportHeight: number;
+  readonly borderBoxHeight?: number;
+  readonly borderBoxWidth?: number;
   readonly scrollLeft?: number;
   readonly viewportWidth?: number;
 };
@@ -94,6 +98,8 @@ export class FixedRowVirtualizer {
   private scrollLeft = 0;
   private viewportWidth = 0;
   private viewportHeight = 0;
+  private borderBoxWidth = 0;
+  private borderBoxHeight = 0;
   private attached: AttachedScrollElement | null = null;
   private changeHandler: FixedRowVirtualizerChangeHandler | null = null;
   private scrollAnimationFrame = 0;
@@ -149,11 +155,25 @@ export class FixedRowVirtualizer {
     const nextViewportHeight = Math.max(0, normalizeNumber(metrics.viewportHeight));
     const nextScrollLeft = optionalNonNegative(metrics.scrollLeft, this.scrollLeft);
     const nextViewportWidth = optionalNonNegative(metrics.viewportWidth, this.viewportWidth);
+    const nextBorderBoxWidth = optionalBorderBoxMetric(
+      metrics.borderBoxWidth,
+      this.borderBoxWidth,
+      nextViewportWidth,
+      metrics.viewportWidth,
+    );
+    const nextBorderBoxHeight = optionalBorderBoxMetric(
+      metrics.borderBoxHeight,
+      this.borderBoxHeight,
+      nextViewportHeight,
+      metrics.viewportHeight,
+    );
     if (
       nextScrollTop === this.scrollTop &&
       nextScrollLeft === this.scrollLeft &&
       nextViewportWidth === this.viewportWidth &&
-      nextViewportHeight === this.viewportHeight
+      nextViewportHeight === this.viewportHeight &&
+      nextBorderBoxWidth === this.borderBoxWidth &&
+      nextBorderBoxHeight === this.borderBoxHeight
     )
       return;
 
@@ -161,6 +181,8 @@ export class FixedRowVirtualizer {
     this.scrollLeft = nextScrollLeft;
     this.viewportWidth = nextViewportWidth;
     this.viewportHeight = nextViewportHeight;
+    this.borderBoxWidth = nextBorderBoxWidth;
+    this.borderBoxHeight = nextBorderBoxHeight;
     this.emitChange();
   }
 
@@ -171,6 +193,8 @@ export class FixedRowVirtualizer {
       scrollLeft: this.scrollLeft,
       viewportWidth: this.viewportWidth,
       viewportHeight: this.viewportHeight,
+      borderBoxWidth: this.borderBoxWidth,
+      borderBoxHeight: this.borderBoxHeight,
       totalSize: computeTotalSize(this.options),
       visibleRange,
       virtualItems: this.getVirtualItems(visibleRange),
@@ -249,6 +273,8 @@ export class FixedRowVirtualizer {
     this.setScrollMetrics({
       scrollTop: element.scrollTop,
       scrollLeft: element.scrollLeft,
+      borderBoxHeight: this.borderBoxHeight,
+      borderBoxWidth: this.borderBoxWidth,
       viewportHeight: this.viewportHeight,
       viewportWidth: this.viewportWidth,
     });
@@ -265,8 +291,10 @@ export class FixedRowVirtualizer {
     this.setScrollMetrics({
       scrollTop: element.scrollTop,
       scrollLeft: element.scrollLeft,
-      viewportHeight: size.height,
-      viewportWidth: size.width,
+      borderBoxHeight: size.border.height,
+      borderBoxWidth: size.border.width,
+      viewportHeight: size.content.height,
+      viewportWidth: size.content.width,
     });
   }
 
@@ -440,6 +468,17 @@ function optionalNonNegative(value: number | undefined, fallback: number): numbe
   return Math.max(0, normalizeNumber(value));
 }
 
+function optionalBorderBoxMetric(
+  value: number | undefined,
+  current: number,
+  viewportValue: number,
+  rawViewportValue: number | undefined,
+): number {
+  if (value !== undefined) return Math.max(0, normalizeNumber(value));
+  if (rawViewportValue !== undefined) return viewportValue;
+  return current;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -456,12 +495,21 @@ function resizeEntryForElement(
 }
 
 function resizeEntrySize(entry: ResizeObserverEntry): {
-  readonly width: number;
-  readonly height: number;
+  readonly content: {
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly border: {
+    readonly width: number;
+    readonly height: number;
+  };
 } {
-  const box = resizeObserverBox(entry.contentBoxSize);
-  if (box) return box;
-  return { width: entry.contentRect.width, height: entry.contentRect.height };
+  const content = resizeObserverBox(entry.contentBoxSize) ?? {
+    width: entry.contentRect.width,
+    height: entry.contentRect.height,
+  };
+  const border = resizeObserverBox(entry.borderBoxSize) ?? content;
+  return { content, border };
 }
 
 function resizeObserverBox(

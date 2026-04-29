@@ -1,11 +1,18 @@
 import { performance } from "node:perf_hooks";
+import { TREE_SITTER_LANGUAGE_CONTRIBUTIONS } from "../../tree-sitter-languages/src/index";
 
-import { applyBatchToPieceTable, createPieceTableSnapshot, type PieceTableSnapshot } from "../src";
+import {
+  applyBatchToPieceTable,
+  createPieceTableSnapshot,
+  resolveTreeSitterLanguageContribution,
+  type PieceTableSnapshot,
+} from "../src";
 import { createTreeSitterEditPayload } from "../src/syntax/session";
 import {
   disposeTreeSitterWorker,
   editWithTreeSitter,
   parseWithTreeSitter,
+  registerTreeSitterLanguagesWithWorker,
 } from "../src/syntax/treeSitter/workerClient";
 import type { TreeSitterParseResult } from "../src/syntax/treeSitter/types";
 import type { TextEdit } from "../src/tokens";
@@ -167,8 +174,19 @@ const printSample = (sample: SyntaxSample): void => {
   console.log("");
 };
 
-for (const lines of LINE_COUNTS) {
-  printSample(await measureSyntax(lines));
+try {
+  await registerDefaultLanguages();
+
+  for (const lines of LINE_COUNTS) {
+    printSample(await measureSyntax(lines));
+  }
+} finally {
+  await disposeTreeSitterWorker();
 }
 
-await disposeTreeSitterWorker();
+async function registerDefaultLanguages(): Promise<void> {
+  const descriptors = await Promise.all(
+    TREE_SITTER_LANGUAGE_CONTRIBUTIONS.map(resolveTreeSitterLanguageContribution),
+  );
+  await registerTreeSitterLanguagesWithWorker(descriptors);
+}

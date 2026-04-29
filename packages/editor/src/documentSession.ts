@@ -4,6 +4,7 @@ import {
   createAnchorSelection,
   createSelectionSet,
   deleteSelections,
+  markSelectionSetDirty,
   type SelectionGoal,
   type SelectionSet,
 } from "./selections";
@@ -16,6 +17,7 @@ import {
 } from "./history";
 import type { EditorToken, TextEdit } from "./tokens";
 import type { Anchor as PieceTableAnchor, PieceTableSnapshot } from "./pieceTable/pieceTableTypes";
+import { applyBatchToPieceTable } from "./pieceTable/edits";
 import { getPieceTableText } from "./pieceTable/reads";
 import { createPieceTableSnapshot } from "./pieceTable/snapshot";
 
@@ -40,6 +42,10 @@ export type DocumentSessionChange = {
 
 export type DocumentSession = {
   applyText(text: string): DocumentSessionChange;
+  applyEdits(
+    edits: readonly TextEdit[],
+    options?: DocumentSessionApplyEditsOptions,
+  ): DocumentSessionChange;
   backspace(): DocumentSessionChange;
   deleteSelection(): DocumentSessionChange;
   undo(): DocumentSessionChange;
@@ -61,6 +67,22 @@ export type DocumentSession = {
 
 export type DocumentSessionSelectionOptions = {
   readonly goal?: SelectionGoal;
+};
+
+export type DocumentSessionEditHistoryMode = "record" | "skip";
+
+export type DocumentSessionEditSelection = {
+  readonly anchor: number;
+  readonly head?: number;
+};
+
+export type DocumentSessionApplyEditsOptions = {
+  readonly history?: DocumentSessionEditHistoryMode;
+  readonly selection?: DocumentSessionEditSelection;
+};
+
+type CommitEditOptions = {
+  readonly history: DocumentSessionEditHistoryMode;
 };
 
 class PieceTableDocumentSession implements DocumentSession {
@@ -89,6 +111,32 @@ class PieceTableDocumentSession implements DocumentSession {
     return appendTiming(
       this.commitEdit(result.snapshot, result.selections, result.edits),
       "session.applyText",
+      start,
+    );
+  }
+
+  public applyEdits(
+    edits: readonly TextEdit[],
+    options: DocumentSessionApplyEditsOptions = {},
+  ): DocumentSessionChange {
+    const start = nowMs();
+    const normalizedEdits = normalizeTextEdits(edits);
+    if (normalizedEdits.length === 0) {
+      return appendTiming(this.createChange("none", []), "session.applyEdits", start);
+    }
+
+    const nextSnapshot = applyBatchToPieceTable(this.history.current, normalizedEdits);
+    const effectiveEdits = normalizedEdits.filter(isEffectiveTextEdit);
+    if (effectiveEdits.length === 0) {
+      return appendTiming(this.createChange("none", []), "session.applyEdits", start);
+    }
+
+    const selections = this.selectionsAfterProgrammaticEdit(nextSnapshot, options.selection);
+    return appendTiming(
+      this.commitEdit(nextSnapshot, selections, effectiveEdits, {
+        history: options.history ?? "record",
+      }),
+      "session.applyEdits",
       start,
     );
   }
@@ -193,13 +241,32 @@ class PieceTableDocumentSession implements DocumentSession {
     snapshot: PieceTableSnapshot,
     selections: SelectionSet<PieceTableAnchor>,
     edits: readonly TextEdit[],
+    options: CommitEditOptions = { history: "record" },
   ): DocumentSessionChange {
     if (edits.length === 0) return this.createChange("none", []);
 
-    this.recordEditHistory(edits);
-    this.history = commitEditorHistory(this.history, snapshot, selections);
+    if (options.history === "record") {
+      this.recordEditHistory(edits);
+      this.history = commitEditorHistory(this.history, snapshot, selections);
+    } else {
+      this.history = { ...this.history, current: snapshot, selections };
+    }
+
     this.refreshText();
     return this.createChange("edit", edits);
+  }
+
+  private selectionsAfterProgrammaticEdit(
+    snapshot: PieceTableSnapshot,
+    selection: DocumentSessionEditSelection | undefined,
+  ): SelectionSet<PieceTableAnchor> {
+    if (selection) {
+      const anchor = selection.anchor;
+      const head = selection.head ?? selection.anchor;
+      return createSelectionSet([createAnchorSelection(snapshot, anchor, head)], true, snapshot);
+    }
+
+    return markSelectionSetDirty(this.history.selections);
   }
 
   private recordEditHistory(edits: readonly TextEdit[]): void {
@@ -246,6 +313,16 @@ class PieceTableDocumentSession implements DocumentSession {
 
 export function createDocumentSession(text: string): DocumentSession {
   return new PieceTableDocumentSession(text);
+}
+
+function normalizeTextEdits(edits: readonly TextEdit[]): readonly TextEdit[] {
+  return edits
+    .map((edit) => ({ from: edit.from, to: edit.to, text: edit.text }))
+    .toSorted((left, right) => left.from - right.from || left.to - right.to);
+}
+
+function isEffectiveTextEdit(edit: TextEdit): boolean {
+  return edit.from !== edit.to || edit.text.length > 0;
 }
 
 function invertTextEdits(

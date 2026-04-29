@@ -180,7 +180,11 @@ class MinimapContribution implements EditorViewContribution {
   }
 
   private updateNativeScrollbarGutter(): void {
-    const gutter = nativeScrollbarGutter(this.context.scrollElement, this.latestSnapshot.viewport);
+    const gutter = nativeScrollbarGutter(
+      this.context.scrollElement,
+      this.latestSnapshot.viewport,
+      this.appliedReservedWidth,
+    );
     if (
       gutter.vertical === this.verticalScrollbarWidth &&
       gutter.horizontal === this.horizontalScrollbarHeight
@@ -270,6 +274,7 @@ function clamp(value: number, min: number, max: number): number {
 function nativeScrollbarGutter(
   element: HTMLElement,
   viewport: EditorViewSnapshot["viewport"],
+  overlayWidth: number,
 ): {
   readonly vertical: number;
   readonly horizontal: number;
@@ -277,18 +282,46 @@ function nativeScrollbarGutter(
   const style = element.ownerDocument.defaultView?.getComputedStyle(element);
   const borderX = cssPixels(style?.borderLeftWidth) + cssPixels(style?.borderRightWidth);
   const borderY = cssPixels(style?.borderTopWidth) + cssPixels(style?.borderBottomWidth);
-  const hasVerticalScrollbar = viewport.scrollHeight > viewport.clientHeight;
-  const hasHorizontalScrollbar = viewport.scrollWidth > viewport.clientWidth;
-  const measuredVertical = Math.max(0, element.offsetWidth - viewport.clientWidth - borderX);
-  const measuredHorizontal = Math.max(0, element.offsetHeight - viewport.clientHeight - borderY);
+  const hasVerticalScrollbar =
+    viewport.clientHeight > 0 && viewport.scrollHeight > viewport.clientHeight;
+  const hasHorizontalScrollbar =
+    viewport.clientWidth > 0 && viewport.scrollWidth > viewport.clientWidth;
   const vertical = hasVerticalScrollbar
-    ? Math.max(measuredVertical, OVERLAY_SCROLLBAR_GUTTER_FALLBACK)
+    ? Math.max(
+        measuredVerticalScrollbarGutter(viewport, borderX, overlayWidth),
+        OVERLAY_SCROLLBAR_GUTTER_FALLBACK,
+      )
     : 0;
   const horizontal = hasHorizontalScrollbar
-    ? Math.max(measuredHorizontal, OVERLAY_SCROLLBAR_GUTTER_FALLBACK)
+    ? Math.max(
+        measuredHorizontalScrollbarGutter(viewport, borderY),
+        OVERLAY_SCROLLBAR_GUTTER_FALLBACK,
+      )
     : 0;
 
   return { vertical, horizontal };
+}
+
+function measuredVerticalScrollbarGutter(
+  viewport: EditorViewSnapshot["viewport"],
+  borderWidth: number,
+  overlayWidth: number,
+): number {
+  if (viewport.clientWidth <= 0) return 0;
+
+  const clientWidth = viewport.clientWidth + Math.max(0, overlayWidth);
+  const borderBoxWidth = viewport.borderBoxWidth ?? clientWidth + borderWidth;
+  return Math.max(0, borderBoxWidth - clientWidth - borderWidth);
+}
+
+function measuredHorizontalScrollbarGutter(
+  viewport: EditorViewSnapshot["viewport"],
+  borderWidth: number,
+): number {
+  if (viewport.clientHeight <= 0) return 0;
+
+  const borderBoxHeight = viewport.borderBoxHeight ?? viewport.clientHeight + borderWidth;
+  return Math.max(0, borderBoxHeight - viewport.clientHeight - borderWidth);
 }
 
 function cssPixels(value: string | undefined): number {

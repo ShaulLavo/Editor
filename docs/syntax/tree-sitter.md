@@ -58,8 +58,8 @@ Open implementation details:
 
 - exact Tree-sitter input adapter for piece-table reads
 - worker protocol for parse/query requests and result cancellation
-- parser package loading and language registry
-- query asset format
+- parser package loading and language registry beyond the current plugin descriptor contract
+- query asset format beyond raw highlight/fold/injection query strings
 - parse tree retention across undo/redo
 - memory limits and eviction policy
 - cancellation or superseding behavior for stale parses
@@ -101,7 +101,7 @@ Injected parse trees must retain parent snapshot identity and produce highlights
 | Deliverable | Acceptance Criteria |
 |---|---|
 | Worker-owned runtime | Parser creation, parsing, query execution, tree traversal, and injections all run off the main thread |
-| Language registry | Loads parser + queries by file type/language id inside workers |
+| Language registry | Loads parser + queries from registered language plugins by explicit language id inside workers |
 | Piece-table input adapter | Tree-sitter can read document text without flattening whole files on every parse |
 | Incremental edit bridge | Batched edits update the previous parse tree correctly |
 | Parse snapshots | Parse results are tagged with document snapshot/version and stale results are rejected |

@@ -57,7 +57,7 @@ work, and every syntax result is snapshot-tagged and stale-droppable. See
 | Deliverable | Acceptance Criteria |
 |---|---|
 | Worker-owned runtime | Parser creation, parsing, query execution, tree traversal, and injections all run off the main thread |
-| Language registry | Parser and query assets load by language id / file type inside workers |
+| Language registry | Parser and query assets load by explicit language id inside workers |
 | Piece-table input adapter | Parser reads from the document model without whole-file flattening on every edit |
 | Incremental edit bridge | Batch edits update Tree-sitter trees correctly |
 | Parse snapshot identity | Parse results are tied to document snapshots; stale results are rejected |

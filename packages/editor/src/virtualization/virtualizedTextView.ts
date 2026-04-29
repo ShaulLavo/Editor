@@ -408,6 +408,8 @@ export class VirtualizedTextView {
       scrollLeft: snapshot.scrollLeft,
       scrollTop: snapshot.scrollTop,
       scrollWidth: Math.max(snapshot.viewportWidth, view.contentWidth + gutterWidth(view)),
+      borderBoxHeight: snapshot.borderBoxHeight,
+      borderBoxWidth: snapshot.borderBoxWidth,
       totalHeight: snapshot.totalSize,
       viewportHeight: snapshot.viewportHeight,
       viewportWidth: snapshot.viewportWidth,

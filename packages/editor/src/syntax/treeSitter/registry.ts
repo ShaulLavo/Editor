@@ -1,144 +1,246 @@
-// oxlint-disable-next-line typescript-eslint/triple-slash-reference
-/// <reference path="../../vite-assets.d.ts" />
-import cssHighlightQuerySource from "tree-sitter-css/queries/highlights.scm?raw";
-import cssGrammarUrl from "tree-sitter-css/tree-sitter-css.wasm?url";
-import htmlHighlightQuerySource from "tree-sitter-html/queries/highlights.scm?raw";
-import htmlInjectionQuerySource from "tree-sitter-html/queries/injections.scm?raw";
-import htmlGrammarUrl from "tree-sitter-html/tree-sitter-html.wasm?url";
-import jsPackageInjectionQuerySource from "tree-sitter-javascript/queries/injections.scm?raw";
-import jsxHighlightQuerySource from "tree-sitter-javascript/queries/highlights-jsx.scm?raw";
-import jsGrammarUrl from "tree-sitter-javascript/tree-sitter-javascript.wasm?url";
-import jsonHighlightQuerySource from "tree-sitter-json/queries/highlights.scm?raw";
-import jsonGrammarUrl from "tree-sitter-json/tree-sitter-json.wasm?url";
-import tsGrammarUrl from "tree-sitter-typescript/tree-sitter-typescript.wasm?url";
-import tsxGrammarUrl from "tree-sitter-typescript/tree-sitter-tsx.wasm?url";
-import jsFoldQuerySource from "./queries/javascript-folds.scm?raw";
-import jsHighlightQuerySource from "./queries/javascript-highlights.scm?raw";
-import tsFoldQuerySource from "./queries/typescript-folds.scm?raw";
-import tsHighlightQuerySource from "./queries/typescript-highlights.scm?raw";
-import type { TreeSitterLanguageId } from "./types";
+export type TreeSitterLanguageId = string;
 
-export type TreeSitterLanguageDescriptor = {
-  readonly id: TreeSitterLanguageId;
+export type TreeSitterLanguageAssets = {
   readonly wasmUrl: string;
-  readonly extensions: readonly string[];
-  readonly aliases: readonly string[];
-  readonly highlightQuerySource: string;
+  readonly highlightQuerySource?: string;
   readonly foldQuerySource?: string;
   readonly injectionQuerySource?: string;
 };
 
-const EMPTY_QUERY = "";
+export type TreeSitterLanguageContributionMetadata = {
+  readonly id: TreeSitterLanguageId;
+  readonly extensions?: readonly string[];
+  readonly aliases?: readonly string[];
+};
 
-export const TREE_SITTER_LANGUAGE_DESCRIPTORS: readonly TreeSitterLanguageDescriptor[] = [
-  {
-    id: "javascript",
-    wasmUrl: jsGrammarUrl,
-    extensions: [".cjs", ".js", ".mjs"],
-    aliases: ["javascript", "js", "node"],
-    highlightQuerySource: [jsHighlightQuerySource, jsxHighlightQuerySource].join("\n"),
-    foldQuerySource: jsFoldQuerySource,
-    injectionQuerySource: jsPackageInjectionQuerySource,
-  },
-  {
-    id: "typescript",
-    wasmUrl: tsGrammarUrl,
-    extensions: [".cts", ".mts", ".ts"],
-    aliases: ["typescript", "ts"],
-    highlightQuerySource: [tsHighlightQuerySource, jsHighlightQuerySource].join("\n"),
-    foldQuerySource: [tsFoldQuerySource, jsFoldQuerySource].join("\n"),
-    injectionQuerySource: jsPackageInjectionQuerySource,
-  },
-  {
-    id: "tsx",
-    wasmUrl: tsxGrammarUrl,
-    extensions: [".jsx", ".tsx"],
-    aliases: ["tsx", "jsx", "react"],
-    highlightQuerySource: [
-      tsHighlightQuerySource,
-      jsHighlightQuerySource,
-      jsxHighlightQuerySource,
-    ].join("\n"),
-    foldQuerySource: [tsFoldQuerySource, jsFoldQuerySource].join("\n"),
-    injectionQuerySource: jsPackageInjectionQuerySource,
-  },
-  {
-    id: "html",
-    wasmUrl: htmlGrammarUrl,
-    extensions: [".htm", ".html"],
-    aliases: ["html"],
-    highlightQuerySource: htmlHighlightQuerySource,
-    foldQuerySource: "(element) @fold\n(script_element) @fold\n(style_element) @fold",
-    injectionQuerySource: htmlInjectionQuerySource,
-  },
-  {
-    id: "css",
-    wasmUrl: cssGrammarUrl,
-    extensions: [".css"],
-    aliases: ["css"],
-    highlightQuerySource: cssHighlightQuerySource,
-    foldQuerySource: "(block) @fold\n(rule_set) @fold",
-    injectionQuerySource: EMPTY_QUERY,
-  },
-  {
-    id: "json",
-    wasmUrl: jsonGrammarUrl,
-    extensions: [".json"],
-    aliases: ["json"],
-    highlightQuerySource: jsonHighlightQuerySource,
-    foldQuerySource: "(object) @fold\n(array) @fold",
-    injectionQuerySource: EMPTY_QUERY,
-  },
-];
+export type TreeSitterInlineLanguageContribution = TreeSitterLanguageContributionMetadata &
+  TreeSitterLanguageAssets & {
+    readonly load?: never;
+  };
 
-const descriptorsById = new Map(
-  TREE_SITTER_LANGUAGE_DESCRIPTORS.map((descriptor) => [descriptor.id, descriptor]),
-);
+export type TreeSitterLazyLanguageContribution = TreeSitterLanguageContributionMetadata & {
+  readonly load: () => Promise<TreeSitterLanguageAssets>;
+};
 
-const descriptorsByAlias = new Map<string, TreeSitterLanguageDescriptor>();
+export type TreeSitterLanguageContribution =
+  | TreeSitterInlineLanguageContribution
+  | TreeSitterLazyLanguageContribution;
 
-for (const descriptor of TREE_SITTER_LANGUAGE_DESCRIPTORS) {
-  for (const alias of descriptor.aliases) {
-    descriptorsByAlias.set(alias.toLowerCase(), descriptor);
+export type TreeSitterLanguageDescriptor = TreeSitterLanguageContributionMetadata &
+  TreeSitterLanguageAssets & {
+    readonly extensions: readonly string[];
+    readonly aliases: readonly string[];
+  };
+
+export type TreeSitterLanguageRegistrationOptions = {
+  readonly replace?: boolean;
+};
+
+export type TreeSitterLanguageDisposable = {
+  dispose(): void;
+};
+
+export type TreeSitterLanguageResolver = {
+  resolveTreeSitterLanguage(
+    languageId: TreeSitterLanguageId,
+  ): Promise<TreeSitterLanguageDescriptor | null>;
+};
+
+type TreeSitterLanguageRegistration = {
+  readonly contribution: TreeSitterLanguageContribution;
+  readonly id: TreeSitterLanguageId;
+  readonly aliases: readonly string[];
+  descriptorPromise: Promise<TreeSitterLanguageDescriptor> | null;
+};
+
+export class TreeSitterLanguageRegistry implements TreeSitterLanguageResolver {
+  private readonly registrations: TreeSitterLanguageRegistration[] = [];
+
+  public registerLanguage(
+    contribution: TreeSitterLanguageContribution,
+    options: TreeSitterLanguageRegistrationOptions = {},
+  ): TreeSitterLanguageDisposable {
+    const registration = createRegistration(contribution);
+    this.assertCanRegister(registration.id, options);
+    this.registrations.push(registration);
+
+    return {
+      dispose: () => this.unregisterLanguage(registration),
+    };
+  }
+
+  public hasLanguage(languageId: string | null | undefined): boolean {
+    const id = normalizeOptionalLanguageId(languageId);
+    if (!id) return false;
+    return this.activeRegistrationForId(id) !== null;
+  }
+
+  public resolveLanguageAlias(alias: string | null | undefined): TreeSitterLanguageId | null {
+    const normalized = normalizeOptionalAlias(alias);
+    if (!normalized) return null;
+
+    const registration = this.findActiveRegistration((candidate) => {
+      if (candidate.id.toLowerCase() === normalized) return true;
+      return candidate.aliases.includes(normalized);
+    });
+    return registration?.id ?? null;
+  }
+
+  public async resolveTreeSitterLanguage(
+    languageId: TreeSitterLanguageId,
+  ): Promise<TreeSitterLanguageDescriptor | null> {
+    const id = this.resolveLanguageAlias(languageId) ?? normalizeLanguageId(languageId);
+    const registration = this.activeRegistrationForId(id);
+    if (!registration) return null;
+
+    if (!registration.descriptorPromise) {
+      registration.descriptorPromise = resolveTreeSitterLanguageContribution(
+        registration.contribution,
+      );
+    }
+
+    return registration.descriptorPromise;
+  }
+
+  public clear(): void {
+    this.registrations.length = 0;
+  }
+
+  private assertCanRegister(
+    languageId: TreeSitterLanguageId,
+    options: TreeSitterLanguageRegistrationOptions,
+  ): void {
+    if (options.replace) return;
+    if (!this.hasLanguage(languageId)) return;
+
+    throw new Error(`Tree-sitter language "${languageId}" is already registered`);
+  }
+
+  private unregisterLanguage(registration: TreeSitterLanguageRegistration): void {
+    const index = this.registrations.indexOf(registration);
+    if (index === -1) return;
+
+    this.registrations.splice(index, 1);
+  }
+
+  private findActiveRegistration(
+    predicate: (registration: TreeSitterLanguageRegistration) => boolean,
+  ): TreeSitterLanguageRegistration | null {
+    for (let index = this.registrations.length - 1; index >= 0; index -= 1) {
+      const registration = this.registrations[index]!;
+      if (!this.isActiveRegistration(registration)) continue;
+      if (predicate(registration)) return registration;
+    }
+
+    return null;
+  }
+
+  private activeRegistrationForId(
+    languageId: TreeSitterLanguageId,
+  ): TreeSitterLanguageRegistration | null {
+    for (let index = this.registrations.length - 1; index >= 0; index -= 1) {
+      const registration = this.registrations[index]!;
+      if (registration.id === languageId) return registration;
+    }
+
+    return null;
+  }
+
+  private isActiveRegistration(registration: TreeSitterLanguageRegistration): boolean {
+    return this.activeRegistrationForId(registration.id) === registration;
   }
 }
 
-export const getTreeSitterLanguageDescriptor = (
-  languageId: TreeSitterLanguageId,
-): TreeSitterLanguageDescriptor => {
-  const descriptor = descriptorsById.get(languageId);
-  if (!descriptor) throw new Error(`Unknown Tree-sitter language "${languageId}"`);
-  return descriptor;
+export const createTreeSitterLanguageRegistry = (): TreeSitterLanguageRegistry =>
+  new TreeSitterLanguageRegistry();
+
+export const resolveTreeSitterLanguageContribution = async (
+  contribution: TreeSitterLanguageContribution,
+): Promise<TreeSitterLanguageDescriptor> => {
+  const assets = await loadTreeSitterLanguageAssets(contribution);
+  return createTreeSitterLanguageDescriptor(contribution, assets);
 };
 
 export const resolveTreeSitterLanguageAlias = (
   alias: string | null | undefined,
-): TreeSitterLanguageId | null => {
-  if (!alias) return null;
-
-  const descriptor = descriptorsByAlias.get(alias.trim().toLowerCase());
-  return descriptor?.id ?? null;
-};
+  registry?: TreeSitterLanguageRegistry,
+): TreeSitterLanguageId | null => registry?.resolveLanguageAlias(alias) ?? null;
 
 export const isTreeSitterLanguageId = (
   languageId: string | null | undefined,
-): languageId is TreeSitterLanguageId => {
-  if (!languageId) return false;
-  return descriptorsById.has(languageId as TreeSitterLanguageId);
+): languageId is TreeSitterLanguageId => normalizeOptionalLanguageId(languageId) !== null;
+
+const createRegistration = (
+  contribution: TreeSitterLanguageContribution,
+): TreeSitterLanguageRegistration => ({
+  contribution,
+  id: normalizeLanguageId(contribution.id),
+  aliases: uniqueItems((contribution.aliases ?? []).map(normalizeAlias)),
+  descriptorPromise: null,
+});
+
+const createTreeSitterLanguageDescriptor = (
+  contribution: TreeSitterLanguageContribution,
+  assets: TreeSitterLanguageAssets,
+): TreeSitterLanguageDescriptor => ({
+  id: normalizeLanguageId(contribution.id),
+  extensions: uniqueItems((contribution.extensions ?? []).map(normalizeExtension)),
+  aliases: uniqueItems((contribution.aliases ?? []).map(normalizeAlias)),
+  wasmUrl: normalizeWasmUrl(assets.wasmUrl, contribution.id),
+  highlightQuerySource: assets.highlightQuerySource,
+  foldQuerySource: assets.foldQuerySource,
+  injectionQuerySource: assets.injectionQuerySource,
+});
+
+const loadTreeSitterLanguageAssets = async (
+  contribution: TreeSitterLanguageContribution,
+): Promise<TreeSitterLanguageAssets> => {
+  if ("load" in contribution && contribution.load) return contribution.load();
+  return contribution;
 };
 
-export const inferTreeSitterLanguageFromFilename = (
-  documentId: string | null | undefined,
+const normalizeOptionalLanguageId = (
+  languageId: string | null | undefined,
 ): TreeSitterLanguageId | null => {
-  if (!documentId) return null;
+  if (!languageId) return null;
 
-  const dotIndex = documentId.lastIndexOf(".");
-  if (dotIndex === -1) return null;
-
-  const extension = documentId.slice(dotIndex).toLowerCase();
-  for (const descriptor of TREE_SITTER_LANGUAGE_DESCRIPTORS) {
-    if (descriptor.extensions.includes(extension)) return descriptor.id;
-  }
-
-  return null;
+  const id = languageId.trim();
+  return id.length > 0 ? id : null;
 };
+
+const normalizeLanguageId = (languageId: string): TreeSitterLanguageId => {
+  const id = normalizeOptionalLanguageId(languageId);
+  if (id) return id;
+
+  throw new Error("Tree-sitter language id cannot be empty");
+};
+
+const normalizeOptionalAlias = (alias: string | null | undefined): string | null => {
+  if (!alias) return null;
+
+  const normalized = alias.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+};
+
+const normalizeAlias = (alias: string): string => {
+  const normalized = normalizeOptionalAlias(alias);
+  if (normalized) return normalized;
+
+  throw new Error("Tree-sitter language alias cannot be empty");
+};
+
+const normalizeExtension = (extension: string): string => {
+  const normalized = extension.trim().toLowerCase();
+  if (!normalized) throw new Error("Tree-sitter language extension cannot be empty");
+  if (normalized.startsWith(".")) return normalized;
+  return `.${normalized}`;
+};
+
+const normalizeWasmUrl = (wasmUrl: string, languageId: string): string => {
+  const normalized = wasmUrl.trim();
+  if (normalized) return normalized;
+
+  throw new Error(`Tree-sitter language "${languageId}" is missing a wasmUrl`);
+};
+
+const uniqueItems = <T>(items: readonly T[]): readonly T[] => [...new Set(items)];

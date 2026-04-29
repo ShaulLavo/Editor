@@ -72,6 +72,28 @@ describe("fixed row virtualizer", () => {
     expect(nextRowTwo).toBe(rowTwo);
   });
 
+  it("tracks the viewport border box separately from the content box", () => {
+    const virtualizer = new FixedRowVirtualizer({
+      count: 100,
+      rowHeight: 20,
+    });
+
+    virtualizer.setScrollMetrics({
+      scrollTop: 0,
+      viewportHeight: 60,
+      viewportWidth: 80,
+      borderBoxHeight: 72,
+      borderBoxWidth: 96,
+    });
+
+    expect(virtualizer.getSnapshot()).toMatchObject({
+      borderBoxHeight: 72,
+      borderBoxWidth: 96,
+      viewportHeight: 60,
+      viewportWidth: 80,
+    });
+  });
+
   it("clears stable records when row height changes", () => {
     const virtualizer = new FixedRowVirtualizer({
       count: 100,

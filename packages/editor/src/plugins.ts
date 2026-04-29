@@ -2,6 +2,12 @@ import type { DocumentSessionChange } from "./documentSession";
 import type { PieceTableSnapshot } from "./pieceTable/pieceTableTypes";
 import type { EditorToken } from "./tokens";
 import type { EditorSyntaxLanguageId } from "./syntax/session";
+import {
+  TreeSitterLanguageRegistry,
+  type TreeSitterLanguageContribution,
+  type TreeSitterLanguageDescriptor,
+  type TreeSitterLanguageRegistrationOptions,
+} from "./syntax/treeSitter/registry";
 import type { BrowserTextMetrics } from "./virtualization/browserMetrics";
 import type { FixedRowVisibleRange } from "./virtualization/fixedRowVirtualizer";
 
@@ -43,6 +49,8 @@ export type EditorViewportSnapshot = {
   readonly scrollWidth: number;
   readonly clientHeight: number;
   readonly clientWidth: number;
+  readonly borderBoxHeight?: number;
+  readonly borderBoxWidth?: number;
   readonly visibleRange: FixedRowVisibleRange;
 };
 
@@ -95,6 +103,10 @@ export type EditorViewContributionProvider = {
 
 export type EditorPluginContext = {
   registerHighlighter(provider: EditorHighlighterProvider): EditorDisposable;
+  registerTreeSitterLanguage(
+    contribution: TreeSitterLanguageContribution,
+    options?: TreeSitterLanguageRegistrationOptions,
+  ): EditorDisposable;
   registerViewContribution(provider: EditorViewContributionProvider): EditorDisposable;
 };
 
@@ -103,8 +115,13 @@ export type EditorPlugin = {
   activate(context: EditorPluginContext): void | EditorDisposable | readonly EditorDisposable[];
 };
 
+export type TreeSitterLanguagePluginOptions = TreeSitterLanguageRegistrationOptions & {
+  readonly name?: string;
+};
+
 export class EditorPluginHost implements EditorDisposable {
   private readonly highlighters: EditorHighlighterProvider[] = [];
+  private readonly treeSitterLanguages = new TreeSitterLanguageRegistry();
   private readonly viewContributions: EditorViewContributionProvider[] = [];
   private readonly disposables: EditorDisposable[] = [];
 
@@ -127,6 +144,16 @@ export class EditorPluginHost implements EditorDisposable {
     return null;
   }
 
+  public hasTreeSitterLanguage(languageId: string | null | undefined): boolean {
+    return this.treeSitterLanguages.hasLanguage(languageId);
+  }
+
+  public resolveTreeSitterLanguage(
+    languageId: EditorSyntaxLanguageId,
+  ): Promise<TreeSitterLanguageDescriptor | null> {
+    return this.treeSitterLanguages.resolveTreeSitterLanguage(languageId);
+  }
+
   public createViewContributions(context: EditorViewContributionContext): EditorViewContribution[] {
     const contributions: EditorViewContribution[] = [];
     for (const provider of this.viewContributions) {
@@ -141,12 +168,15 @@ export class EditorPluginHost implements EditorDisposable {
   public dispose(): void {
     while (this.disposables.length > 0) this.disposables.pop()?.dispose();
     this.highlighters.length = 0;
+    this.treeSitterLanguages.clear();
     this.viewContributions.length = 0;
   }
 
   private createContext(): EditorPluginContext {
     return {
       registerHighlighter: (provider) => this.registerHighlighter(provider),
+      registerTreeSitterLanguage: (contribution, options) =>
+        this.registerTreeSitterLanguage(contribution, options),
       registerViewContribution: (provider) => this.registerViewContribution(provider),
     };
   }
@@ -164,6 +194,13 @@ export class EditorPluginHost implements EditorDisposable {
     if (index === -1) return;
 
     this.highlighters.splice(index, 1);
+  }
+
+  private registerTreeSitterLanguage(
+    contribution: TreeSitterLanguageContribution,
+    options: TreeSitterLanguageRegistrationOptions = {},
+  ): EditorDisposable {
+    return this.treeSitterLanguages.registerLanguage(contribution, options);
   }
 
   private registerViewContribution(provider: EditorViewContributionProvider): EditorDisposable {
@@ -197,3 +234,17 @@ export class EditorPluginHost implements EditorDisposable {
 const isDisposableList = (
   value: EditorDisposable | readonly EditorDisposable[],
 ): value is readonly EditorDisposable[] => Array.isArray(value);
+
+export const createTreeSitterLanguagePlugin = (
+  contributions: readonly TreeSitterLanguageContribution[],
+  options: TreeSitterLanguagePluginOptions = {},
+): EditorPlugin => ({
+  name: options.name ?? "tree-sitter-languages",
+  activate(context) {
+    return contributions.map((contribution) =>
+      context.registerTreeSitterLanguage(contribution, {
+        replace: options.replace,
+      }),
+    );
+  },
+});

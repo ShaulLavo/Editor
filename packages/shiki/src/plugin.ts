@@ -20,14 +20,14 @@ export type ShikiHighlighterPluginOptions = {
 
 const DEFAULT_THEME = "github-dark";
 
-const DEFAULT_LANGUAGE_MAP = {
+const DEFAULT_LANGUAGE_MAP: ShikiLanguageMap = {
   css: "css",
   html: "html",
   javascript: "javascript",
   json: "json",
   tsx: "tsx",
   typescript: "typescript",
-} satisfies Record<EditorSyntaxLanguageId, string>;
+};
 
 export function createShikiHighlighterPlugin(
   options: ShikiHighlighterPluginOptions = {},

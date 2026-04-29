@@ -1,3 +1,4 @@
+import type { TreeSitterLanguageDescriptor } from "./registry";
 import type {
   TreeSitterEditRequest,
   TreeSitterLanguageId,
@@ -72,6 +73,17 @@ const ensureWorkerReady = async (): Promise<Worker | null> => {
 };
 
 export const canUseTreeSitterWorker = (): boolean => supportsWorkers();
+
+export const registerTreeSitterLanguagesWithWorker = async (
+  languages: readonly TreeSitterLanguageDescriptor[],
+): Promise<void> => {
+  if (languages.length === 0) return;
+
+  const handle = await ensureWorkerReady();
+  if (!handle) return;
+
+  await postRequest({ type: "registerLanguages", languages });
+};
 
 export const parseWithTreeSitter = async (
   payload: TreeSitterParsePayload,

@@ -67,6 +67,8 @@ function snapshot(text: string): EditorViewSnapshot {
       scrollWidth: 160,
       clientHeight: 200,
       clientWidth: 400,
+      borderBoxHeight: 200,
+      borderBoxWidth: 400,
       visibleRange: { start: 0, end: 2 },
     },
   };

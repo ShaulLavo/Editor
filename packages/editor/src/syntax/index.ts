@@ -1,6 +1,5 @@
 export {
   createEditorSyntaxSession,
-  inferEditorSyntaxLanguage,
   isEditorSyntaxLanguage,
   type EditorSyntaxLanguageId,
   type EditorSyntaxResult,
@@ -17,12 +16,18 @@ export {
   type TreeSitterSelectionExpansionState,
 } from "./structuralSelection";
 export {
-  getTreeSitterLanguageDescriptor,
-  inferTreeSitterLanguageFromFilename,
+  TreeSitterLanguageRegistry,
+  createTreeSitterLanguageRegistry,
   isTreeSitterLanguageId,
+  resolveTreeSitterLanguageContribution,
   resolveTreeSitterLanguageAlias,
-  TREE_SITTER_LANGUAGE_DESCRIPTORS,
+  type TreeSitterLanguageAssets,
+  type TreeSitterLanguageContribution,
   type TreeSitterLanguageDescriptor,
+  type TreeSitterLanguageDisposable,
+  type TreeSitterLanguageId,
+  type TreeSitterLanguageRegistrationOptions,
+  type TreeSitterLanguageResolver,
 } from "./treeSitter/registry";
 export type {
   BracketInfo,

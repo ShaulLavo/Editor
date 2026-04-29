@@ -6,6 +6,7 @@ import type {
 } from "../syntax/session";
 import type { EditorPlugin } from "../plugins";
 import type { EditorKeymapOptions } from "./keymap";
+import type { TextEdit } from "../tokens";
 
 /** Minimal interface for the CSS Custom Highlight API registry. */
 export interface HighlightRegistry {
@@ -40,16 +41,34 @@ export type EditorChangeHandler = (
 ) => void;
 
 export type EditorOptions = {
+  readonly defaultText?: string;
   readonly onChange?: EditorChangeHandler;
   readonly plugins?: readonly EditorPlugin[];
   readonly keymap?: EditorKeymapOptions;
 };
 
-export type EditorOpenDocumentOptions = {
-  readonly text: string;
-  readonly documentId?: string;
+export type EditorSetTextOptions = {
   readonly languageId?: EditorSyntaxLanguageId | null;
 };
+
+export type EditorOpenDocumentOptions = EditorSetTextOptions & {
+  readonly text: string;
+  readonly documentId?: string;
+};
+
+export type EditorEditHistoryMode = "record" | "skip";
+
+export type EditorEditSelection = {
+  readonly anchor: number;
+  readonly head?: number;
+};
+
+export type EditorEditOptions = {
+  readonly history?: EditorEditHistoryMode;
+  readonly selection?: EditorEditSelection;
+};
+
+export type EditorEditInput = TextEdit | readonly TextEdit[];
 
 export type EditorSyntaxSessionFactory = (
   options: EditorSyntaxSessionOptions,

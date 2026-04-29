@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { TREE_SITTER_LANGUAGE_CONTRIBUTIONS } from "../../tree-sitter-languages/src/index.ts";
 
 import {
   applyBatchToPieceTable,
@@ -7,6 +8,7 @@ import {
   createSelectionSet,
   expandTreeSitterSelection,
   getPieceTableText,
+  resolveTreeSitterLanguageContribution,
   resolveSelection,
   selectTreeSitterToken,
   shrinkTreeSitterSelection,
@@ -16,9 +18,14 @@ import {
   disposeTreeSitterWorker,
   editWithTreeSitter,
   parseWithTreeSitter,
+  registerTreeSitterLanguagesWithWorker,
 } from "../src/syntax/treeSitter/workerClient.ts";
 
 describe.skipIf(typeof Worker === "undefined")("tree-sitter worker client", () => {
+  beforeEach(async () => {
+    await registerDefaultLanguages();
+  });
+
   afterEach(async () => {
     await disposeTreeSitterWorker();
   });
@@ -105,6 +112,38 @@ describe.skipIf(typeof Worker === "undefined")("tree-sitter worker client", () =
     ]);
   });
 
+  it("parses a consumer-registered language id", async () => {
+    const javascript = await resolveTreeSitterLanguageContribution(
+      TREE_SITTER_LANGUAGE_CONTRIBUTIONS.find((contribution) => {
+        return contribution.id === "javascript";
+      })!,
+    );
+    await registerTreeSitterLanguagesWithWorker([
+      {
+        ...javascript,
+        id: "consumer-javascript",
+        extensions: [".consumer-js"],
+        aliases: ["consumer-javascript"],
+      },
+    ]);
+
+    const text = "const answer = 1;\n";
+    const snapshot = createPieceTableSnapshot(text);
+    const parsed = await parseWithTreeSitter({
+      documentId: "file.consumer-js",
+      snapshotVersion: 1,
+      languageId: "consumer-javascript",
+      text,
+      snapshot,
+    });
+
+    expect(parsed?.languageId).toBe("consumer-javascript");
+    expect(parsed?.captures.length).toBeGreaterThan(0);
+    expect(parsed?.captures.some((capture) => capture.languageId === "consumer-javascript")).toBe(
+      true,
+    );
+  });
+
   it("highlights injected tagged template content", async () => {
     const documentId = "template.ts";
     const text = [
@@ -173,3 +212,10 @@ describe.skipIf(typeof Worker === "undefined")("tree-sitter worker client", () =
     expect(shrunkRange).toMatchObject({ startOffset: 6, endOffset: 12 });
   });
 });
+
+async function registerDefaultLanguages(): Promise<void> {
+  const descriptors = await Promise.all(
+    TREE_SITTER_LANGUAGE_CONTRIBUTIONS.map(resolveTreeSitterLanguageContribution),
+  );
+  await registerTreeSitterLanguagesWithWorker(descriptors);
+}

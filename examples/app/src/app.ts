@@ -3,6 +3,7 @@ import "@editor/core/style.css";
 import { createMinimapPlugin } from "@editor/minimap";
 import "@editor/minimap/style.css";
 import { createShikiHighlighterPlugin } from "@editor/shiki";
+import { css, html, javaScript, json, typeScript } from "@editor/tree-sitter-languages";
 import { createEditorPane } from "./components/editorPane.ts";
 import { el } from "./components/dom.ts";
 import { createSidebar } from "./components/sidebar.ts";
@@ -82,7 +83,9 @@ class DirectoryController implements AppController {
   private readonly displayFile = (filePath: string, content: string): void => {
     this.currentSelectedPath = filePath;
     localStorage.setItem(SELECTED_FILE_KEY, filePath);
-    this.editor.openDocument({ documentId: filePath, text: content });
+    this.editor.setText(content, {
+      languageId: languageIdForFilePath(filePath),
+    });
     this.editor.focus();
     this.updateStatus();
   };
@@ -111,7 +114,15 @@ export function mountApp(): void {
 
   let controller: DirectoryController | null = null;
   const editor = new Editor(editorPane.element, {
-    plugins: [createShikiHighlighterPlugin({ theme: "github-dark" }), createMinimapPlugin()],
+    plugins: [
+      javaScript({ jsx: true }),
+      typeScript({ tsx: true }),
+      html(),
+      css(),
+      json(),
+      createShikiHighlighterPlugin({ theme: "github-dark" }),
+      createMinimapPlugin(),
+    ],
     onChange: (state) => {
       controller?.updateStatus(state);
     },
@@ -171,3 +182,32 @@ async function refreshOpenDirectory(controller: AppController, topBar: TopBar): 
     return;
   }
 }
+
+function languageIdForFilePath(filePath: string): string | null {
+  const extension = extensionForFilePath(filePath);
+  if (!extension) return null;
+
+  return LANGUAGE_BY_EXTENSION[extension] ?? null;
+}
+
+function extensionForFilePath(filePath: string): string | null {
+  const dotIndex = filePath.lastIndexOf(".");
+  if (dotIndex === -1) return null;
+
+  return filePath.slice(dotIndex).toLowerCase();
+}
+
+const LANGUAGE_BY_EXTENSION: Record<string, string> = {
+  ".cjs": "javascript",
+  ".css": "css",
+  ".cts": "typescript",
+  ".htm": "html",
+  ".html": "html",
+  ".js": "javascript",
+  ".json": "json",
+  ".jsx": "javascript",
+  ".mjs": "javascript",
+  ".mts": "typescript",
+  ".ts": "typescript",
+  ".tsx": "typescript",
+};

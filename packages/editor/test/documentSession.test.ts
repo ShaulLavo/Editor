@@ -77,4 +77,41 @@ describe("DocumentSession", () => {
     expect(redone.kind).toBe("redo");
     expect(redone.edits).toEqual([{ from: 1, to: 4, text: "XYZ" }]);
   });
+
+  it("applies batch edits as one undoable operation", () => {
+    const session = createDocumentSession("abcd");
+    const change = session.applyEdits([
+      { from: 3, to: 3, text: "Y" },
+      { from: 1, to: 2, text: "X" },
+    ]);
+
+    expect(change.edits).toEqual([
+      { from: 1, to: 2, text: "X" },
+      { from: 3, to: 3, text: "Y" },
+    ]);
+    expect(session.getText()).toBe("aXcYd");
+    expect(session.undo().text).toBe("abcd");
+  });
+
+  it("can apply edits without recording undo history", () => {
+    const session = createDocumentSession("abc");
+    const change = session.applyEdits([{ from: 3, to: 3, text: "!" }], { history: "skip" });
+
+    expect(change.kind).toBe("edit");
+    expect(session.getText()).toBe("abc!");
+    expect(session.canUndo()).toBe(false);
+  });
+
+  it("preserves selections through programmatic edits unless replaced", () => {
+    const session = createDocumentSession("abc");
+    session.setSelection(3);
+
+    session.applyEdits([{ from: 0, to: 0, text: "!" }]);
+    expect(resolvedOffsets(session)).toEqual({ start: 4, end: 4 });
+
+    session.applyEdits([{ from: 0, to: 1, text: "?" }], {
+      selection: { anchor: 1, head: 2 },
+    });
+    expect(resolvedOffsets(session)).toEqual({ start: 1, end: 2 });
+  });
 });

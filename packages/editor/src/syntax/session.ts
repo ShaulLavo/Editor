@@ -13,9 +13,10 @@ import {
   disposeTreeSitterDocument,
   editWithTreeSitter,
   parseWithTreeSitter,
+  registerTreeSitterLanguagesWithWorker,
   type TreeSitterEditPayload,
 } from "./treeSitter/workerClient";
-import { inferTreeSitterLanguageFromFilename, isTreeSitterLanguageId } from "./treeSitter/registry";
+import { isTreeSitterLanguageId, type TreeSitterLanguageResolver } from "./treeSitter/registry";
 
 export type EditorSyntaxLanguageId = TreeSitterLanguageId;
 
@@ -30,6 +31,7 @@ export type EditorSyntaxResult = Pick<
 export type EditorSyntaxSessionOptions = {
   readonly documentId: string;
   readonly languageId: EditorSyntaxLanguageId | null;
+  readonly languageResolver?: TreeSitterLanguageResolver;
   readonly includeHighlights?: boolean;
   readonly text: string;
   readonly snapshot: PieceTableSnapshot;
@@ -51,6 +53,7 @@ export const createEditorSyntaxSession = (
   return new TreeSitterSyntaxSession(
     options.documentId,
     options.languageId,
+    options.languageResolver,
     options.includeHighlights ?? true,
     options.text,
     options.snapshot,
@@ -60,12 +63,6 @@ export const createEditorSyntaxSession = (
 export const isEditorSyntaxLanguage = (
   languageId: string | null | undefined,
 ): languageId is EditorSyntaxLanguageId => isTreeSitterLanguageId(languageId);
-
-export function inferEditorSyntaxLanguage(
-  documentId: string | null | undefined,
-): EditorSyntaxLanguageId | null {
-  return inferTreeSitterLanguageFromFilename(documentId);
-}
 
 const createEmptySyntaxSession = (): EditorSyntaxSession => ({
   refresh: async () => createEmptySyntaxResult(),
@@ -79,21 +76,25 @@ const createEmptySyntaxSession = (): EditorSyntaxSession => ({
 class TreeSitterSyntaxSession implements EditorSyntaxSession {
   private readonly documentId: string;
   private readonly languageId: EditorSyntaxLanguageId;
+  private readonly languageResolver: TreeSitterLanguageResolver | undefined;
   private readonly includeHighlights: boolean;
   private snapshotVersion = 0;
   private text: string;
   private snapshot: PieceTableSnapshot;
   private result: EditorSyntaxResult = createEmptySyntaxResult();
+  private languageRegistrationPromise: Promise<boolean> | null = null;
 
   public constructor(
     documentId: string,
     languageId: EditorSyntaxLanguageId,
+    languageResolver: TreeSitterLanguageResolver | undefined,
     includeHighlights: boolean,
     text: string,
     snapshot: PieceTableSnapshot,
   ) {
     this.documentId = documentId;
     this.languageId = languageId;
+    this.languageResolver = languageResolver;
     this.includeHighlights = includeHighlights;
     this.text = text;
     this.snapshot = snapshot;
@@ -104,6 +105,10 @@ class TreeSitterSyntaxSession implements EditorSyntaxSession {
     text = this.text,
   ): Promise<EditorSyntaxResult> {
     const snapshotVersion = ++this.snapshotVersion;
+    if (!(await this.ensureLanguageRegistered())) {
+      return this.updateFromUnavailableLanguage(text, snapshot);
+    }
+
     const result = await parseWithTreeSitter({
       documentId: this.documentId,
       snapshotVersion,
@@ -118,6 +123,10 @@ class TreeSitterSyntaxSession implements EditorSyntaxSession {
 
   public async applyChange(change: DocumentSessionChange): Promise<EditorSyntaxResult> {
     if (change.kind === "none" || change.kind === "selection") return this.result;
+    if (!(await this.ensureLanguageRegistered())) {
+      this.snapshotVersion += 1;
+      return this.updateFromUnavailableLanguage(change.text, change.snapshot);
+    }
 
     const edit = createTextDiffEdit(this.text, change.text);
     if (!edit) {
@@ -172,6 +181,33 @@ class TreeSitterSyntaxSession implements EditorSyntaxSession {
       if (!isRecoverableIncrementalEditError(error)) throw error;
       return this.refresh(payload.snapshot, nextText);
     }
+  }
+
+  private ensureLanguageRegistered(): Promise<boolean> {
+    if (!this.languageResolver) return Promise.resolve(true);
+    if (!this.languageRegistrationPromise) {
+      this.languageRegistrationPromise = this.registerResolvedLanguage();
+    }
+
+    return this.languageRegistrationPromise;
+  }
+
+  private async registerResolvedLanguage(): Promise<boolean> {
+    const descriptor = await this.languageResolver?.resolveTreeSitterLanguage(this.languageId);
+    if (!descriptor) return false;
+
+    await registerTreeSitterLanguagesWithWorker([descriptor]);
+    return true;
+  }
+
+  private updateFromUnavailableLanguage(
+    text: string,
+    snapshot: PieceTableSnapshot,
+  ): EditorSyntaxResult {
+    this.text = text;
+    this.snapshot = snapshot;
+    this.result = createEmptySyntaxResult();
+    return this.result;
   }
 
   private updateFromTreeSitterResult(

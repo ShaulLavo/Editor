@@ -8,12 +8,7 @@ import {
   type Tree,
 } from "web-tree-sitter";
 import parserWasmUrl from "web-tree-sitter/web-tree-sitter.wasm?url";
-import {
-  getTreeSitterLanguageDescriptor,
-  resolveTreeSitterLanguageAlias,
-  TREE_SITTER_LANGUAGE_DESCRIPTORS,
-  type TreeSitterLanguageDescriptor,
-} from "./registry";
+import type { TreeSitterLanguageDescriptor } from "./registry";
 import {
   createTreeSitterPieceTableInput,
   readTreeSitterInputRange,
@@ -102,6 +97,8 @@ const QUERY_BUDGET_MS = 20_000;
 
 let parserInitPromise: Promise<void> | null = null;
 let nextUse = 1;
+const languageDescriptors = new Map<TreeSitterLanguageId, TreeSitterLanguageDescriptor>();
+const languageDescriptorOrder: TreeSitterLanguageId[] = [];
 const runtimePromises = new Map<TreeSitterLanguageId, Promise<Runtime>>();
 const documentCaches = new Map<string, DocumentCache>();
 
@@ -126,6 +123,24 @@ const ensureParserRuntime = async (): Promise<void> => {
   return parserInitPromise;
 };
 
+const registerLanguages = (descriptors: readonly TreeSitterLanguageDescriptor[]): void => {
+  for (const descriptor of descriptors) registerLanguage(descriptor);
+};
+
+const registerLanguage = (descriptor: TreeSitterLanguageDescriptor): void => {
+  const normalized = normalizeLanguageDescriptor(descriptor);
+  const existing = languageDescriptors.get(normalized.id);
+
+  languageDescriptors.set(normalized.id, normalized);
+  moveLanguageToEnd(normalized.id);
+
+  if (!existing) return;
+  if (languageDescriptorsEqual(existing, normalized)) return;
+
+  disposeRuntimeForLanguage(normalized.id);
+  disposeCachedSnapshotsForLanguage(normalized.id);
+};
+
 const ensureRuntime = async (languageId: TreeSitterLanguageId): Promise<Runtime> => {
   const existing = runtimePromises.get(languageId);
   if (existing) return existing;
@@ -138,7 +153,9 @@ const ensureRuntime = async (languageId: TreeSitterLanguageId): Promise<Runtime>
 const createRuntime = async (languageId: TreeSitterLanguageId): Promise<Runtime> => {
   await ensureParserRuntime();
 
-  const descriptor = getTreeSitterLanguageDescriptor(languageId);
+  const descriptor = languageDescriptors.get(languageId);
+  if (!descriptor) throw new Error(`Tree-sitter language "${languageId}" is not registered`);
+
   const language = await Language.load(descriptor.wasmUrl);
   const parser = new Parser();
   parser.setLanguage(language);
@@ -159,7 +176,9 @@ const ensureQuery = (runtime: Runtime, kind: "highlight" | "fold" | "injection")
   return ensureInjectionQuery(runtime);
 };
 
-const ensureHighlightQuery = (runtime: Runtime): Query => {
+const ensureHighlightQuery = (runtime: Runtime): Query | null => {
+  if (!runtime.descriptor.highlightQuerySource) return null;
+  if (runtime.descriptor.highlightQuerySource.trim().length === 0) return null;
   if (runtime.highlightQuery) return runtime.highlightQuery;
 
   runtime.highlightQuery = new Query(runtime.language, runtime.descriptor.highlightQuerySource);
@@ -480,7 +499,7 @@ const languageIdForInjectionMatch = (
   source: TreeSitterPieceTableInput,
 ): TreeSitterLanguageId | null => {
   const setLanguage = match.setProperties?.["injection.language"];
-  const languageId = resolveTreeSitterLanguageAlias(setLanguage);
+  const languageId = resolveRegisteredLanguageAlias(setLanguage);
   if (languageId) return languageId;
 
   const languageCapture = match.captures.find((capture) => capture.name === "injection.language");
@@ -491,7 +510,28 @@ const languageIdForInjectionMatch = (
     languageCapture.node.startIndex,
     languageCapture.node.endIndex,
   );
-  return resolveTreeSitterLanguageAlias(languageName);
+  return resolveRegisteredLanguageAlias(languageName);
+};
+
+const resolveRegisteredLanguageAlias = (
+  alias: string | null | undefined,
+): TreeSitterLanguageId | null => {
+  if (!alias) return null;
+
+  const normalized = alias.trim().toLowerCase();
+  if (!normalized) return null;
+
+  for (let index = languageDescriptorOrder.length - 1; index >= 0; index -= 1) {
+    const languageId = languageDescriptorOrder[index]!;
+    const descriptor = languageDescriptors.get(languageId);
+    if (!descriptor) continue;
+    if (descriptor.id.toLowerCase() === normalized) return descriptor.id;
+    if (descriptor.aliases.map((item) => item.toLowerCase()).includes(normalized)) {
+      return descriptor.id;
+    }
+  }
+
+  return null;
 };
 
 const processInjectionSpecs = async (
@@ -820,12 +860,39 @@ const disposeDocument = (documentId: string): void => {
   documentCaches.delete(documentId);
 };
 
+const disposeCachedSnapshotsForLanguage = (languageId: TreeSitterLanguageId): void => {
+  for (const cache of documentCaches.values()) {
+    disposeCachedSnapshotsMatchingLanguage(cache, languageId);
+  }
+};
+
+const disposeCachedSnapshotsMatchingLanguage = (
+  cache: DocumentCache,
+  languageId: TreeSitterLanguageId,
+): void => {
+  const retained: CachedSyntaxSnapshot[] = [];
+
+  for (const snapshot of cache.snapshots) {
+    if (snapshot.languageId !== languageId) {
+      retained.push(snapshot);
+      continue;
+    }
+
+    disposeCachedSnapshot(snapshot);
+  }
+
+  cache.snapshots.length = 0;
+  cache.snapshots.push(...retained);
+};
+
 const disposeAll = (): void => {
   for (const cache of documentCaches.values()) {
     for (const snapshot of cache.snapshots) disposeCachedSnapshot(snapshot);
   }
 
   documentCaches.clear();
+  languageDescriptors.clear();
+  languageDescriptorOrder.length = 0;
   for (const promise of runtimePromises.values()) {
     void promise.then(disposeRuntime).catch(() => undefined);
   }
@@ -839,6 +906,79 @@ const disposeRuntime = (runtime: Runtime): void => {
   runtime.injectionQuery?.delete();
   runtime.parser.delete();
 };
+
+const disposeRuntimeForLanguage = (languageId: TreeSitterLanguageId): void => {
+  const runtime = runtimePromises.get(languageId);
+  if (!runtime) return;
+
+  runtimePromises.delete(languageId);
+  void runtime.then(disposeRuntime).catch(() => undefined);
+};
+
+const normalizeLanguageDescriptor = (
+  descriptor: TreeSitterLanguageDescriptor,
+): TreeSitterLanguageDescriptor => ({
+  id: normalizeLanguageId(descriptor.id),
+  wasmUrl: normalizeWasmUrl(descriptor.wasmUrl, descriptor.id),
+  extensions: uniqueItems(descriptor.extensions.map(normalizeExtension)),
+  aliases: uniqueItems(descriptor.aliases.map(normalizeAlias)),
+  highlightQuerySource: descriptor.highlightQuerySource,
+  foldQuerySource: descriptor.foldQuerySource,
+  injectionQuerySource: descriptor.injectionQuerySource,
+});
+
+const moveLanguageToEnd = (languageId: TreeSitterLanguageId): void => {
+  const index = languageDescriptorOrder.indexOf(languageId);
+  if (index !== -1) languageDescriptorOrder.splice(index, 1);
+  languageDescriptorOrder.push(languageId);
+};
+
+const languageDescriptorsEqual = (
+  left: TreeSitterLanguageDescriptor,
+  right: TreeSitterLanguageDescriptor,
+): boolean =>
+  left.id === right.id &&
+  left.wasmUrl === right.wasmUrl &&
+  sameItems(left.extensions, right.extensions) &&
+  sameItems(left.aliases, right.aliases) &&
+  left.highlightQuerySource === right.highlightQuerySource &&
+  left.foldQuerySource === right.foldQuerySource &&
+  left.injectionQuerySource === right.injectionQuerySource;
+
+const sameItems = (left: readonly string[], right: readonly string[]): boolean => {
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => item === right[index]);
+};
+
+const normalizeLanguageId = (languageId: string): TreeSitterLanguageId => {
+  const normalized = languageId.trim();
+  if (normalized) return normalized;
+
+  throw new Error("Tree-sitter language id cannot be empty");
+};
+
+const normalizeWasmUrl = (wasmUrl: string, languageId: string): string => {
+  const normalized = wasmUrl.trim();
+  if (normalized) return normalized;
+
+  throw new Error(`Tree-sitter language "${languageId}" is missing a wasmUrl`);
+};
+
+const normalizeExtension = (extension: string): string => {
+  const normalized = extension.trim().toLowerCase();
+  if (!normalized) throw new Error("Tree-sitter language extension cannot be empty");
+  if (normalized.startsWith(".")) return normalized;
+  return `.${normalized}`;
+};
+
+const normalizeAlias = (alias: string): string => {
+  const normalized = alias.trim().toLowerCase();
+  if (normalized) return normalized;
+
+  throw new Error("Tree-sitter language alias cannot be empty");
+};
+
+const uniqueItems = <T>(items: readonly T[]): readonly T[] => [...new Set(items)];
 
 const createEmptyProcessedTree = (): ProcessedTree => ({
   captures: [],
@@ -903,9 +1043,12 @@ const handleRequest = async (request: TreeSitterWorkerRequest): Promise<TreeSitt
   const { payload } = request;
 
   if (payload.type === "init") {
-    await Promise.all(
-      TREE_SITTER_LANGUAGE_DESCRIPTORS.map((descriptor) => ensureRuntime(descriptor.id)),
-    );
+    await ensureParserRuntime();
+    return undefined;
+  }
+
+  if (payload.type === "registerLanguages") {
+    registerLanguages(payload.languages);
     return undefined;
   }
 

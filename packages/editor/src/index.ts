@@ -17,8 +17,13 @@ export type { EditorCommandContext, EditorCommandId } from "./editor/commands";
 export type { EditorKeyBinding, EditorKeymapOptions } from "./editor/keymap";
 export type {
   EditorChangeHandler,
+  EditorEditHistoryMode,
+  EditorEditInput,
+  EditorEditOptions,
+  EditorEditSelection,
   EditorOpenDocumentOptions,
   EditorOptions,
+  EditorSetTextOptions,
   EditorState,
   EditorSyntaxSessionFactory,
   EditorSyntaxStatus,
