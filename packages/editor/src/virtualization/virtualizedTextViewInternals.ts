@@ -49,6 +49,7 @@ export interface VirtualizedTextViewInternal {
   tokens: readonly EditorToken[];
   tokenRenderEntries: readonly TokenRenderEntry[];
   tokenRenderEntryMaxEnds: readonly number[];
+  tokenRenderStyles: ReadonlyMap<string, EditorTokenStyle>;
   tokenRenderIndexDirty: boolean;
   lineStarts: number[];
   displayRows: DisplayRow[];

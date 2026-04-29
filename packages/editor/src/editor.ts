@@ -24,7 +24,7 @@ import {
 } from "./editor/navigation";
 import { lineRangeAtOffset, wordRangeAtOffset } from "./editor/textRanges";
 import { appendTiming, eventStartMs, mergeChangeTimings, nowMs } from "./editor/timing";
-import { projectTokensThroughEdit } from "./editor/tokenProjection";
+import { copyTokenProjectionMetadata, projectTokensThroughEdit } from "./editor/tokenProjection";
 import type { EditorCommandContext, EditorCommandId } from "./editor/commands";
 import type {
   EditorEditInput,
@@ -210,7 +210,9 @@ export class Editor {
   }
 
   setTokens(tokens: readonly EditorToken[]): void {
-    this.adoptTokens([...tokens]);
+    const copiedTokens = [...tokens];
+    copyTokenProjectionMetadata(tokens, copiedTokens);
+    this.adoptTokens(copiedTokens);
   }
 
   applyEdit(edit: TextEdit, tokens: readonly EditorToken[]): void {

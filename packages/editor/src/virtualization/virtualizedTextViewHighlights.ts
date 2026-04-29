@@ -1,5 +1,9 @@
 import type { EditorToken, EditorTokenStyle } from "../tokens";
 import {
+  copyTokenProjectionMetadata,
+  tokenProjectionLiveRangeStatus,
+} from "../editor/tokenProjection";
+import {
   buildHighlightRule,
   clamp,
   normalizeTokenStyle,
@@ -27,33 +31,32 @@ import type {
 import type { TokenRenderEntry, VirtualizedTextViewInternal } from "./virtualizedTextViewInternals";
 
 export function setTokens(view: VirtualizedTextViewInternal, tokens: readonly EditorToken[]): void {
-  adoptTokens(view, [...tokens]);
+  const copiedTokens = [...tokens];
+  copyTokenProjectionMetadata(tokens, copiedTokens);
+  adoptTokens(view, copiedTokens);
 }
 
 export function adoptTokens(
   view: VirtualizedTextViewInternal,
   tokens: readonly EditorToken[],
 ): void {
-  if (editorTokensEqual(view.tokens, tokens)) {
-    view.tokens = tokens;
-    view.tokenRangesFollowLastTextEdit = false;
-    syncTokenGroupsToTokenSet(view);
-    renderTokenHighlights(view);
-    return;
-  }
-
   if (canKeepLiveTokenRanges(view, tokens)) {
     view.tokens = tokens;
     view.tokenRangesFollowLastTextEdit = false;
     view.tokenRenderIndexDirty = true;
-    syncTokenGroupsToTokenSet(view);
+    return;
+  }
+
+  if (editorTokensEqual(view.tokens, tokens)) {
+    view.tokens = tokens;
+    view.tokenRangesFollowLastTextEdit = false;
+    renderTokenHighlights(view);
     return;
   }
 
   view.tokenRangesFollowLastTextEdit = false;
   view.tokens = tokens;
   view.tokenRenderIndexDirty = true;
-  syncTokenGroupsToTokenSet(view);
   renderTokenHighlights(view);
 }
 
@@ -228,21 +231,29 @@ function ensureTokenRenderIndex(view: VirtualizedTextViewInternal): void {
   if (!view.tokenRenderIndexDirty) return;
 
   rebuildTokenRenderIndex(view);
+  syncTokenGroupsToStyles(view, view.tokenRenderStyles);
   view.tokenRenderIndexDirty = false;
 }
 
 function rebuildTokenRenderIndex(view: VirtualizedTextViewInternal): void {
   const entries: TokenRenderEntry[] = [];
+  const styles = new Map<string, EditorTokenStyle>();
+  let previousEntry: TokenRenderEntry | undefined;
+  let sorted = true;
   for (let index = 0; index < view.tokens.length; index += 1) {
     const token = view.tokens[index]!;
     const entry = tokenRenderEntry(view, token, index);
     if (!entry) continue;
+    if (previousEntry && previousEntry.start > entry.start) sorted = false;
     entries.push(entry);
+    styles.set(entry.styleKey, entry.style);
+    previousEntry = entry;
   }
 
-  entries.sort(compareTokenRenderEntries);
+  if (!sorted) entries.sort(compareTokenRenderEntries);
   view.tokenRenderEntries = entries;
   view.tokenRenderEntryMaxEnds = tokenRenderEntryMaxEnds(entries);
+  view.tokenRenderStyles = styles;
 }
 
 function tokenRenderEntry(
@@ -420,13 +431,15 @@ export function clearTokenHighlights(view: VirtualizedTextViewInternal): void {
   rebuildStyleRules(view);
 }
 
-function syncTokenGroupsToTokenSet(view: VirtualizedTextViewInternal): void {
+function syncTokenGroupsToStyles(
+  view: VirtualizedTextViewInternal,
+  styles: ReadonlyMap<string, EditorTokenStyle>,
+): void {
   if (view.text.length === 0) {
     clearTokenHighlights(view);
     return;
   }
 
-  const styles = currentTokenStyles(view);
   if (styles.size === 0) {
     clearTokenHighlights(view);
     return;
@@ -435,17 +448,6 @@ function syncTokenGroupsToTokenSet(view: VirtualizedTextViewInternal): void {
   const added = ensureTokenGroupsForStyles(view, styles);
   const removed = removeUnusedTokenGroups(view, new Set(styles.keys()));
   if (added || removed) rebuildStyleRules(view);
-}
-
-function currentTokenStyles(view: VirtualizedTextViewInternal): Map<string, EditorTokenStyle> {
-  ensureTokenRenderIndex(view);
-
-  const styles = new Map<string, EditorTokenStyle>();
-  for (const token of view.tokenRenderEntries) {
-    styles.set(token.styleKey, token.style);
-  }
-
-  return styles;
 }
 
 function ensureTokenGroupsForStyles(
@@ -485,6 +487,8 @@ function canKeepLiveTokenRanges(
   tokens: readonly EditorToken[],
 ): boolean {
   if (!view.tokenRangesFollowLastTextEdit) return false;
+  const projectionStatus = tokenProjectionLiveRangeStatus(view.tokens, tokens);
+  if (projectionStatus !== null) return projectionStatus;
   if (view.tokens.length !== tokens.length) return false;
 
   return view.tokens.every((token, index) => {

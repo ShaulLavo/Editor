@@ -150,6 +150,7 @@ export class VirtualizedTextView {
       tokens: [],
       tokenRenderEntries: [],
       tokenRenderEntryMaxEnds: [],
+      tokenRenderStyles: new Map(),
       tokenRenderIndexDirty: true,
       lineStarts: [0],
       displayRows: [],

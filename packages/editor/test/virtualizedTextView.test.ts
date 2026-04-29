@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { projectTokensThroughEdit } from "../src/editor/tokenProjection";
 import {
   createFoldMap,
   createPieceTableSnapshot,
@@ -454,6 +455,24 @@ describe("VirtualizedTextView", () => {
     expect(ranges[1]!.endOffset).toBe(4);
   });
 
+  it("renders token highlights from unsorted token input", () => {
+    view.setText("first\nsecond");
+    view.setScrollMetrics(0, 40);
+    view.setTokens([
+      { start: 6, end: 12, style: { color: "#00ff00" } },
+      { start: 0, end: 5, style: { color: "#ff0000" } },
+    ]);
+
+    const rows = view.getState().mountedRows;
+    const first = tokenHighlightRangeForNode(rows[0]!.textNode);
+    const second = tokenHighlightRangeForNode(rows[1]!.textNode);
+
+    expect(first?.range.startOffset).toBe(0);
+    expect(first?.range.endOffset).toBe(5);
+    expect(second?.range.startOffset).toBe(0);
+    expect(second?.range.endOffset).toBe(6);
+  });
+
   it("skips token highlight work when same-line edits only move existing token ranges", () => {
     view.setText("world");
     view.setScrollMetrics(0, 20);
@@ -474,6 +493,34 @@ describe("VirtualizedTextView", () => {
     expect(highlightAdds).toBe(addCount);
     expect(highlightDeletes).toBe(deleteCount);
     expect(ranges).toHaveLength(1);
+  });
+
+  it("does not rescan token styles when same-line edits keep live token ranges", () => {
+    view.setText("world");
+    view.setScrollMetrics(0, 20);
+    const tokens = [{ start: 0, end: 5, style: { color: "#ff0000" } }];
+    view.adoptTokens(tokens);
+    const stringify = vi.spyOn(JSON, "stringify");
+
+    try {
+      view.applyEdit({ from: 2, to: 2, text: "X" }, "woXrld");
+      const projected = projectTokensThroughEdit(tokens, { from: 2, to: 2, text: "X" }, "world");
+      Object.defineProperty(projected[0]!, "style", {
+        configurable: true,
+        get: () => {
+          throw new Error("unexpected token style scan");
+        },
+      });
+
+      view.setTokens(projected);
+
+      const tokenStyleCalls = stringify.mock.calls.filter(([value]) =>
+        isTokenStyleSerializationInput(value),
+      );
+      expect(tokenStyleCalls).toHaveLength(0);
+    } finally {
+      stringify.mockRestore();
+    }
   });
 
   it("repaints token highlights only for rows with changed local segments", () => {
@@ -698,6 +745,17 @@ function tokenHighlightRangeForNode(
   }
 
   return undefined;
+}
+
+function isTokenStyleSerializationInput(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+
+  const keys = new Set(Object.keys(value));
+  if (!keys.has("color")) return false;
+  if (!keys.has("backgroundColor")) return false;
+  if (!keys.has("fontStyle")) return false;
+  if (!keys.has("fontWeight")) return false;
+  return keys.has("textDecoration");
 }
 
 function mockViewport(element: HTMLElement, width: number, height: number): void {

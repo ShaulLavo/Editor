@@ -16,7 +16,10 @@ import { mouseSelectionAutoScrollDelta } from "../src/editor/mouseSelection";
 import { nextWordOffset, previousWordOffset } from "../src/editor/navigation";
 import { lineRangeAtOffset, wordRangeAtOffset } from "../src/editor/textRanges";
 import { appendTiming, eventStartMs, mergeChangeTimings } from "../src/editor/timing";
-import { projectTokensThroughEdit } from "../src/editor/tokenProjection";
+import {
+  projectTokensThroughEdit,
+  tokenProjectionLiveRangeStatus,
+} from "../src/editor/tokenProjection";
 import { createPieceTableSnapshot } from "../src/pieceTable/pieceTable";
 import type { FoldRange } from "../src/syntax/treeSitter/types";
 
@@ -157,6 +160,21 @@ describe("token projection", () => {
       { start: 0, end: 5, style },
       { start: 10, end: 15, style },
     ]);
+  });
+
+  it("records whether projected tokens can keep live ranges", () => {
+    const style = { color: "red" };
+    const tokens = [
+      { start: 0, end: 5, style },
+      { start: 6, end: 10, style },
+    ];
+
+    const shifted = projectTokensThroughEdit(tokens, { from: 5, to: 5, text: "X" }, "alpha beta");
+    const dropped = projectTokensThroughEdit(tokens, { from: 7, to: 9, text: "\n" }, "alpha beta");
+
+    expect(tokenProjectionLiveRangeStatus(tokens, shifted)).toBe(true);
+    expect(tokenProjectionLiveRangeStatus(tokens, dropped)).toBe(false);
+    expect(tokenProjectionLiveRangeStatus([], shifted)).toBe(false);
   });
 });
 
