@@ -11,6 +11,8 @@ export type FixedRowVirtualItem = {
 
 export type FixedRowVirtualizerSnapshot = {
   readonly scrollTop: number;
+  readonly scrollLeft: number;
+  readonly viewportWidth: number;
   readonly viewportHeight: number;
   readonly totalSize: number;
   readonly visibleRange: FixedRowVisibleRange;
@@ -28,6 +30,8 @@ export type FixedRowVirtualizerOptions = {
 export type FixedRowScrollMetrics = {
   readonly scrollTop: number;
   readonly viewportHeight: number;
+  readonly scrollLeft?: number;
+  readonly viewportWidth?: number;
 };
 
 export type FixedRowVirtualizerChangeHandler = (snapshot: FixedRowVirtualizerSnapshot) => void;
@@ -87,6 +91,8 @@ export function computeFixedRowVirtualItems(options: {
 export class FixedRowVirtualizer {
   private options: NormalizedFixedRowVirtualizerOptions;
   private scrollTop = 0;
+  private scrollLeft = 0;
+  private viewportWidth = 0;
   private viewportHeight = 0;
   private attached: AttachedScrollElement | null = null;
   private changeHandler: FixedRowVirtualizerChangeHandler | null = null;
@@ -114,12 +120,12 @@ export class FixedRowVirtualizer {
     this.changeHandler = onChange ?? null;
 
     const onScroll = (): void => this.scheduleScrollSync();
-    const resizeObserver = createResizeObserver(() => this.syncFromScrollElement());
+    const resizeObserver = createResizeObserver((entries) => this.syncFromResizeEntries(entries));
     this.attached = { element, onScroll, resizeObserver };
 
     element.addEventListener("scroll", onScroll, { passive: true });
     resizeObserver?.observe(element);
-    this.syncFromScrollElement();
+    this.syncScrollPositionFromElement();
   }
 
   public detachScrollElement(): void {
@@ -139,8 +145,22 @@ export class FixedRowVirtualizer {
   }
 
   public setScrollMetrics(metrics: FixedRowScrollMetrics): void {
-    this.scrollTop = Math.max(0, normalizeNumber(metrics.scrollTop));
-    this.viewportHeight = Math.max(0, normalizeNumber(metrics.viewportHeight));
+    const nextScrollTop = Math.max(0, normalizeNumber(metrics.scrollTop));
+    const nextViewportHeight = Math.max(0, normalizeNumber(metrics.viewportHeight));
+    const nextScrollLeft = optionalNonNegative(metrics.scrollLeft, this.scrollLeft);
+    const nextViewportWidth = optionalNonNegative(metrics.viewportWidth, this.viewportWidth);
+    if (
+      nextScrollTop === this.scrollTop &&
+      nextScrollLeft === this.scrollLeft &&
+      nextViewportWidth === this.viewportWidth &&
+      nextViewportHeight === this.viewportHeight
+    )
+      return;
+
+    this.scrollTop = nextScrollTop;
+    this.scrollLeft = nextScrollLeft;
+    this.viewportWidth = nextViewportWidth;
+    this.viewportHeight = nextViewportHeight;
     this.emitChange();
   }
 
@@ -148,6 +168,8 @@ export class FixedRowVirtualizer {
     const visibleRange = this.getVisibleRange();
     return {
       scrollTop: this.scrollTop,
+      scrollLeft: this.scrollLeft,
+      viewportWidth: this.viewportWidth,
       viewportHeight: this.viewportHeight,
       totalSize: computeTotalSize(this.options),
       visibleRange,
@@ -220,13 +242,31 @@ export class FixedRowVirtualizer {
     this.itemCache.clear();
   }
 
-  private syncFromScrollElement(): void {
+  private syncScrollPositionFromElement(): void {
     const element = this.attached?.element;
     if (!element) return;
 
     this.setScrollMetrics({
       scrollTop: element.scrollTop,
-      viewportHeight: element.clientHeight,
+      scrollLeft: element.scrollLeft,
+      viewportHeight: this.viewportHeight,
+      viewportWidth: this.viewportWidth,
+    });
+  }
+
+  private syncFromResizeEntries(entries: readonly ResizeObserverEntry[]): void {
+    const element = this.attached?.element;
+    if (!element) return;
+
+    const entry = resizeEntryForElement(entries, element);
+    if (!entry) return;
+
+    const size = resizeEntrySize(entry);
+    this.setScrollMetrics({
+      scrollTop: element.scrollTop,
+      scrollLeft: element.scrollLeft,
+      viewportHeight: size.height,
+      viewportWidth: size.width,
     });
   }
 
@@ -235,7 +275,7 @@ export class FixedRowVirtualizer {
 
     this.scrollAnimationFrame = requestFrame(() => {
       this.scrollAnimationFrame = 0;
-      this.syncFromScrollElement();
+      this.syncScrollPositionFromElement();
     });
   }
 
@@ -395,11 +435,44 @@ function normalizeNumber(value: number): number {
   return value;
 }
 
+function optionalNonNegative(value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  return Math.max(0, normalizeNumber(value));
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function createResizeObserver(callback: () => void): ResizeObserver | null {
+function resizeEntryForElement(
+  entries: readonly ResizeObserverEntry[],
+  element: Element,
+): ResizeObserverEntry | null {
+  for (const entry of entries) {
+    if (entry.target === element) return entry;
+  }
+
+  return entries[0] ?? null;
+}
+
+function resizeEntrySize(entry: ResizeObserverEntry): {
+  readonly width: number;
+  readonly height: number;
+} {
+  const box = resizeObserverBox(entry.contentBoxSize);
+  if (box) return box;
+  return { width: entry.contentRect.width, height: entry.contentRect.height };
+}
+
+function resizeObserverBox(
+  size: ResizeObserverEntry["contentBoxSize"],
+): { readonly width: number; readonly height: number } | null {
+  const box = Array.isArray(size) ? size[0] : size;
+  if (!box) return null;
+  return { width: box.inlineSize, height: box.blockSize };
+}
+
+function createResizeObserver(callback: ResizeObserverCallback): ResizeObserver | null {
   if (typeof ResizeObserver === "undefined") return null;
   return new ResizeObserver(callback);
 }

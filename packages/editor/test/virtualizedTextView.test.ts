@@ -98,7 +98,7 @@ describe("VirtualizedTextView", () => {
     expect(firstLabel.style.counterSet).toBe("editor-line 1");
   });
 
-  it("sizes the gutter from cached document marker measurements", () => {
+  it("sizes the gutter from deterministic CSS columns", () => {
     view.dispose();
     view = new VirtualizedTextView(container, {
       gutterWidth: 24,
@@ -107,31 +107,13 @@ describe("VirtualizedTextView", () => {
       highlightRegistry: mockRegistry,
       selectionHighlightName: "test-selection",
     });
-    const original = HTMLElement.prototype.getBoundingClientRect;
-    let gutterMeasurements = 0;
-    HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
-      if (this.classList.contains("editor-virtualized-gutter-measure")) {
-        gutterMeasurements += 1;
-        const label = this.querySelector(".editor-virtualized-line-number") as HTMLElement;
-        const line = Number(label.style.counterSet.match(/\d+$/)?.[0] ?? 0);
-        if (line === 1_234) return mockRect(0, 0, 97, 20);
-        return mockRect(0, 0, String(line).length * 12 + 16, 20);
-      }
+    view.setText(createLines(1_500));
+    view.setScrollMetrics(1_499 * 20, 20);
 
-      return original.call(this);
-    };
-
-    try {
-      view.setText(createLines(1_500));
-      view.setScrollMetrics(1_499 * 20, 20);
-      const measurementsAfterInitialRender = gutterMeasurements;
-      view.setScrollMetrics(0, 20);
-      expect(gutterMeasurements).toBe(measurementsAfterInitialRender);
-    } finally {
-      HTMLElement.prototype.getBoundingClientRect = original;
-    }
-
-    expect(view.scrollElement.style.getPropertyValue("--editor-gutter-width")).toBe("101px");
+    const spacer = container.querySelector(".editor-virtualized-spacer") as HTMLElement;
+    expect(view.scrollElement.style.getPropertyValue("--editor-gutter-label-columns")).toBe("7");
+    expect(view.scrollElement.style.getPropertyValue("--editor-gutter-min-width")).toBe("24px");
+    expect(spacer.style.width).toBe("146px");
   });
 
   it("updates mounted rows when scrolling", () => {
@@ -177,18 +159,16 @@ describe("VirtualizedTextView", () => {
       longLineChunkThreshold: 1_000,
       horizontalOverscanColumns: 0,
     });
-    mockClientWidth(view.scrollElement, 80);
-
     view.setText("x".repeat(5_000));
-    view.setScrollMetrics(0, 20);
+    view.setScrollMetrics(0, 20, 80);
     const firstChunk = view.getState().mountedRows[0]?.chunks[0];
 
     expect(firstChunk?.localStart).toBe(0);
     expect(firstChunk?.textNode.length).toBe(1_000);
     expect(container.querySelector(".editor-virtualized-row")?.textContent?.length).toBe(1_000);
 
-    view.scrollElement.scrollLeft = 2_400 * view.getState().metrics.characterWidth;
-    view.setScrollMetrics(0, 20);
+    const scrollLeft = 2_400 * view.getState().metrics.characterWidth;
+    view.setScrollMetrics(0, 20, 80, scrollLeft);
     const scrolledChunk = view.getState().mountedRows[0]?.chunks[0];
 
     expect(scrolledChunk?.localStart).toBeGreaterThan(0);
@@ -204,16 +184,15 @@ describe("VirtualizedTextView", () => {
       selectionHighlightName: "test-selection",
       wrap: true,
     });
-    mockClientWidth(view.scrollElement, 76);
     mockViewport(view.scrollElement, 76, 80);
 
     view.setText("abcdefghij");
-    view.setScrollMetrics(0, 80);
+    view.setScrollMetrics(0, 80, 76);
 
     expect(view.getState().wrapActive).toBe(true);
     expect(view.getState().totalHeight).toBe(40);
     expect(view.getState().mountedRows.map((row) => row.text)).toEqual(["abcde", "fghij"]);
-    expect(view.textOffsetFromViewportPoint(100, 25)).toBe(10);
+    expect(view.textOffsetFromViewportPoint(100, 25)).toBe(9);
   });
 
   it("mounts internal block rows with row-unit height", () => {
@@ -242,10 +221,9 @@ describe("VirtualizedTextView", () => {
       longLineChunkThreshold: 1_000,
       horizontalOverscanColumns: 0,
     });
-    mockClientWidth(view.scrollElement, 80);
-    view.scrollElement.scrollLeft = 2_400 * view.getState().metrics.characterWidth;
+    const scrollLeft = 2_400 * view.getState().metrics.characterWidth;
     view.setText("x".repeat(5_000));
-    view.setScrollMetrics(0, 20);
+    view.setScrollMetrics(0, 20, 80, scrollLeft);
 
     const chunk = view.getState().mountedRows[0]?.chunks[0];
 
@@ -292,6 +270,27 @@ describe("VirtualizedTextView", () => {
     expect(view.getState().mountedRows.map((row) => row.text)).toEqual(["abc", "", "def"]);
   });
 
+  it("does not read layout while rendering seeded long-line metrics", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 0,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      longLineChunkSize: 1_000,
+      longLineChunkThreshold: 1_000,
+      horizontalOverscanColumns: 0,
+    });
+    view.setText("x".repeat(5_000));
+
+    withThrowingRenderLayoutReads(view.scrollElement, () => {
+      view.setScrollMetrics(0, 20, 80, 0);
+      view.setScrollMetrics(0, 20, 80, 2_400 * view.getState().metrics.characterWidth);
+    });
+
+    expect(view.getState().mountedRows[0]?.chunks[0]?.localStart).toBeGreaterThan(0);
+  });
+
   it("snaps viewport fallback points outside vertical bounds to visible line edges", () => {
     view.setText("alpha\nbeta\ngamma");
     view.setScrollMetrics(0, 40);
@@ -324,6 +323,19 @@ describe("VirtualizedTextView", () => {
     expect(highlightsMap.get("test-selection")?.size).toBe(2);
   });
 
+  it("does not rebuild unchanged mounted selection ranges", () => {
+    view.setText("abc\ndef\nxyz");
+    view.setScrollMetrics(0, 80);
+    view.setSelection(1, 7);
+
+    const addCount = highlightAdds;
+    const clearCount = highlightClears;
+    view.setSelection(1, 7);
+
+    expect(highlightAdds).toBe(addCount);
+    expect(highlightClears).toBe(clearCount);
+  });
+
   it("positions a collapsed caret without native range measurement", () => {
     const originalGetClientRects = Range.prototype.getClientRects;
     Object.defineProperty(Range.prototype, "getClientRects", {
@@ -343,7 +355,7 @@ describe("VirtualizedTextView", () => {
 
     const caret = container.querySelector(".editor-virtualized-caret") as HTMLElement;
     expect(caret.hidden).toBe(false);
-    expect(caret.style.transform).toBe("translate(52px, 0px)");
+    expect(caret.style.transform).toBe("translate(58px, 0px)");
   });
 
   it("paints selections only across mounted horizontal chunks", () => {
@@ -357,9 +369,8 @@ describe("VirtualizedTextView", () => {
       longLineChunkThreshold: 1_000,
       horizontalOverscanColumns: 0,
     });
-    mockClientWidth(view.scrollElement, 80);
     view.setText("x".repeat(5_000));
-    view.setScrollMetrics(0, 20);
+    view.setScrollMetrics(0, 20, 80);
     view.setSelection(0, 5_000);
 
     expect(highlightsMap.get("test-selection")?.size).toBe(1);
@@ -516,6 +527,27 @@ describe("VirtualizedTextView", () => {
     expect(ranges[0]!.endOffset).toBe(4);
   });
 
+  it("does not create token groups while scrolling to a newly visible style", () => {
+    const lines = Array.from({ length: 20 }, (_, index) => `line-${index}`);
+    const offsets = lineStartOffsets(lines);
+    view.setText(lines.join("\n"));
+    view.setScrollMetrics(0, 100);
+    view.setTokens([
+      { start: offsets[0]!, end: offsets[0]! + 4, style: { color: "#ff0000" } },
+      { start: offsets[7]!, end: offsets[7]! + 4, style: { color: "#00ff00" } },
+    ]);
+
+    const styleText = document.head.querySelector("style")?.textContent;
+    const setCount = registrySets;
+    view.setScrollMetrics(60, 100);
+
+    const rowSeven = view.getState().mountedRows.find((row) => row.index === 7);
+    const rowSevenRange = tokenHighlightRangeForNode(rowSeven!.textNode);
+    expect(rowSevenRange).toBeDefined();
+    expect(registrySets).toBe(setCount);
+    expect(document.head.querySelector("style")?.textContent).toBe(styleText);
+  });
+
   it("keeps a registered selection highlight stable while scrolling offscreen and back", () => {
     view.setText(createLines(40));
     view.setScrollMetrics(0, 100);
@@ -646,13 +678,6 @@ function mockViewport(element: HTMLElement, width: number, height: number): void
   });
 }
 
-function mockClientWidth(element: HTMLElement, width: number): void {
-  Object.defineProperty(element, "clientWidth", {
-    configurable: true,
-    value: width,
-  });
-}
-
 function withThrowingScrollLeft(element: HTMLElement, callback: () => void): void {
   const descriptor = Object.getOwnPropertyDescriptor(element, "scrollLeft");
   Object.defineProperty(element, "scrollLeft", {
@@ -669,13 +694,50 @@ function withThrowingScrollLeft(element: HTMLElement, callback: () => void): voi
   }
 }
 
+function withThrowingRenderLayoutReads(element: HTMLElement, callback: () => void): void {
+  const clientWidth = Object.getOwnPropertyDescriptor(element, "clientWidth");
+  const clientHeight = Object.getOwnPropertyDescriptor(element, "clientHeight");
+  const getBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
+  Object.defineProperty(element, "clientWidth", {
+    configurable: true,
+    get: () => {
+      throw new Error("unexpected clientWidth read");
+    },
+  });
+  Object.defineProperty(element, "clientHeight", {
+    configurable: true,
+    get: () => {
+      throw new Error("unexpected clientHeight read");
+    },
+  });
+  HTMLElement.prototype.getBoundingClientRect = function throwingGetBoundingClientRect() {
+    throw new Error("unexpected layout read");
+  };
+
+  try {
+    callback();
+  } finally {
+    restorePropertyDescriptor(element, "clientWidth", clientWidth);
+    restorePropertyDescriptor(element, "clientHeight", clientHeight);
+    HTMLElement.prototype.getBoundingClientRect = getBoundingClientRect;
+  }
+}
+
 function restoreScrollLeft(element: HTMLElement, descriptor: PropertyDescriptor | undefined): void {
+  restorePropertyDescriptor(element, "scrollLeft", descriptor);
+}
+
+function restorePropertyDescriptor(
+  element: HTMLElement,
+  property: "clientHeight" | "clientWidth" | "scrollLeft",
+  descriptor: PropertyDescriptor | undefined,
+): void {
   if (descriptor) {
-    Object.defineProperty(element, "scrollLeft", descriptor);
+    Object.defineProperty(element, property, descriptor);
     return;
   }
 
-  Reflect.deleteProperty(element, "scrollLeft");
+  Reflect.deleteProperty(element, property);
 }
 
 function mockRect(left: number, top: number, width: number, height: number): DOMRect {

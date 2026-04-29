@@ -111,9 +111,9 @@ type TokenRenderEntry = {
   readonly sourceIndex: number;
 };
 
-const GUTTER_EXHAUSTIVE_MEASUREMENT_LIMIT = 2_000;
-const GUTTER_STRATIFIED_SAMPLE_COUNT = 512;
-const GUTTER_WIDTH_SAFETY_PX = 4;
+const GUTTER_EXTRA_WIDTH_PX = 18;
+const MIN_GUTTER_LABEL_COLUMNS = 3;
+const HEBREW_GUTTER_LABEL_PADDING_COLUMNS = 3;
 
 export class VirtualizedTextView {
   public readonly scrollElement: HTMLDivElement;
@@ -121,7 +121,6 @@ export class VirtualizedTextView {
 
   private readonly spacer: HTMLDivElement;
   private readonly gutterElement: HTMLDivElement;
-  private readonly gutterMeasureElement: HTMLDivElement;
   private readonly minimumGutterWidth: number;
   private readonly caretElement: HTMLDivElement;
   private readonly styleEl: HTMLStyleElement;
@@ -156,6 +155,7 @@ export class VirtualizedTextView {
   private nextTokenHighlightSlotId = 0;
   private selectionStart: number | null = null;
   private selectionEnd: number | null = null;
+  private lastSelectionHighlightSignature = "";
   private lastRenderedRowsKey = "";
   private gutterWidthDirty = true;
   private currentGutterWidth = DEFAULT_GUTTER_WIDTH;
@@ -186,7 +186,6 @@ export class VirtualizedTextView {
     this.inputElement = createInputElement(container);
     this.spacer = container.ownerDocument.createElement("div");
     this.gutterElement = container.ownerDocument.createElement("div");
-    this.gutterMeasureElement = this.createGutterMeasureElement();
     this.caretElement = container.ownerDocument.createElement("div");
     this.longLineChunkSize = normalizeChunkSize(options.longLineChunkSize);
     this.longLineChunkThreshold = normalizeChunkThreshold(
@@ -200,7 +199,7 @@ export class VirtualizedTextView {
     this.blockRows = options.blockRows ?? [];
     this.virtualizer = new FixedRowVirtualizer(createVirtualizerOptions(rowHeight, overscan));
 
-    this.scrollElement.style.setProperty("--editor-gutter-width", `${gutterWidth}px`);
+    this.scrollElement.style.setProperty("--editor-gutter-min-width", `${gutterWidth}px`);
     this.applyRowHeight(rowHeight);
     this.spacer.className = "editor-virtualized-spacer";
     this.gutterElement.className = "editor-virtualized-gutter";
@@ -209,7 +208,6 @@ export class VirtualizedTextView {
     this.spacer.appendChild(this.gutterElement);
     this.spacer.appendChild(this.caretElement);
     this.scrollElement.appendChild(this.spacer);
-    this.scrollElement.appendChild(this.gutterMeasureElement);
     this.scrollElement.appendChild(this.inputElement);
     container.ownerDocument.head.appendChild(this.styleEl);
 
@@ -306,6 +304,8 @@ export class VirtualizedTextView {
     if (editorTokensEqual(this.tokens, tokens)) {
       this.tokens = tokens;
       this.tokenRangesFollowLastTextEdit = false;
+      this.syncTokenGroupsToTokenSet();
+      this.renderTokenHighlights();
       return;
     }
 
@@ -313,6 +313,7 @@ export class VirtualizedTextView {
       this.tokens = tokens;
       this.tokenRangesFollowLastTextEdit = false;
       this.tokenRenderIndexDirty = true;
+      this.syncTokenGroupsToTokenSet();
       return;
     }
 
@@ -345,9 +346,15 @@ export class VirtualizedTextView {
     this.restoreScrollPosition(scrollTop, scrollLeft);
   }
 
-  public setScrollMetrics(scrollTop: number, viewportHeight: number): void {
-    this.refreshDisplayRowsForWrapWidth();
-    this.virtualizer.setScrollMetrics({ scrollTop, viewportHeight });
+  public setScrollMetrics(
+    scrollTop: number,
+    viewportHeight: number,
+    viewportWidth?: number,
+    scrollLeft?: number,
+  ): void {
+    const width = viewportWidth ?? this.virtualizer.getSnapshot().viewportWidth;
+    this.refreshDisplayRowsForWrapWidth(width);
+    this.virtualizer.setScrollMetrics({ scrollTop, viewportHeight, viewportWidth, scrollLeft });
   }
 
   public setWrapEnabled(enabled: boolean): void {
@@ -382,10 +389,7 @@ export class VirtualizedTextView {
   public scrollToRow(row: number): void {
     const target = clamp(Math.floor(row), 0, this.visibleLineCount() - 1);
     this.scrollElement.scrollTop = this.rowTop(target);
-    this.virtualizer.setScrollMetrics({
-      scrollTop: this.scrollElement.scrollTop,
-      viewportHeight: this.scrollElement.clientHeight,
-    });
+    this.syncVirtualizerMetricsFromScrollElement();
   }
 
   public revealOffset(offset: number, block: RevealBlock = "nearest"): void {
@@ -420,7 +424,8 @@ export class VirtualizedTextView {
   }
 
   public pageRowDelta(): number {
-    return Math.max(1, Math.floor(this.scrollElement.clientHeight / this.getRowHeight()) - 1);
+    const { viewportHeight } = this.virtualizer.getSnapshot();
+    return Math.max(1, Math.floor(viewportHeight / this.getRowHeight()) - 1);
   }
 
   public createRange(
@@ -520,62 +525,47 @@ export class VirtualizedTextView {
   }
 
   private renderSnapshot(snapshot: FixedRowVirtualizerSnapshot): void {
-    const rowsKey = snapshotRowsKey(snapshot, this.horizontalWindowKey(snapshot.virtualItems));
+    this.updateGutterWidthIfNeeded();
+    const rowsKey = snapshotRowsKey(
+      snapshot,
+      this.horizontalWindowKey(snapshot.virtualItems, snapshot),
+    );
     if (rowsKey === this.lastRenderedRowsKey) return;
 
     this.lastRenderedRowsKey = rowsKey;
     this.applyTotalHeight(snapshot.totalSize);
-    this.updateGutterWidthIfNeeded();
     this.updateContentWidth(snapshot.virtualItems);
-    this.reconcileRows(snapshot.virtualItems);
+    this.reconcileRows(snapshot.virtualItems, snapshot);
     this.renderTokenHighlights();
     this.renderSelectionHighlight();
     this.onViewportChange?.();
   }
 
-  private reconcileRows(items: readonly FixedRowVirtualItem[]): void {
+  private reconcileRows(
+    items: readonly FixedRowVirtualItem[],
+    snapshot: FixedRowVirtualizerSnapshot,
+  ): void {
     const reusableRows = this.releaseRowsOutside(items);
     for (const item of items) {
-      this.mountOrUpdateRow(item, reusableRows);
+      this.mountOrUpdateRow(item, reusableRows, snapshot);
     }
 
     this.removeReusableRows(reusableRows);
   }
 
-  private createGutterMeasureElement(): HTMLDivElement {
-    const document = this.scrollElement.ownerDocument;
-    const measureElement = document.createElement("div");
-    const rowElement = document.createElement("div");
-    const labelElement = document.createElement("span");
-    const foldButtonElement = document.createElement("button");
-
-    measureElement.className = "editor-virtualized-gutter-measure";
-    measureElement.setAttribute("aria-hidden", "true");
-    rowElement.className = "editor-virtualized-gutter-row";
-    labelElement.className = "editor-virtualized-gutter-label editor-virtualized-line-number";
-    foldButtonElement.className = "editor-virtualized-fold-toggle";
-    foldButtonElement.type = "button";
-    foldButtonElement.hidden = true;
-    foldButtonElement.disabled = true;
-    foldButtonElement.tabIndex = -1;
-    rowElement.appendChild(labelElement);
-    rowElement.appendChild(foldButtonElement);
-    measureElement.appendChild(rowElement);
-    return measureElement;
-  }
-
   private mountOrUpdateRow(
     item: FixedRowVirtualItem,
     reusableRows: MountedVirtualizedTextRow[],
+    snapshot: FixedRowVirtualizerSnapshot,
   ): void {
     const existing = this.rowElements.get(item.index);
     if (existing) {
-      this.updateRow(existing, item);
+      this.updateRow(existing, item, snapshot);
       return;
     }
 
     const row = reusableRows.shift() ?? this.createRow();
-    this.updateRow(row, item);
+    this.updateRow(row, item, snapshot);
     this.rowElements.set(item.index, row);
   }
 
@@ -636,8 +626,12 @@ export class VirtualizedTextView {
     };
   }
 
-  private updateRow(row: MountedVirtualizedTextRow, item: FixedRowVirtualItem): void {
-    if (this.isRowCurrent(row, item)) return;
+  private updateRow(
+    row: MountedVirtualizedTextRow,
+    item: FixedRowVirtualItem,
+    snapshot: FixedRowVirtualizerSnapshot,
+  ): void {
+    if (this.isRowCurrent(row, item, snapshot)) return;
 
     const bufferRow = this.bufferRowForVirtualRow(item.index);
     const text = this.lineText(item.index);
@@ -646,7 +640,7 @@ export class VirtualizedTextView {
     const foldMarker = this.foldMarkerForVirtualRow(item.index);
     const displayKind = this.displayRowKind(item.index);
 
-    this.updateRowElement(row, item, text, startOffset);
+    this.updateRowElement(row, item, text, startOffset, snapshot);
     updateMutableRow(row, {
       bufferRow,
       endOffset,
@@ -659,7 +653,7 @@ export class VirtualizedTextView {
       text,
       textRevision: this.textRevision,
       top: item.start,
-      chunkKey: this.rowChunkKey(text),
+      chunkKey: this.rowChunkKey(text, snapshot),
       displayKind,
     });
   }
@@ -669,6 +663,7 @@ export class VirtualizedTextView {
     item: FixedRowVirtualItem,
     text: string,
     startOffset: number,
+    snapshot: FixedRowVirtualizerSnapshot,
   ): void {
     if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
     this.updateGutterRowElement(row, item);
@@ -681,7 +676,7 @@ export class VirtualizedTextView {
       return;
     }
 
-    this.updateRowTextChunks(row, text, startOffset);
+    this.updateRowTextChunks(row, text, startOffset, snapshot);
     this.updateRowFoldPresentation(row, item);
   }
 
@@ -697,17 +692,18 @@ export class VirtualizedTextView {
     this.clampStoredSelection();
     this.resetContentWidthScan();
     this.updateContentWidth(snapshot.virtualItems);
-    this.updateMountedRowsAfterSameLineEdit(snapshot.virtualItems, patch);
+    this.updateMountedRowsAfterSameLineEdit(snapshot.virtualItems, patch, snapshot);
   }
 
   private updateMountedRowsAfterSameLineEdit(
     items: readonly FixedRowVirtualItem[],
     patch: SameLineEditPatch,
+    snapshot: FixedRowVirtualizerSnapshot,
   ): void {
     for (const item of items) {
       const row = this.rowElements.get(item.index);
       if (!row) continue;
-      this.updateRowAfterSameLineEdit(row, item, patch);
+      this.updateRowAfterSameLineEdit(row, item, patch, snapshot);
     }
   }
 
@@ -715,6 +711,7 @@ export class VirtualizedTextView {
     row: MountedVirtualizedTextRow,
     item: FixedRowVirtualItem,
     patch: SameLineEditPatch,
+    snapshot: FixedRowVirtualizerSnapshot,
   ): void {
     const text = this.lineText(item.index);
     const startOffset = this.lineStartOffset(item.index);
@@ -722,7 +719,7 @@ export class VirtualizedTextView {
     const foldMarker = this.foldMarkerForVirtualRow(item.index);
     const displayKind = this.displayRowKind(item.index);
 
-    this.updateRowElementForSameLineEdit(row, item, text, patch, startOffset);
+    this.updateRowElementForSameLineEdit(row, item, text, patch, startOffset, snapshot);
     updateMutableRow(row, {
       bufferRow: this.bufferRowForVirtualRow(item.index),
       endOffset,
@@ -735,7 +732,7 @@ export class VirtualizedTextView {
       text,
       textRevision: this.textRevision,
       top: item.start,
-      chunkKey: this.rowChunkKey(text),
+      chunkKey: this.rowChunkKey(text, snapshot),
       displayKind,
     });
   }
@@ -746,6 +743,7 @@ export class VirtualizedTextView {
     text: string,
     patch: SameLineEditPatch,
     startOffset: number,
+    snapshot: FixedRowVirtualizerSnapshot,
   ): void {
     if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
     this.updateGutterRowElement(row, item);
@@ -758,7 +756,7 @@ export class VirtualizedTextView {
       return;
     }
 
-    this.updateRowTextForSameLineEdit(row, item, text, patch, startOffset);
+    this.updateRowTextForSameLineEdit(row, item, text, patch, startOffset, snapshot);
     this.updateRowFoldPresentation(row, item);
   }
 
@@ -768,20 +766,21 @@ export class VirtualizedTextView {
     text: string,
     patch: SameLineEditPatch,
     startOffset: number,
+    snapshot: FixedRowVirtualizerSnapshot,
   ): void {
     if (item.index !== patch.rowIndex) {
-      if (row.text !== text) this.updateRowTextChunks(row, text, startOffset);
+      if (row.text !== text) this.updateRowTextChunks(row, text, startOffset, snapshot);
       if (row.text === text) this.syncRowChunkOffsets(row, startOffset);
       return;
     }
 
     if (row.textNode.data !== row.text) {
-      this.updateRowTextChunks(row, text, startOffset);
+      this.updateRowTextChunks(row, text, startOffset, snapshot);
       return;
     }
 
     if (this.shouldChunkLine(text)) {
-      this.updateRowTextChunks(row, text, startOffset);
+      this.updateRowTextChunks(row, text, startOffset, snapshot);
       return;
     }
 
@@ -802,13 +801,14 @@ export class VirtualizedTextView {
     row: MountedVirtualizedTextRow,
     text: string,
     startOffset: number,
+    snapshot = this.virtualizer.getSnapshot(),
   ): void {
     if (!this.shouldChunkLine(text)) {
       this.setDirectRowText(row, text, startOffset);
       return;
     }
 
-    this.setChunkedRowText(row, text, startOffset);
+    this.setChunkedRowText(row, text, startOffset, snapshot);
   }
 
   private setDirectRowText(
@@ -850,8 +850,9 @@ export class VirtualizedTextView {
     row: MountedVirtualizedTextRow,
     text: string,
     startOffset: number,
+    snapshot: FixedRowVirtualizerSnapshot,
   ): void {
-    const window = this.horizontalChunkWindow(text.length);
+    const window = this.horizontalChunkWindow(text.length, snapshot);
     const chunks = this.createRowChunks(text, window, startOffset);
     const elements = chunks
       .map((chunk) => chunk.element)
@@ -911,18 +912,21 @@ export class VirtualizedTextView {
     return text.length > this.longLineChunkThreshold;
   }
 
-  private rowChunkKey(text: string): string {
+  private rowChunkKey(text: string, snapshot = this.virtualizer.getSnapshot()): string {
     if (!this.shouldChunkLine(text)) return "direct";
 
-    const window = this.horizontalChunkWindow(text.length);
-    return `${window.start}:${window.end}:${this.scrollElement.clientWidth}:${this.scrollElement.scrollLeft}`;
+    const window = this.horizontalChunkWindow(text.length, snapshot);
+    return `${window.start}:${window.end}:${snapshot.viewportWidth}:${snapshot.scrollLeft}`;
   }
 
-  private horizontalChunkWindow(textLength: number): HorizontalChunkWindow {
-    const viewportColumns = this.horizontalViewportColumns();
+  private horizontalChunkWindow(
+    textLength: number,
+    snapshot = this.virtualizer.getSnapshot(),
+  ): HorizontalChunkWindow {
+    const viewportColumns = this.horizontalViewportColumns(snapshot.viewportWidth);
     const leftColumn = Math.max(
       0,
-      Math.floor(this.horizontalTextScrollLeft() / this.characterWidth()),
+      Math.floor(this.horizontalTextScrollLeft(snapshot.scrollLeft) / this.characterWidth()),
     );
     const start = alignChunkStart(
       Math.max(0, leftColumn - this.horizontalOverscanColumns),
@@ -936,20 +940,25 @@ export class VirtualizedTextView {
     return { start, end: clamp(end, start, textLength) };
   }
 
-  private horizontalViewportColumns(): number {
-    const width = Math.max(0, this.scrollElement.clientWidth - this.gutterWidth());
+  private horizontalViewportColumns(
+    viewportWidth = this.virtualizer.getSnapshot().viewportWidth,
+  ): number {
+    const width = Math.max(0, viewportWidth - this.gutterWidth());
     return Math.max(1, Math.ceil(width / this.characterWidth()));
   }
 
-  private horizontalTextScrollLeft(): number {
-    return Math.max(0, this.scrollElement.scrollLeft - this.gutterWidth());
+  private horizontalTextScrollLeft(scrollLeft = this.virtualizer.getSnapshot().scrollLeft): number {
+    return Math.max(0, scrollLeft - this.gutterWidth());
   }
 
-  private horizontalWindowKey(items: readonly FixedRowVirtualItem[]): string {
+  private horizontalWindowKey(
+    items: readonly FixedRowVirtualItem[],
+    snapshot: FixedRowVirtualizerSnapshot,
+  ): string {
     if (!this.hasHorizontalChunkedRows(items)) return "direct";
 
-    const scrollLeft = Math.floor(this.scrollElement.scrollLeft);
-    return `${scrollLeft}:${this.scrollElement.clientWidth}:${this.longLineChunkSize}`;
+    const scrollLeft = Math.floor(snapshot.scrollLeft);
+    return `${scrollLeft}:${snapshot.viewportWidth}:${this.longLineChunkSize}`;
   }
 
   private hasHorizontalChunkedRows(items: readonly FixedRowVirtualItem[]): boolean {
@@ -1029,7 +1038,11 @@ export class VirtualizedTextView {
     this.onFoldToggle?.(marker);
   };
 
-  private isRowCurrent(row: MountedVirtualizedTextRow, item: FixedRowVirtualItem): boolean {
+  private isRowCurrent(
+    row: MountedVirtualizedTextRow,
+    item: FixedRowVirtualItem,
+    snapshot: FixedRowVirtualizerSnapshot,
+  ): boolean {
     const text = this.lineText(item.index);
     const bufferRow = this.bufferRowForVirtualRow(item.index);
     const foldMarker = this.foldMarkerForVirtualRow(item.index);
@@ -1040,7 +1053,7 @@ export class VirtualizedTextView {
       row.top === item.start &&
       row.height === item.size &&
       row.text === text &&
-      row.chunkKey === this.rowChunkKey(text) &&
+      row.chunkKey === this.rowChunkKey(text, snapshot) &&
       row.foldMarkerKey === (foldMarker?.key ?? "") &&
       row.foldCollapsed === (foldMarker?.collapsed ?? false) &&
       row.displayKind === displayKind &&
@@ -1079,59 +1092,19 @@ export class VirtualizedTextView {
     if (!this.gutterWidthDirty) return;
 
     this.gutterWidthDirty = false;
-    const width = this.measureDocumentGutterWidth();
-    this.applyGutterWidth(width);
+    this.applyGutterWidth(gutterLabelColumns(this.lineStarts.length));
   }
 
-  private measureDocumentGutterWidth(): number {
-    let measuredWidth = 0;
-    for (const lineNumber of this.gutterMeasurementLineNumbers()) {
-      measuredWidth = Math.max(measuredWidth, this.measureGutterMarkerWidth(lineNumber));
-    }
+  private applyGutterWidth(labelColumns: number): void {
+    setStyleValue(this.scrollElement, "--editor-gutter-label-columns", String(labelColumns));
 
-    return Math.ceil(Math.max(this.minimumGutterWidth, measuredWidth + GUTTER_WIDTH_SAFETY_PX));
-  }
-
-  private gutterMeasurementLineNumbers(): readonly number[] {
-    const lineCount = this.lineStarts.length;
-    if (lineCount <= GUTTER_EXHAUSTIVE_MEASUREMENT_LIMIT) {
-      return Array.from({ length: lineCount }, (_, index) => index + 1);
-    }
-
-    const lineNumbers = new Set<number>([1, lineCount]);
-    const stride = Math.ceil(lineCount / GUTTER_STRATIFIED_SAMPLE_COUNT);
-    for (let lineNumber = stride; lineNumber < lineCount; lineNumber += stride) {
-      lineNumbers.add(lineNumber);
-    }
-    for (let magnitude = 10; magnitude <= lineCount * 10; magnitude *= 10) {
-      addGutterMeasurementLineNumber(lineNumbers, magnitude - 1, lineCount);
-      addGutterMeasurementLineNumber(lineNumbers, magnitude, lineCount);
-      addGutterMeasurementLineNumber(
-        lineNumbers,
-        repeatedDigitNumber("8", String(magnitude - 1).length),
-        lineCount,
-      );
-    }
-
-    return [...lineNumbers].toSorted((left, right) => left - right);
-  }
-
-  private measureGutterMarkerWidth(lineNumber: number): number {
-    const label = this.gutterMeasureElement.querySelector(".editor-virtualized-line-number");
-    if (!(label instanceof HTMLElement)) return 0;
-
-    setCounterSet(label, `editor-line ${lineNumber}`);
-    const rect = this.gutterMeasureElement.getBoundingClientRect();
-    if (!Number.isFinite(rect.width) || rect.width <= 0) return 0;
-    return rect.width;
-  }
-
-  private applyGutterWidth(width: number): void {
-    const nextWidth = Math.max(0, Math.ceil(width));
+    const nextWidth = Math.max(
+      this.minimumGutterWidth,
+      Math.ceil(labelColumns * this.characterWidth() + GUTTER_EXTRA_WIDTH_PX),
+    );
     if (nextWidth === this.currentGutterWidth) return;
 
     this.currentGutterWidth = nextWidth;
-    this.scrollElement.style.setProperty("--editor-gutter-width", `${nextWidth}px`);
     this.applySpacerWidth();
   }
 
@@ -1247,20 +1220,18 @@ export class VirtualizedTextView {
     if (this.resolveMountedOffset(offset)) return;
 
     this.scrollHorizontallyToOffset(row, offset);
-    this.virtualizer.setScrollMetrics({
-      scrollTop: this.scrollElement.scrollTop,
-      viewportHeight: this.scrollElement.clientHeight,
-    });
+    this.syncVirtualizerMetricsFromScrollElement();
   }
 
   private scrollHorizontallyToOffset(row: number, offset: number): void {
     const text = this.lineText(row);
     if (!this.shouldChunkLine(text)) return;
 
+    const snapshot = this.virtualizer.getSnapshot();
     const localOffset = clamp(offset - this.lineStartOffset(row), 0, text.length);
     const targetLeft = this.gutterWidth() + localOffset * this.characterWidth();
-    const viewportRight = this.scrollElement.scrollLeft + this.scrollElement.clientWidth;
-    if (targetLeft >= this.scrollElement.scrollLeft && targetLeft <= viewportRight) return;
+    const viewportRight = snapshot.scrollLeft + snapshot.viewportWidth;
+    if (targetLeft >= snapshot.scrollLeft && targetLeft <= viewportRight) return;
 
     this.scrollElement.scrollLeft = Math.max(0, targetLeft - this.gutterWidth());
   }
@@ -1276,78 +1247,81 @@ export class VirtualizedTextView {
 
     this.scrollElement.scrollTop = scrollTop;
     this.scrollElement.scrollLeft = scrollLeft;
+    this.syncVirtualizerMetricsFromScrollElement();
+  }
+
+  private syncVirtualizerMetricsFromScrollElement(): void {
+    const snapshot = this.virtualizer.getSnapshot();
     this.virtualizer.setScrollMetrics({
       scrollTop: this.scrollElement.scrollTop,
-      viewportHeight: this.scrollElement.clientHeight,
+      scrollLeft: this.scrollElement.scrollLeft,
+      viewportHeight: snapshot.viewportHeight,
+      viewportWidth: snapshot.viewportWidth,
     });
   }
 
   private scrollOffsetIntoView(offset: number): void {
+    const snapshot = this.virtualizer.getSnapshot();
     const row = this.rowForOffset(offset);
     const rowTop = this.rowTop(row);
     const rowBottom = rowTop + this.rowHeight(row);
-    const scrollTop = this.scrollTopForVisibleRow(rowTop, rowBottom);
-    const scrollLeft = this.scrollLeftForVisibleOffset(row, offset);
-    if (scrollTop === this.scrollElement.scrollTop && scrollLeft === this.scrollElement.scrollLeft)
-      return;
+    const scrollTop = this.scrollTopForVisibleRow(rowTop, rowBottom, snapshot);
+    const scrollLeft = this.scrollLeftForVisibleOffset(row, offset, snapshot);
+    if (scrollTop === snapshot.scrollTop && scrollLeft === snapshot.scrollLeft) return;
 
     this.scrollElement.scrollTop = scrollTop;
     this.scrollElement.scrollLeft = scrollLeft;
-    this.virtualizer.setScrollMetrics({
-      scrollTop: this.scrollElement.scrollTop,
-      viewportHeight: this.scrollElement.clientHeight,
-    });
+    this.syncVirtualizerMetricsFromScrollElement();
   }
 
   private scrollOffsetToViewportEnd(offset: number): void {
+    const snapshot = this.virtualizer.getSnapshot();
     const row = this.rowForOffset(offset);
     const rowBottom = this.rowTop(row) + this.rowHeight(row);
-    const scrollTop = this.scrollTopForRowBottom(rowBottom);
-    const scrollLeft = this.scrollLeftForVisibleOffset(row, offset);
-    if (scrollTop === this.scrollElement.scrollTop && scrollLeft === this.scrollElement.scrollLeft)
-      return;
+    const scrollTop = this.scrollTopForRowBottom(rowBottom, snapshot);
+    const scrollLeft = this.scrollLeftForVisibleOffset(row, offset, snapshot);
+    if (scrollTop === snapshot.scrollTop && scrollLeft === snapshot.scrollLeft) return;
 
     this.scrollElement.scrollTop = scrollTop;
     this.scrollElement.scrollLeft = scrollLeft;
-    this.virtualizer.setScrollMetrics({
-      scrollTop: this.scrollElement.scrollTop,
-      viewportHeight: this.scrollElement.clientHeight,
-    });
+    this.syncVirtualizerMetricsFromScrollElement();
   }
 
-  private scrollTopForRowBottom(rowBottom: number): number {
-    const maxScrollTop = Math.max(
-      0,
-      this.virtualizer.getSnapshot().totalSize - this.scrollElement.clientHeight,
-    );
-    return clamp(rowBottom - this.scrollElement.clientHeight, 0, maxScrollTop);
+  private scrollTopForRowBottom(rowBottom: number, snapshot: FixedRowVirtualizerSnapshot): number {
+    const maxScrollTop = Math.max(0, snapshot.totalSize - snapshot.viewportHeight);
+    return clamp(rowBottom - snapshot.viewportHeight, 0, maxScrollTop);
   }
 
-  private scrollTopForVisibleRow(rowTop: number, rowBottom: number): number {
-    const viewportTop = this.scrollElement.scrollTop;
-    const viewportBottom = viewportTop + this.scrollElement.clientHeight;
-    const maxScrollTop = Math.max(
-      0,
-      this.virtualizer.getSnapshot().totalSize - this.scrollElement.clientHeight,
-    );
+  private scrollTopForVisibleRow(
+    rowTop: number,
+    rowBottom: number,
+    snapshot: FixedRowVirtualizerSnapshot,
+  ): number {
+    const viewportTop = snapshot.scrollTop;
+    const viewportBottom = viewportTop + snapshot.viewportHeight;
+    const maxScrollTop = Math.max(0, snapshot.totalSize - snapshot.viewportHeight);
 
     if (rowTop < viewportTop) return clamp(rowTop, 0, maxScrollTop);
     if (rowBottom > viewportBottom)
-      return clamp(rowBottom - this.scrollElement.clientHeight, 0, maxScrollTop);
+      return clamp(rowBottom - snapshot.viewportHeight, 0, maxScrollTop);
     return viewportTop;
   }
 
-  private scrollLeftForVisibleOffset(row: number, offset: number): number {
+  private scrollLeftForVisibleOffset(
+    row: number,
+    offset: number,
+    snapshot: FixedRowVirtualizerSnapshot,
+  ): number {
     const text = this.lineText(row);
     const localOffset = clamp(offset - this.lineStartOffset(row), 0, text.length);
     const caretLeft =
       this.gutterWidth() +
       bufferColumnToVisualColumn(text, localOffset, DEFAULT_TAB_SIZE) * this.characterWidth();
-    const viewportLeft = this.scrollElement.scrollLeft + this.gutterWidth();
-    const viewportRight = this.scrollElement.scrollLeft + this.scrollElement.clientWidth;
+    const viewportLeft = snapshot.scrollLeft + this.gutterWidth();
+    const viewportRight = snapshot.scrollLeft + snapshot.viewportWidth;
     if (caretLeft < viewportLeft) return Math.max(0, caretLeft - this.gutterWidth());
-    if (caretLeft > viewportRight) return Math.max(0, caretLeft - this.scrollElement.clientWidth);
-    return this.scrollElement.scrollLeft;
+    if (caretLeft > viewportRight) return Math.max(0, caretLeft - snapshot.viewportWidth);
+    return snapshot.scrollLeft;
   }
 
   private resolveMountedOffset(
@@ -1396,6 +1370,7 @@ export class VirtualizedTextView {
 
   private clearSelectionHighlight(): void {
     this.clearSelectionHighlightRanges();
+    this.lastSelectionHighlightSignature = "";
     if (!this.selectionHighlightRegistered || !this.highlightRegistry) return;
 
     this.highlightRegistry.delete(this.selectionHighlightName);
@@ -1412,11 +1387,38 @@ export class VirtualizedTextView {
     }
     if (!this.selectionHighlight || !this.highlightRegistry) return;
 
+    const signature = this.selectionHighlightSignature(selectionRange.start, selectionRange.end);
+    if (signature === this.lastSelectionHighlightSignature) return;
+
+    this.lastSelectionHighlightSignature = signature;
     this.clearSelectionHighlightRanges();
     this.addMountedSelectionRanges(selectionRange.start, selectionRange.end);
     if (this.selectionHighlight.size === 0) return;
 
     this.ensureSelectionHighlightRegistered();
+  }
+
+  private selectionHighlightSignature(start: number, end: number): string {
+    const parts = [`${start}:${end}`];
+    for (const row of this.getMountedRows()) {
+      this.appendSelectionRowSignature(parts, row, start, end);
+    }
+
+    return parts.join("|");
+  }
+
+  private appendSelectionRowSignature(
+    parts: string[],
+    row: VirtualizedTextRow,
+    start: number,
+    end: number,
+  ): void {
+    if (end <= row.startOffset || start >= row.endOffset) return;
+
+    for (const chunk of row.chunks) {
+      const signature = selectionChunkSignature(row, chunk, start, end);
+      if (signature) parts.push(signature);
+    }
   }
 
   private renderCaret(): void {
@@ -1455,31 +1457,21 @@ export class VirtualizedTextView {
 
     const mountedRows = this.getMountedRows();
     const segmentsByRow = this.tokenSegmentsForRows(mountedRows);
-    let groupsChanged = false;
     for (const row of mountedRows) {
-      groupsChanged =
-        this.reconcileTokenHighlightsForRow(
-          row,
-          segmentsByRow.get(row.tokenHighlightSlotId) ?? [],
-        ) || groupsChanged;
+      this.reconcileTokenHighlightsForRow(row, segmentsByRow.get(row.tokenHighlightSlotId) ?? []);
     }
-
-    if (!groupsChanged) return;
-
-    this.rebuildStyleRules();
   }
 
   private reconcileTokenHighlightsForRow(
     row: MountedVirtualizedTextRow,
     segments: readonly TokenRowSegment[],
-  ): boolean {
+  ): void {
     const signature = tokenRowSignature(row, segments);
-    if (this.rowTokenSignatures.get(row.tokenHighlightSlotId) === signature) return false;
+    if (this.rowTokenSignatures.get(row.tokenHighlightSlotId) === signature) return;
 
     this.deleteTokenRangesForRow(row.tokenHighlightSlotId);
-    const result = this.addTokenSegmentsForRow(row, segments);
+    this.addTokenSegmentsForRow(row, segments);
     this.rowTokenSignatures.set(row.tokenHighlightSlotId, signature);
-    return result.groupsChanged;
   }
 
   private ensureTokenRenderIndex(): void {
@@ -1604,13 +1596,11 @@ export class VirtualizedTextView {
   private addTokenSegmentsForRow(
     row: MountedVirtualizedTextRow,
     segments: readonly TokenRowSegment[],
-  ): { readonly groupsChanged: boolean } {
+  ): void {
     const rangesByStyle = new Map<string, AbstractRange[]>();
     const document = this.scrollElement.ownerDocument;
-    let groupsChanged = false;
     for (const segment of segments) {
-      const result = this.ensureTokenGroup(segment.styleKey, segment.style);
-      const group = result.group;
+      const group = this.tokenGroups.get(segment.styleKey);
       if (!group) continue;
 
       const range = addTokenRangeToChunk(
@@ -1620,7 +1610,6 @@ export class VirtualizedTextView {
         segment.start,
         segment.end,
       );
-      groupsChanged = groupsChanged || result.created;
       if (!range) continue;
       appendTokenRange(rangesByStyle, segment.styleKey, range);
     }
@@ -1628,8 +1617,6 @@ export class VirtualizedTextView {
     if (rangesByStyle.size > 0) {
       this.rowTokenRanges.set(row.tokenHighlightSlotId, rangesByStyle);
     }
-
-    return { groupsChanged };
   }
 
   private ensureTokenGroup(
@@ -1794,8 +1781,8 @@ export class VirtualizedTextView {
     this.styleEl.textContent = nextRules;
   }
 
-  private rebuildDisplayRows(): void {
-    this.currentWrapColumn = this.wrapColumn();
+  private rebuildDisplayRows(viewportWidth = this.virtualizer.getSnapshot().viewportWidth): void {
+    this.currentWrapColumn = this.wrapColumn(viewportWidth);
     this.displayRows = createDisplayRows({
       text: this.text,
       lineStarts: this.lineStarts,
@@ -1807,13 +1794,15 @@ export class VirtualizedTextView {
     });
   }
 
-  private refreshDisplayRowsForWrapWidth(): void {
+  private refreshDisplayRowsForWrapWidth(
+    viewportWidth = this.virtualizer.getSnapshot().viewportWidth,
+  ): void {
     if (!this.wrapEnabled) return;
 
-    const wrapColumn = this.wrapColumn();
+    const wrapColumn = this.wrapColumn(viewportWidth);
     if (wrapColumn === this.currentWrapColumn) return;
 
-    this.rebuildDisplayRows();
+    this.rebuildDisplayRows(viewportWidth);
     this.resetContentWidthScan();
     this.lastRenderedRowsKey = "";
     this.updateVirtualizerRows();
@@ -1853,10 +1842,10 @@ export class VirtualizedTextView {
     return this.rowSizes()?.[row] ?? this.getRowHeight();
   }
 
-  private wrapColumn(): number | null {
+  private wrapColumn(viewportWidth: number): number | null {
     if (!this.wrapEnabled) return null;
 
-    return this.horizontalViewportColumns();
+    return this.horizontalViewportColumns(viewportWidth);
   }
 
   private displayRowKind(row: number): "text" | "block" {
@@ -2013,15 +2002,15 @@ export class VirtualizedTextView {
     const bottom = Math.max(top, rect.bottom - padding.bottom);
 
     return {
-      x: this.viewportTextX(clientX, left, right),
+      x: this.viewportTextX(clientX, left, right, this.virtualizer.getSnapshot().scrollLeft),
       y: clamp(clientY, top, Math.max(top, bottom - 1)) - top,
       verticalDirection: pointVerticalDirection(clientY, top, bottom),
     };
   }
 
-  private viewportTextX(clientX: number, left: number, right: number): number {
+  private viewportTextX(clientX: number, left: number, right: number, scrollLeft: number): number {
     const viewportX = clamp(clientX, left, right) - left;
-    const scrolledX = viewportX + this.scrollElement.scrollLeft;
+    const scrolledX = viewportX + scrollLeft;
     return Math.max(0, scrolledX - this.gutterWidth());
   }
 
@@ -2058,17 +2047,26 @@ export class VirtualizedTextView {
   }
 }
 
-function addGutterMeasurementLineNumber(
-  lineNumbers: Set<number>,
-  lineNumber: number,
-  lineCount: number,
-): void {
-  if (lineNumber < 1 || lineNumber > lineCount) return;
-  lineNumbers.add(lineNumber);
+function gutterLabelColumns(lineCount: number): number {
+  if (lineCount < 100) return MIN_GUTTER_LABEL_COLUMNS;
+  return decimalDigitCount(lineCount) + HEBREW_GUTTER_LABEL_PADDING_COLUMNS;
 }
 
-function repeatedDigitNumber(digit: string, count: number): number {
-  return Number.parseInt(digit.repeat(count), 10);
+function decimalDigitCount(value: number): number {
+  return String(Math.max(1, Math.floor(value))).length;
+}
+
+function selectionChunkSignature(
+  row: VirtualizedTextRow,
+  chunk: VirtualizedTextChunk,
+  start: number,
+  end: number,
+): string | null {
+  if (end <= chunk.startOffset || start >= chunk.endOffset) return null;
+
+  const localStart = clamp(start - chunk.startOffset, 0, chunk.textNode.length);
+  const localEnd = clamp(end - chunk.startOffset, 0, chunk.textNode.length);
+  return `${row.index}:${chunk.localStart}:${chunk.startOffset}:${localStart}:${localEnd}`;
 }
 
 function compareTokenRenderEntries(left: TokenRenderEntry, right: TokenRenderEntry): number {

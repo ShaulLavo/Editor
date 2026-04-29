@@ -46,16 +46,12 @@ describe.skipIf(typeof globalThis.Highlight === "undefined")(
       expect(validation.selectionChecks).toBeGreaterThan(0);
     });
 
-    it("measures generated gutter markers with the active CSS counter style", () => {
-      view!.scrollElement.style.setProperty("--editor-gutter-style", "decimal");
+    it("sets deterministic gutter CSS variables without marker measurement", () => {
       view!.setText(Array.from({ length: 10_000 }, (_, index) => `line ${index}`).join("\n"));
-      view!.setScrollMetrics(9_999 * 20, 20);
+      view!.setScrollMetrics(9_999 * 20, 20, 360);
 
-      const gutterWidth = Number.parseFloat(
-        view!.scrollElement.style.getPropertyValue("--editor-gutter-width"),
-      );
-
-      expect(gutterWidth).toBeGreaterThan(36);
+      expect(view!.scrollElement.style.getPropertyValue("--editor-gutter-label-columns")).toBe("8");
+      expect(view!.scrollElement.style.getPropertyValue("--editor-gutter-width")).toBe("");
     });
   },
 );

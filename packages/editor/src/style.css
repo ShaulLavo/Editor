@@ -52,7 +52,12 @@
   --editor-syntax-variable: #e4e4e7;
   --editor-syntax-variable-builtin: #fdba74;
   --editor-gutter-style: hebrew;
-  --editor-gutter-width: 36px;
+  --editor-gutter-label-columns: 3;
+  --editor-gutter-min-width: 36px;
+  --editor-gutter-width: max(
+    var(--editor-gutter-min-width),
+    calc((var(--editor-gutter-label-columns) * 1ch) + 18px)
+  );
   --editor-row-height: 20px;
 
   flex: 1;
@@ -98,24 +103,11 @@
   user-select: none;
 }
 
-.editor-virtualized-gutter-measure {
-  left: -10000px;
-  pointer-events: none;
-  position: absolute;
-  top: 0;
-  visibility: hidden;
-  width: max-content;
-}
-
-.editor-virtualized-gutter-measure .editor-virtualized-gutter-row {
-  position: static;
-  width: max-content;
-}
-
 .editor-virtualized-gutter-label {
   color: #71717a;
   font-size: 11px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   justify-self: end;
   line-height: inherit;
   tab-size: 4;
