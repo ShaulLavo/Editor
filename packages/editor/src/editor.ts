@@ -381,8 +381,8 @@ export class Editor {
   private createViewSnapshot(): EditorViewSnapshot {
     const viewState = this.view.getState();
     const viewport = {
-      scrollTop: this.el.scrollTop,
-      scrollLeft: this.el.scrollLeft,
+      scrollTop: viewState.scrollTop,
+      scrollLeft: viewState.scrollLeft,
       scrollHeight: this.el.scrollHeight,
       scrollWidth: this.el.scrollWidth,
       clientHeight: this.el.clientHeight,

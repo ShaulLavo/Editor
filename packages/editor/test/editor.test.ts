@@ -267,6 +267,45 @@ function mockEditorViewport(
   });
 }
 
+function withThrowingScrollOffsetReads(element: HTMLElement, callback: () => void): void {
+  const scrollTop = Object.getOwnPropertyDescriptor(element, "scrollTop");
+  const scrollLeft = Object.getOwnPropertyDescriptor(element, "scrollLeft");
+  Object.defineProperty(element, "scrollTop", {
+    configurable: true,
+    get: () => {
+      throw new Error("unexpected scrollTop read");
+    },
+    set: () => undefined,
+  });
+  Object.defineProperty(element, "scrollLeft", {
+    configurable: true,
+    get: () => {
+      throw new Error("unexpected scrollLeft read");
+    },
+    set: () => undefined,
+  });
+
+  try {
+    callback();
+  } finally {
+    restoreElementProperty(element, "scrollTop", scrollTop);
+    restoreElementProperty(element, "scrollLeft", scrollLeft);
+  }
+}
+
+function restoreElementProperty(
+  element: HTMLElement,
+  property: "scrollLeft" | "scrollTop",
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (!descriptor) {
+    Reflect.deleteProperty(element, property);
+    return;
+  }
+
+  Object.defineProperty(element, property, descriptor);
+}
+
 describe("Editor", () => {
   let container: HTMLElement;
   let editor: Editor;
@@ -357,6 +396,19 @@ describe("Editor", () => {
         true,
       );
       expect(events.at(-1)?.snapshot?.text).toBe("const a = 1;!");
+    });
+
+    it("uses cached scroll offsets when creating snapshots", () => {
+      const events: ViewContributionEvent[] = [];
+      editor.dispose();
+      editor = new Editor(container, { plugins: [createViewContributionPlugin(events)] });
+
+      withThrowingScrollOffsetReads(editorRoot(), () => {
+        editor.openDocument({ documentId: "test.ts", text: "const a = 1;" });
+      });
+
+      expect(events.at(-1)?.snapshot?.viewport.scrollTop).toBe(0);
+      expect(events.at(-1)?.snapshot?.viewport.scrollLeft).toBe(0);
     });
 
     it("disposes view contributions with the editor", () => {
