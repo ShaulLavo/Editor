@@ -39,6 +39,7 @@ export interface VirtualizedTextViewInternal {
   readonly onFoldToggle: ((marker: VirtualizedFoldMarker) => void) | null;
   readonly onViewportChange: (() => void) | null;
   readonly rowElements: Map<number, MountedVirtualizedTextRow>;
+  readonly rowPool: MountedVirtualizedTextRow[];
   readonly highlightRegistry: HighlightRegistry | null;
   readonly selectionHighlightName: string;
   readonly selectionHighlight: Highlight | null;

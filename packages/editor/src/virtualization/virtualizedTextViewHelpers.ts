@@ -540,15 +540,40 @@ export function updateMutableRowChunks(
   mutable.textNode = chunks[0]?.textNode ?? row.textNode;
 }
 
-export function removeRowElements(
-  rows: readonly MountedVirtualizedTextRow[],
+export function retireRowElements(rows: readonly MountedVirtualizedTextRow[]): void {
+  for (const row of rows) {
+    retireElement(row.element, "data-editor-virtual-row");
+    retireElement(row.gutterElement, "data-editor-virtual-gutter-row");
+    markRowRetired(row);
+  }
+}
+
+export function restoreRowElements(
+  row: MountedVirtualizedTextRow,
   rowParent: HTMLDivElement,
   gutterParent: HTMLDivElement,
 ): void {
-  for (const row of rows) {
-    rowParent.removeChild(row.element);
-    gutterParent.removeChild(row.gutterElement);
-  }
+  restoreElement(row.element, rowParent);
+  restoreElement(row.gutterElement, gutterParent);
+}
+
+function retireElement(element: HTMLElement, rowAttribute: string): void {
+  element.removeAttribute(rowAttribute);
+  element.hidden = true;
+}
+
+function restoreElement(element: HTMLElement, parent: HTMLDivElement): void {
+  if (element.parentNode !== parent) parent.appendChild(element);
+  element.hidden = false;
+}
+
+function markRowRetired(row: MountedVirtualizedTextRow): void {
+  const mutable = row as {
+    index: number;
+    textRevision: number;
+  };
+  mutable.index = -1;
+  mutable.textRevision = -1;
 }
 
 export function scrollElementPadding(element: HTMLElement): {

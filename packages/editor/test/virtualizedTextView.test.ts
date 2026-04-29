@@ -155,6 +155,28 @@ describe("VirtualizedTextView", () => {
     expect(firstRowElement.dataset.editorVirtualRow).toBe("7");
   });
 
+  it("parks surplus rows outside the active row set for reuse", () => {
+    view.setText(createLines(200));
+    view.setScrollMetrics(0, 100);
+    const initialRows = Array.from(
+      container.querySelectorAll<HTMLDivElement>(".editor-virtualized-row"),
+    );
+
+    view.setScrollMetrics(0, 20);
+
+    const parkedRow = initialRows.find((row) => row.dataset.editorVirtualRow === undefined);
+    expect(parkedRow?.isConnected).toBe(true);
+    expect(parkedRow?.hidden).toBe(true);
+    expect(container.querySelectorAll("[data-editor-virtual-row]")).toHaveLength(
+      view.getState().mountedRows.length,
+    );
+
+    view.setScrollMetrics(0, 100);
+
+    expect(parkedRow?.dataset.editorVirtualRow).not.toBeUndefined();
+    expect(parkedRow?.hidden).toBe(false);
+  });
+
   it("keeps horizontal content width independent from recycled row text", () => {
     view.setText([`${"x".repeat(100)}`, ...Array.from({ length: 20 }, () => "x")].join("\n"));
     view.setScrollMetrics(0, 40);

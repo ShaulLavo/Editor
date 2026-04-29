@@ -140,6 +140,7 @@ export class VirtualizedTextView {
       onFoldToggle: options.onFoldToggle ?? null,
       onViewportChange: options.onViewportChange ?? null,
       rowElements: new Map(),
+      rowPool: [],
       highlightRegistry: options.highlightRegistry ?? getDefaultHighlightRegistry(),
       selectionHighlightName: options.selectionHighlightName ?? DEFAULT_SELECTION_HIGHLIGHT,
       selectionHighlight: new Highlight(),
@@ -202,6 +203,7 @@ export class VirtualizedTextView {
     this.scrollElement.remove();
     view.styleEl.remove();
     view.rowElements.clear();
+    view.rowPool.length = 0;
   }
 
   public setText(text: string): void {
@@ -347,12 +349,13 @@ export class VirtualizedTextView {
 
   public revealOffset(offset: number, block: RevealBlock = "nearest"): void {
     const view = this.view;
-    ensureOffsetMounted(view, offset);
     if (block === "end") {
       scrollOffsetToViewportEnd(view, offset);
+      ensureOffsetMounted(view, offset);
       return;
     }
 
+    ensureOffsetMounted(view, offset);
     scrollOffsetIntoView(view, offset);
   }
 

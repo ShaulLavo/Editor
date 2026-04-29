@@ -13,7 +13,8 @@ import {
   mountedChunkForOffset,
   preventFoldButtonMouseDown,
   rangesIntersectInclusive,
-  removeRowElements,
+  restoreRowElements,
+  retireRowElements,
   rowChunkFromDomBoundary,
   rowElementFromNode,
   scrollElementPadding,
@@ -95,7 +96,8 @@ function mountOrUpdateRow(
     return;
   }
 
-  const row = reusableRows.pop() ?? createRow(view);
+  const row = reusableRows.pop() ?? view.rowPool.pop() ?? createRow(view);
+  restoreRowElements(row, view.spacer, view.gutterElement);
   updateRow(view, row, item, snapshot);
   view.rowElements.set(item.index, row);
 }
@@ -629,7 +631,8 @@ function removeReusableRows(
     view.rowTokenSignatures.delete(row.tokenHighlightSlotId);
   }
 
-  removeRowElements(rows, view.spacer, view.gutterElement);
+  retireRowElements(rows);
+  view.rowPool.push(...rows);
 }
 
 export function resetContentWidthScan(view: VirtualizedTextViewInternal): void {

@@ -342,6 +342,28 @@ function restoreElementProperty(
   Object.defineProperty(element, property, descriptor);
 }
 
+function trackScrollTopWrites(element: HTMLElement): {
+  readonly values: readonly number[];
+  restore(): void;
+} {
+  const descriptor = Object.getOwnPropertyDescriptor(element, "scrollTop");
+  const values: number[] = [];
+  let scrollTop = element.scrollTop;
+  Object.defineProperty(element, "scrollTop", {
+    configurable: true,
+    get: () => scrollTop,
+    set: (value: number) => {
+      values.push(value);
+      scrollTop = value;
+    },
+  });
+
+  return {
+    values,
+    restore: () => restoreElementProperty(element, "scrollTop", descriptor),
+  };
+}
+
 describe("Editor", () => {
   let container: HTMLElement;
   let editor: Editor;
@@ -778,6 +800,24 @@ describe("Editor", () => {
       expect(editor.getText()).toBe(pasted);
       expect(editor.getState().cursor).toEqual({ row: 7, column: 6 });
       expect(editorRoot().scrollTop).toBeGreaterThan(0);
+    });
+
+    it("writes scrollTop once when revealing pasted text at the viewport end", () => {
+      const pasted = Array.from({ length: 8 }, (_value, index) => `line ${index}`).join("\n");
+      const root = editorRoot();
+      editor.setText("");
+      mockEditorViewport(root, 80, 40);
+      editor.focus();
+      const scrollTopWrites = trackScrollTopWrites(root);
+
+      try {
+        editorInput().dispatchEvent(createPasteEvent(pasted));
+      } finally {
+        scrollTopWrites.restore();
+      }
+
+      expect(scrollTopWrites.values).toHaveLength(1);
+      expect(scrollTopWrites.values[0]).toBeGreaterThan(0);
     });
 
     it("moves a collapsed caret with arrow keys", () => {
