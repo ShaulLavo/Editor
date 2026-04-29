@@ -10,6 +10,14 @@ type TokenProjectionMetadata = {
   readonly sourceTokens: readonly EditorToken[];
 };
 
+type TokenProjectionBuilder = {
+  readonly maxEnds: number[];
+  readonly tokens: EditorToken[];
+  maxEnd: number;
+  previousStart: number;
+  sortedByStart: boolean;
+};
+
 const tokenProjectionIndexes = new WeakMap<readonly EditorToken[], TokenProjectionIndex>();
 const tokenProjectionMetadata = new WeakMap<readonly EditorToken[], TokenProjectionMetadata>();
 
@@ -54,7 +62,7 @@ function scanProjectTokensThroughEdit(
   previousText: string,
   delta: number,
 ): readonly EditorToken[] {
-  const projected: EditorToken[] = [];
+  const builder = createTokenProjectionBuilder();
   let keepsLiveRanges = true;
 
   for (const token of tokens) {
@@ -64,10 +72,10 @@ function scanProjectTokensThroughEdit(
       continue;
     }
 
-    projected.push(next);
+    appendBuiltToken(builder, next);
   }
 
-  return finishTokenProjection(tokens, projected, keepsLiveRanges);
+  return finishTokenProjection(tokens, builder, keepsLiveRanges);
 }
 
 function projectIndexedTokensThroughEdit(
@@ -94,12 +102,12 @@ function projectSortedTokenRanges(
   prefixEnd: number,
   suffixStart: number,
 ): readonly EditorToken[] {
-  const projected: EditorToken[] = [];
+  const builder = createTokenProjectionBuilder();
   let keepsLiveRanges = true;
 
-  appendUnchangedTokens(projected, tokens, 0, prefixEnd);
+  appendUnchangedTokens(builder, tokens, 0, prefixEnd);
   keepsLiveRanges = appendProjectedTokens(
-    projected,
+    builder,
     tokens,
     edit,
     previousText,
@@ -107,24 +115,24 @@ function projectSortedTokenRanges(
     prefixEnd,
     suffixStart,
   );
-  appendShiftedTokens(projected, tokens, suffixStart, tokens.length, delta);
+  appendShiftedTokens(builder, tokens, suffixStart, tokens.length, delta);
 
-  return finishTokenProjection(tokens, projected, keepsLiveRanges);
+  return finishTokenProjection(tokens, builder, keepsLiveRanges);
 }
 
 function appendUnchangedTokens(
-  projected: EditorToken[],
+  builder: TokenProjectionBuilder,
   tokens: readonly EditorToken[],
   start: number,
   end: number,
 ): void {
   for (let index = start; index < end; index += 1) {
-    projected.push(tokens[index]!);
+    appendBuiltToken(builder, tokens[index]!);
   }
 }
 
 function appendProjectedTokens(
-  projected: EditorToken[],
+  builder: TokenProjectionBuilder,
   tokens: readonly EditorToken[],
   edit: TextEdit,
   previousText: string,
@@ -140,53 +148,59 @@ function appendProjectedTokens(
       continue;
     }
 
-    projected.push(next);
+    appendBuiltToken(builder, next);
   }
 
   return keepsLiveRanges;
 }
 
 function appendShiftedTokens(
-  projected: EditorToken[],
+  builder: TokenProjectionBuilder,
   tokens: readonly EditorToken[],
   start: number,
   end: number,
   delta: number,
 ): void {
   if (delta === 0) {
-    appendUnchangedTokens(projected, tokens, start, end);
+    appendUnchangedTokens(builder, tokens, start, end);
     return;
   }
 
   for (let index = start; index < end; index += 1) {
-    projected.push(shiftToken(tokens[index]!, delta));
+    appendBuiltToken(builder, shiftToken(tokens[index]!, delta));
   }
 }
 
 function finishTokenProjection(
   sourceTokens: readonly EditorToken[],
-  projectedTokens: readonly EditorToken[],
+  builder: TokenProjectionBuilder,
   keepsLiveRanges: boolean,
 ): readonly EditorToken[] {
-  cacheTokenProjectionIndex(projectedTokens);
+  const projectedTokens = builder.tokens;
+  tokenProjectionIndexes.set(projectedTokens, {
+    maxEnds: builder.maxEnds,
+    sortedByStart: builder.sortedByStart,
+  });
   tokenProjectionMetadata.set(projectedTokens, { keepsLiveRanges, sourceTokens });
   return projectedTokens;
 }
 
-function cacheTokenProjectionIndex(tokens: readonly EditorToken[]): void {
-  const maxEnds: number[] = [];
-  let maxEnd = 0;
-  let previousStart = -Infinity;
-  let sortedByStart = true;
+function createTokenProjectionBuilder(): TokenProjectionBuilder {
+  return {
+    maxEnd: 0,
+    maxEnds: [],
+    previousStart: -Infinity,
+    sortedByStart: true,
+    tokens: [],
+  };
+}
 
-  for (const token of tokens) {
-    if (token.start < previousStart) sortedByStart = false;
-    maxEnd = Math.max(maxEnd, token.end);
-    maxEnds.push(maxEnd);
-    previousStart = token.start;
-  }
-
-  tokenProjectionIndexes.set(tokens, { maxEnds, sortedByStart });
+function appendBuiltToken(builder: TokenProjectionBuilder, token: EditorToken): void {
+  if (token.start < builder.previousStart) builder.sortedByStart = false;
+  builder.maxEnd = Math.max(builder.maxEnd, token.end);
+  builder.maxEnds.push(builder.maxEnd);
+  builder.previousStart = token.start;
+  builder.tokens.push(token);
 }
 
 function unchangedPrefixEnd(index: TokenProjectionIndex, edit: TextEdit): number {

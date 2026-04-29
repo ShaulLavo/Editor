@@ -71,6 +71,18 @@ export type BlockRow = {
   readonly text?: string;
 };
 
+type BlockRowsAtBufferRow = {
+  readonly before: readonly BlockRow[];
+  readonly after: readonly BlockRow[];
+};
+
+type MutableBlockRowsAtBufferRow = {
+  readonly before: BlockRow[];
+  readonly after: BlockRow[];
+};
+
+type BlockRowIndex = ReadonlyMap<number, BlockRowsAtBufferRow>;
+
 export type WrapSegment = {
   readonly inputRow: number;
   readonly outputRow: number;
@@ -207,14 +219,14 @@ export function createDisplayRows(options: {
   readonly tabSize?: number;
 }): DisplayRow[] {
   const rows: DisplayRow[] = [];
-  const blocks = normalizeBlockRows(options.blocks ?? []);
+  const blocks = blockRowIndex(options.blocks ?? []);
   const tabSize = options.tabSize ?? DEFAULT_TAB_SIZE;
 
   for (let visibleRow = 0; visibleRow < options.visibleLineCount; visibleRow += 1) {
     appendDisplayRowsForVisibleRow(rows, visibleRow, blocks, options, tabSize);
   }
 
-  return rows.map((row, index) => withDisplayRowIndex(row, index));
+  return rows;
 }
 
 export const asTabPoint = (point: Point): TabPoint => point as TabPoint;
@@ -224,7 +236,7 @@ export const asBlockPoint = (point: Point): BlockPoint => point as BlockPoint;
 const appendDisplayRowsForVisibleRow = (
   rows: DisplayRow[],
   visibleRow: number,
-  blocks: readonly BlockRow[],
+  blocks: BlockRowIndex,
   options: {
     readonly lineStarts: readonly number[];
     readonly text: string;
@@ -259,7 +271,7 @@ const appendTextDisplayRows = (
   for (const segment of segments) {
     rows.push({
       kind: "text",
-      index: -1,
+      index: rows.length,
       bufferRow,
       startOffset: startOffset + segment.startColumn,
       endOffset: startOffset + segment.endColumn,
@@ -274,13 +286,15 @@ const appendTextDisplayRows = (
 
 const appendBlockRows = (
   rows: DisplayRow[],
-  blocks: readonly BlockRow[],
+  blocks: BlockRowIndex,
   bufferRow: number,
   placement: BlockRowPlacement,
   offset: number,
 ): void => {
-  for (const block of blocks) {
-    if (block.anchorBufferRow !== bufferRow || block.placement !== placement) continue;
+  const rowBlocks = blocks.get(bufferRow)?.[placement];
+  if (!rowBlocks) return;
+
+  for (const block of rowBlocks) {
     appendBlockRowUnits(rows, block, offset);
   }
 };
@@ -290,7 +304,7 @@ const appendBlockRowUnits = (rows: DisplayRow[], block: BlockRow, offset: number
   rows.push({
     kind: "block",
     id: block.id,
-    index: -1,
+    index: rows.length,
     anchorBufferRow: block.anchorBufferRow,
     placement: block.placement,
     unitIndex: 0,
@@ -435,7 +449,27 @@ const normalizeBlockRows = (blocks: readonly BlockRow[]): readonly BlockRow[] =>
 
 const placementOrder = (placement: BlockRowPlacement): number => (placement === "before" ? 0 : 1);
 
-const withDisplayRowIndex = (row: DisplayRow, index: number): DisplayRow => ({ ...row, index });
+const blockRowIndex = (blocks: readonly BlockRow[]): BlockRowIndex => {
+  const index = new Map<number, MutableBlockRowsAtBufferRow>();
+
+  for (const block of normalizeBlockRows(blocks)) {
+    blockRowsAtBufferRow(index, block.anchorBufferRow)[block.placement].push(block);
+  }
+
+  return index;
+};
+
+const blockRowsAtBufferRow = (
+  index: Map<number, MutableBlockRowsAtBufferRow>,
+  bufferRow: number,
+): MutableBlockRowsAtBufferRow => {
+  const existing = index.get(bufferRow);
+  if (existing) return existing;
+
+  const blocks = { before: [], after: [] };
+  index.set(bufferRow, blocks);
+  return blocks;
+};
 
 const lineText = (text: string, lineStarts: readonly number[], row: number): string =>
   text.slice(lineStartOffset(text, lineStarts, row), lineEndOffset(text, lineStarts, row));
