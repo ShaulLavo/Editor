@@ -1,88 +1,88 @@
-import { bufferPointToFoldPoint, foldPointToBufferPoint, type FoldMap } from "../foldMap";
-import {
-  DEFAULT_TAB_SIZE,
-  bufferColumnToVisualColumn,
-  createDisplayRows,
-  visualColumnToBufferColumn,
-  visualColumnLength,
-  type BlockRow,
-  type DisplayRow,
-} from "../displayTransforms";
-import type { EditorToken, EditorTokenStyle, TextEdit } from "../tokens";
-import {
-  buildHighlightRule,
-  clamp,
-  normalizeTokenStyle,
-  serializeTokenStyle,
-} from "../style-utils";
+import type { FoldMap } from "../foldMap";
+import type { BlockRow } from "../displayTransforms";
+import type { EditorToken, TextEdit } from "../tokens";
 import { measureBrowserTextMetrics, type BrowserTextMetrics } from "./browserMetrics";
+import { FixedRowVirtualizer, type FixedRowVirtualizerSnapshot } from "./fixedRowVirtualizer";
 import {
-  FixedRowVirtualizer,
-  type FixedRowVirtualItem,
-  type FixedRowVirtualizerSnapshot,
-} from "./fixedRowVirtualizer";
-import {
-  DEFAULT_GUTTER_WIDTH,
   DEFAULT_OVERSCAN,
-  DEFAULT_ROW_HEIGHT,
   DEFAULT_SELECTION_HIGHLIGHT,
-  addTokenRangeToChunk,
-  alignChunkEnd,
-  alignChunkStart,
-  appendTokenRange,
-  appendTokenSegmentForChunk,
-  asFoldPoint,
-  computeLineStarts,
   countValidCaretChecks,
   countValidHitTestChecks,
   countValidSelectionChecks,
+  computeLineStarts,
   createInputElement,
   createScrollElement,
   createVirtualizerOptions,
-  editorTokensEqual,
-  foldMapMatchesText,
-  foldMarkersEqual,
   getDefaultHighlightRegistry,
-  getOrCreateTokenSegments,
-  hideFoldButton,
-  hideFoldPlaceholder,
-  mountedChunkForOffset,
   normalizeChunkSize,
   normalizeChunkThreshold,
-  normalizeFoldMarkers,
   normalizeGutterWidth,
   normalizeHorizontalOverscan,
   normalizeRowHeight,
-  pointVerticalDirection,
-  preventFoldButtonMouseDown,
-  rangesIntersectInclusive,
-  removeRowElements,
-  rowChunkFromDomBoundary,
-  rowElementFromNode,
-  scrollElementPadding,
-  setCounterSet,
-  setElementHidden,
-  setStyleValue,
-  showFoldButton,
-  showFoldPlaceholder,
-  snapshotRowsKey,
-  tokenRowSignature,
-  tokenStylesEqual,
-  updateMutableRow,
-  updateMutableRowChunks,
 } from "./virtualizedTextViewHelpers";
+import {
+  adoptTokens as adoptViewTokens,
+  clampStoredSelection,
+  clearRowTokenState,
+  clearSelection,
+  clearSelectionHighlight,
+  clearTokenHighlights,
+  deleteTokenRangesForRow,
+  rebuildStyleRules,
+  renderSelectionHighlight,
+  renderTokenHighlights,
+  setSelection,
+  setTokens as setViewTokens,
+} from "./virtualizedTextViewHighlights";
+import {
+  lineEndOffset,
+  lineStartOffset,
+  offsetForViewportColumn,
+  rebuildDisplayRows,
+  refreshDisplayRowsForWrapWidth,
+  rowForOffset,
+  rowForViewportY,
+  rowSizes,
+  sameLineEditPatch,
+  setBlockRowsLayout,
+  setFoldStateLayout,
+  setTextLayoutState,
+  setWrapEnabledLayout,
+  updateVirtualizerRows,
+  visibleLineCount,
+  visualColumnForOffset,
+} from "./virtualizedTextViewLayout";
+import {
+  applyRowHeight,
+  ensureOffsetMounted,
+  getMountedRows,
+  horizontalViewportColumns,
+  pageRowDelta,
+  positionInputInViewport,
+  renderRows,
+  resetContentWidthScan,
+  resolveMountedOffset,
+  restoreScrollPosition,
+  rowsKey,
+  scrollOffsetIntoView,
+  scrollOffsetToViewportEnd,
+  scrollToRow,
+  textOffsetFromDomBoundary,
+  updateContentWidth,
+  updateGutterWidthIfNeeded,
+  updateMountedRowsAfterSameLineEdit,
+  viewportPointMetrics,
+} from "./virtualizedTextViewRows";
+import type {
+  CreateRangeOptions,
+  RevealBlock,
+  VirtualizedTextViewInternal,
+} from "./virtualizedTextViewInternals";
 import type {
   DocumentWithCaretHitTesting,
-  HighlightRegistry,
-  HorizontalChunkWindow,
-  MountedVirtualizedTextRow,
   NativeGeometryValidation,
   SameLineEditPatch,
-  TokenGroup,
-  TokenRowSegment,
   VirtualizedFoldMarker,
-  VirtualizedTextChunk,
-  VirtualizedTextRow,
   VirtualizedTextViewOptions,
   VirtualizedTextViewState,
 } from "./virtualizedTextViewTypes";
@@ -97,197 +97,166 @@ export type {
   VirtualizedTextViewState,
 } from "./virtualizedTextViewTypes";
 
-type RevealBlock = "nearest" | "end";
-
-type CreateRangeOptions = {
-  readonly scrollIntoView?: boolean;
-};
-
-type TokenRenderEntry = {
-  readonly start: number;
-  readonly end: number;
-  readonly style: EditorTokenStyle;
-  readonly styleKey: string;
-  readonly sourceIndex: number;
-};
-
-const GUTTER_EXTRA_WIDTH_PX = 18;
-const MIN_GUTTER_LABEL_COLUMNS = 3;
-const HEBREW_GUTTER_LABEL_PADDING_COLUMNS = 3;
-
 export class VirtualizedTextView {
   public readonly scrollElement: HTMLDivElement;
   public readonly inputElement: HTMLTextAreaElement;
-
-  private readonly spacer: HTMLDivElement;
-  private readonly gutterElement: HTMLDivElement;
-  private readonly minimumGutterWidth: number;
-  private readonly caretElement: HTMLDivElement;
-  private readonly styleEl: HTMLStyleElement;
-  private readonly virtualizer: FixedRowVirtualizer;
-  private readonly longLineChunkSize: number;
-  private readonly longLineChunkThreshold: number;
-  private readonly horizontalOverscanColumns: number;
-  private readonly onFoldToggle: ((marker: VirtualizedFoldMarker) => void) | null;
-  private readonly onViewportChange: (() => void) | null;
-  private readonly rowElements = new Map<number, MountedVirtualizedTextRow>();
-  private readonly highlightRegistry: HighlightRegistry | null;
-  private readonly selectionHighlightName: string;
-  private readonly selectionHighlight: Highlight | null;
-  private selectionHighlightRegistered = false;
-  private text = "";
-  private textRevision = 0;
-  private tokens: readonly EditorToken[] = [];
-  private tokenRenderEntries: readonly TokenRenderEntry[] = [];
-  private tokenRenderEntryMaxEnds: readonly number[] = [];
-  private tokenRenderIndexDirty = true;
-  private lineStarts: number[] = [0];
-  private displayRows: DisplayRow[] = [];
-  private foldMap: FoldMap | null = null;
-  private foldMarkers: readonly VirtualizedFoldMarker[] = [];
-  private blockRows: readonly BlockRow[] = [];
-  private wrapEnabled = false;
-  private currentWrapColumn: number | null = null;
-  private tokenGroups = new Map<string, TokenGroup>();
-  private rowTokenSignatures = new Map<number, string>();
-  private rowTokenRanges = new Map<number, Map<string, readonly AbstractRange[]>>();
-  private nextTokenGroupId = 0;
-  private nextTokenHighlightSlotId = 0;
-  private selectionStart: number | null = null;
-  private selectionEnd: number | null = null;
-  private lastSelectionHighlightSignature = "";
-  private lastRenderedRowsKey = "";
-  private gutterWidthDirty = true;
-  private currentGutterWidth = DEFAULT_GUTTER_WIDTH;
-  private contentWidth = 0;
-  private maxVisualColumnsSeen = 0;
-  private lastWidthScanStart = 0;
-  private lastWidthScanEnd = -1;
-  private tokenRangesFollowLastTextEdit = false;
-  private metrics: BrowserTextMetrics = {
-    rowHeight: DEFAULT_ROW_HEIGHT,
-    characterWidth: 8,
-  };
+  private readonly view: VirtualizedTextViewInternal;
 
   public constructor(container: HTMLElement, options: VirtualizedTextViewOptions = {}) {
     const overscan = options.overscan ?? DEFAULT_OVERSCAN;
     const gutterWidth = normalizeGutterWidth(options.gutterWidth);
 
-    this.minimumGutterWidth = gutterWidth;
-    this.currentGutterWidth = gutterWidth;
-    this.highlightRegistry = options.highlightRegistry ?? getDefaultHighlightRegistry();
-    this.selectionHighlightName = options.selectionHighlightName ?? DEFAULT_SELECTION_HIGHLIGHT;
-    this.selectionHighlight = new Highlight();
-    this.styleEl = container.ownerDocument.createElement("style");
-    this.scrollElement = createScrollElement(container, options.className);
-    this.metrics = measureBrowserTextMetrics(this.scrollElement);
-    const rowHeight = normalizeRowHeight(options.rowHeight ?? this.metrics.rowHeight);
-    this.metrics = { ...this.metrics, rowHeight };
-    this.inputElement = createInputElement(container);
-    this.spacer = container.ownerDocument.createElement("div");
-    this.gutterElement = container.ownerDocument.createElement("div");
-    this.caretElement = container.ownerDocument.createElement("div");
-    this.longLineChunkSize = normalizeChunkSize(options.longLineChunkSize);
-    this.longLineChunkThreshold = normalizeChunkThreshold(
+    const styleEl = container.ownerDocument.createElement("style");
+    const scrollElement = createScrollElement(container, options.className);
+    const measuredMetrics = measureBrowserTextMetrics(scrollElement);
+    const rowHeight = normalizeRowHeight(options.rowHeight ?? measuredMetrics.rowHeight);
+    const inputElement = createInputElement(container);
+    const spacer = container.ownerDocument.createElement("div");
+    const gutterElement = container.ownerDocument.createElement("div");
+    const caretElement = container.ownerDocument.createElement("div");
+    const longLineChunkSize = normalizeChunkSize(options.longLineChunkSize);
+    const longLineChunkThreshold = normalizeChunkThreshold(
       options.longLineChunkThreshold,
-      this.longLineChunkSize,
+      longLineChunkSize,
     );
-    this.horizontalOverscanColumns = normalizeHorizontalOverscan(options.horizontalOverscanColumns);
-    this.onFoldToggle = options.onFoldToggle ?? null;
-    this.onViewportChange = options.onViewportChange ?? null;
-    this.wrapEnabled = options.wrap ?? false;
-    this.blockRows = options.blockRows ?? [];
-    this.virtualizer = new FixedRowVirtualizer(createVirtualizerOptions(rowHeight, overscan));
+    const virtualizer = new FixedRowVirtualizer(createVirtualizerOptions(rowHeight, overscan));
 
-    this.scrollElement.style.setProperty("--editor-gutter-min-width", `${gutterWidth}px`);
-    this.applyRowHeight(rowHeight);
-    this.spacer.className = "editor-virtualized-spacer";
-    this.gutterElement.className = "editor-virtualized-gutter";
-    this.caretElement.className = "editor-virtualized-caret";
-    this.caretElement.hidden = true;
-    this.spacer.appendChild(this.gutterElement);
-    this.spacer.appendChild(this.caretElement);
-    this.scrollElement.appendChild(this.spacer);
-    this.scrollElement.appendChild(this.inputElement);
-    container.ownerDocument.head.appendChild(this.styleEl);
+    this.scrollElement = scrollElement;
+    this.inputElement = inputElement;
+    this.view = {
+      scrollElement,
+      inputElement,
+      spacer,
+      gutterElement,
+      minimumGutterWidth: gutterWidth,
+      caretElement,
+      styleEl,
+      virtualizer,
+      longLineChunkSize,
+      longLineChunkThreshold,
+      horizontalOverscanColumns: normalizeHorizontalOverscan(options.horizontalOverscanColumns),
+      onFoldToggle: options.onFoldToggle ?? null,
+      onViewportChange: options.onViewportChange ?? null,
+      rowElements: new Map(),
+      highlightRegistry: options.highlightRegistry ?? getDefaultHighlightRegistry(),
+      selectionHighlightName: options.selectionHighlightName ?? DEFAULT_SELECTION_HIGHLIGHT,
+      selectionHighlight: new Highlight(),
+      selectionHighlightRegistered: false,
+      text: "",
+      textRevision: 0,
+      tokens: [],
+      tokenRenderEntries: [],
+      tokenRenderEntryMaxEnds: [],
+      tokenRenderIndexDirty: true,
+      lineStarts: [0],
+      displayRows: [],
+      foldMap: null,
+      foldMarkers: [],
+      blockRows: options.blockRows ?? [],
+      wrapEnabled: options.wrap ?? false,
+      currentWrapColumn: null,
+      tokenGroups: new Map(),
+      rowTokenSignatures: new Map(),
+      rowTokenRanges: new Map(),
+      nextTokenGroupId: 0,
+      nextTokenHighlightSlotId: 0,
+      selectionStart: null,
+      selectionEnd: null,
+      lastSelectionHighlightSignature: "",
+      lastRenderedRowsKey: "",
+      gutterWidthDirty: true,
+      currentGutterWidth: gutterWidth,
+      contentWidth: 0,
+      maxVisualColumnsSeen: 0,
+      lastWidthScanStart: 0,
+      lastWidthScanEnd: -1,
+      tokenRangesFollowLastTextEdit: false,
+      metrics: { ...measuredMetrics, rowHeight },
+    };
 
-    this.virtualizer.attachScrollElement(this.scrollElement, (snapshot) => {
+    scrollElement.style.setProperty("--editor-gutter-min-width", `${gutterWidth}px`);
+    applyRowHeight(this.view, rowHeight);
+    spacer.className = "editor-virtualized-spacer";
+    gutterElement.className = "editor-virtualized-gutter";
+    caretElement.className = "editor-virtualized-caret";
+    caretElement.hidden = true;
+    spacer.appendChild(gutterElement);
+    spacer.appendChild(caretElement);
+    scrollElement.appendChild(spacer);
+    scrollElement.appendChild(inputElement);
+    container.ownerDocument.head.appendChild(styleEl);
+
+    virtualizer.attachScrollElement(scrollElement, (snapshot) => {
       this.renderSnapshot(snapshot);
     });
-    this.rebuildStyleRules();
+    rebuildStyleRules(this.view);
   }
 
   public dispose(): void {
-    this.clearSelectionHighlight();
-    this.clearTokenHighlights();
-    this.virtualizer.dispose();
+    const view = this.view;
+    clearSelectionHighlight(view);
+    clearTokenHighlights(view);
+    view.virtualizer.dispose();
     this.scrollElement.remove();
-    this.styleEl.remove();
-    this.rowElements.clear();
+    view.styleEl.remove();
+    view.rowElements.clear();
   }
 
   public setText(text: string): void {
-    this.text = text;
-    this.textRevision += 1;
-    this.tokenRangesFollowLastTextEdit = false;
-    this.tokenRenderIndexDirty = true;
-    const previousLineCount = this.lineStarts.length;
-    this.lineStarts = computeLineStarts(text);
-    if (previousLineCount !== this.lineStarts.length) this.gutterWidthDirty = true;
-    this.foldMap = foldMapMatchesText(this.foldMap, text) ? this.foldMap : null;
-    this.rebuildDisplayRows();
-    this.clampStoredSelection();
-    this.clearRowTokenState();
-    this.lastRenderedRowsKey = "";
-    this.resetContentWidthScan();
-    this.updateVirtualizerRows();
+    const view = this.view;
+    view.tokenRangesFollowLastTextEdit = false;
+    view.tokenRenderIndexDirty = true;
+    const { lineCountChanged } = setTextLayoutState(view, text);
+    if (lineCountChanged) view.gutterWidthDirty = true;
+    rebuildDisplayRows(view, horizontalViewportColumns(view));
+    clampStoredSelection(view);
+    clearRowTokenState(view);
+    view.lastRenderedRowsKey = "";
+    resetContentWidthScan(view);
+    updateVirtualizerRows(view);
   }
 
   public setFoldMap(foldMap: FoldMap | null): void {
-    this.setFoldState(this.foldMarkers, foldMap);
+    this.setFoldState(this.view.foldMarkers, foldMap);
   }
 
   public setFoldMarkers(markers: readonly VirtualizedFoldMarker[]): void {
-    this.setFoldState(markers, this.foldMap);
+    this.setFoldState(markers, this.view.foldMap);
   }
 
   public setFoldState(markers: readonly VirtualizedFoldMarker[], foldMap: FoldMap | null): void {
-    const nextFoldMap = foldMapMatchesText(foldMap, this.text) ? foldMap : null;
-    const foldMapChanged = this.foldMap !== nextFoldMap;
-    if (!foldMapChanged && markers.length === 0 && this.foldMarkers.length === 0) return;
+    const view = this.view;
+    const update = setFoldStateLayout(view, markers, foldMap);
+    if (!update.changed) return;
 
-    const nextFoldMarkers = normalizeFoldMarkers(markers, this.text.length);
-    const foldMarkersChanged = !foldMarkersEqual(this.foldMarkers, nextFoldMarkers);
-    if (!foldMapChanged && !foldMarkersChanged) return;
+    if (update.foldMapChanged) clearRowTokenState(view);
+    if (update.foldMapChanged) rebuildDisplayRows(view, horizontalViewportColumns(view));
 
-    this.foldMarkers = nextFoldMarkers;
-    this.foldMap = nextFoldMap;
-    if (foldMapChanged) this.clearRowTokenState();
-    if (foldMapChanged) this.rebuildDisplayRows();
-
-    this.lastRenderedRowsKey = "";
-    if (foldMapChanged) {
-      this.updateVirtualizerRows();
+    view.lastRenderedRowsKey = "";
+    if (update.foldMapChanged) {
+      updateVirtualizerRows(view);
       return;
     }
 
-    this.renderSnapshot(this.virtualizer.getSnapshot());
+    this.renderSnapshot(view.virtualizer.getSnapshot());
   }
 
   public refreshMetrics(): BrowserTextMetrics {
+    const view = this.view;
     const measured = measureBrowserTextMetrics(this.scrollElement);
-    const rowHeight = normalizeRowHeight(measured.rowHeight);
-    this.metrics = { rowHeight, characterWidth: measured.characterWidth };
-    this.applyRowHeight(rowHeight);
-    this.gutterWidthDirty = true;
-    this.refreshDisplayRowsForWrapWidth();
-    this.lastRenderedRowsKey = "";
-    this.virtualizer.updateOptions({ rowHeight, rowSizes: this.rowSizes() });
-    return this.metrics;
+    const rowHeightValue = normalizeRowHeight(measured.rowHeight);
+    view.metrics = { rowHeight: rowHeightValue, characterWidth: measured.characterWidth };
+    applyRowHeight(view, rowHeightValue);
+    view.gutterWidthDirty = true;
+    this.refreshWrapWidth();
+    view.lastRenderedRowsKey = "";
+    view.virtualizer.updateOptions({ rowHeight: rowHeightValue, rowSizes: rowSizes(view) });
+    return view.metrics;
   }
 
   public applyEdit(edit: TextEdit, nextText: string): void {
-    const patch = this.sameLineEditPatch(edit);
+    const view = this.view;
+    const patch = sameLineEditPatch(view, edit);
     if (!patch) {
       this.setText(nextText);
       return;
@@ -297,31 +266,11 @@ export class VirtualizedTextView {
   }
 
   public setTokens(tokens: readonly EditorToken[]): void {
-    this.adoptTokens([...tokens]);
+    setViewTokens(this.view, tokens);
   }
 
   public adoptTokens(tokens: readonly EditorToken[]): void {
-    if (editorTokensEqual(this.tokens, tokens)) {
-      this.tokens = tokens;
-      this.tokenRangesFollowLastTextEdit = false;
-      this.syncTokenGroupsToTokenSet();
-      this.renderTokenHighlights();
-      return;
-    }
-
-    if (this.canKeepLiveTokenRanges(tokens)) {
-      this.tokens = tokens;
-      this.tokenRangesFollowLastTextEdit = false;
-      this.tokenRenderIndexDirty = true;
-      this.syncTokenGroupsToTokenSet();
-      return;
-    }
-
-    this.tokenRangesFollowLastTextEdit = false;
-    this.tokens = tokens;
-    this.tokenRenderIndexDirty = true;
-    this.syncTokenGroupsToTokenSet();
-    this.renderTokenHighlights();
+    adoptViewTokens(this.view, tokens);
   }
 
   public setEditable(editable: boolean): void {
@@ -336,14 +285,15 @@ export class VirtualizedTextView {
   public focusInput(): void {
     if (this.inputElement.readOnly) return;
 
+    const view = this.view;
     const scrollTop = this.scrollElement.scrollTop;
     const scrollLeft = this.scrollElement.scrollLeft;
-    this.positionInputInViewport(scrollTop, scrollLeft);
+    positionInputInViewport(view, scrollTop, scrollLeft);
     this.inputElement.value = "";
     this.inputElement.focus({ preventScroll: true });
     this.inputElement.setSelectionRange(0, 0);
     this.inputElement.ownerDocument.getSelection()?.removeAllRanges();
-    this.restoreScrollPosition(scrollTop, scrollLeft);
+    restoreScrollPosition(view, scrollTop, scrollLeft);
   }
 
   public setScrollMetrics(
@@ -352,28 +302,31 @@ export class VirtualizedTextView {
     viewportWidth?: number,
     scrollLeft?: number,
   ): void {
-    const width = viewportWidth ?? this.virtualizer.getSnapshot().viewportWidth;
-    this.refreshDisplayRowsForWrapWidth(width);
-    this.virtualizer.setScrollMetrics({ scrollTop, viewportHeight, viewportWidth, scrollLeft });
+    const width = viewportWidth ?? this.view.virtualizer.getSnapshot().viewportWidth;
+    this.refreshWrapWidth(width);
+    this.view.virtualizer.setScrollMetrics({
+      scrollTop,
+      viewportHeight,
+      viewportWidth,
+      scrollLeft,
+    });
   }
 
   public setWrapEnabled(enabled: boolean): void {
-    if (this.wrapEnabled === enabled) return;
+    const view = this.view;
+    if (!setWrapEnabledLayout(view, enabled, horizontalViewportColumns(view))) return;
 
-    this.wrapEnabled = enabled;
-    this.currentWrapColumn = null;
-    this.rebuildDisplayRows();
-    this.resetContentWidthScan();
-    this.lastRenderedRowsKey = "";
-    this.updateVirtualizerRows();
+    resetContentWidthScan(view);
+    view.lastRenderedRowsKey = "";
+    updateVirtualizerRows(view);
   }
 
   public setBlockRows(blockRows: readonly BlockRow[]): void {
-    this.blockRows = blockRows;
-    this.rebuildDisplayRows();
-    this.resetContentWidthScan();
-    this.lastRenderedRowsKey = "";
-    this.updateVirtualizerRows();
+    const view = this.view;
+    setBlockRowsLayout(view, blockRows, horizontalViewportColumns(view));
+    resetContentWidthScan(view);
+    view.lastRenderedRowsKey = "";
+    updateVirtualizerRows(view);
   }
 
   public reserveOverlayWidth(side: "left" | "right", width: number): void {
@@ -387,45 +340,40 @@ export class VirtualizedTextView {
   }
 
   public scrollToRow(row: number): void {
-    const target = clamp(Math.floor(row), 0, this.visibleLineCount() - 1);
-    this.scrollElement.scrollTop = this.rowTop(target);
-    this.syncVirtualizerMetricsFromScrollElement();
+    scrollToRow(this.view, row);
   }
 
   public revealOffset(offset: number, block: RevealBlock = "nearest"): void {
-    this.ensureOffsetMounted(offset);
+    const view = this.view;
+    ensureOffsetMounted(view, offset);
     if (block === "end") {
-      this.scrollOffsetToViewportEnd(offset);
+      scrollOffsetToViewportEnd(view, offset);
       return;
     }
 
-    this.scrollOffsetIntoView(offset);
+    scrollOffsetIntoView(view, offset);
   }
 
   public visualColumnForOffset(offset: number): number {
-    const row = this.rowForOffset(offset);
-    const displayRow = this.displayRows[row];
-    if (!displayRow || displayRow.kind === "block") return 0;
-
-    const localOffset = clamp(offset - displayRow.startOffset, 0, displayRow.text.length);
-    return bufferColumnToVisualColumn(displayRow.text, localOffset, DEFAULT_TAB_SIZE);
+    return visualColumnForOffset(this.view, offset);
   }
 
   public offsetByDisplayRows(offset: number, rowDelta: number, visualColumn: number): number {
-    const row = this.rowForOffset(offset);
-    const targetRow = clamp(row + rowDelta, 0, this.visibleLineCount() - 1);
-    return this.offsetForViewportColumn(targetRow, visualColumn);
+    const view = this.view;
+    const row = rowForOffset(view, offset);
+    const targetRow = Math.max(0, Math.min(row + rowDelta, visibleLineCount(view) - 1));
+    return offsetForViewportColumn(view, targetRow, visualColumn);
   }
 
   public offsetAtLineBoundary(offset: number, boundary: "start" | "end"): number {
-    const row = this.rowForOffset(offset);
-    if (boundary === "start") return this.lineStartOffset(row);
-    return this.lineEndOffset(row);
+    const view = this.view;
+    const row = rowForOffset(view, offset);
+    if (boundary === "start") return lineStartOffset(view, row);
+    return lineEndOffset(view, row);
   }
 
   public pageRowDelta(): number {
-    const { viewportHeight } = this.virtualizer.getSnapshot();
-    return Math.max(1, Math.floor(viewportHeight / this.getRowHeight()) - 1);
+    return pageRowDelta(this.view);
   }
 
   public createRange(
@@ -433,10 +381,11 @@ export class VirtualizedTextView {
     endOffset: number,
     options: CreateRangeOptions = {},
   ): Range | null {
-    if (options.scrollIntoView !== false) this.ensureOffsetMounted(startOffset);
+    const view = this.view;
+    if (options.scrollIntoView !== false) ensureOffsetMounted(view, startOffset);
 
-    const start = this.resolveMountedOffset(startOffset);
-    const end = this.resolveMountedOffset(endOffset);
+    const start = resolveMountedOffset(view, startOffset);
+    const end = resolveMountedOffset(view, endOffset);
     if (!start || !end) return null;
 
     const range = this.scrollElement.ownerDocument.createRange();
@@ -446,23 +395,24 @@ export class VirtualizedTextView {
   }
 
   public getState(): VirtualizedTextViewState {
-    const snapshot = this.virtualizer.getSnapshot();
+    const view = this.view;
+    const snapshot = view.virtualizer.getSnapshot();
     return {
-      lineCount: this.lineStarts.length,
-      contentWidth: this.contentWidth,
-      foldMapActive: this.foldMap !== null,
-      metrics: this.metrics,
+      lineCount: view.lineStarts.length,
+      contentWidth: view.contentWidth,
+      foldMapActive: view.foldMap !== null,
+      metrics: view.metrics,
       totalHeight: snapshot.totalSize,
       visibleRange: snapshot.visibleRange,
-      mountedRows: this.getMountedRows(),
-      wrapActive: this.wrapEnabled,
-      blockRowCount: this.blockRows.length,
+      mountedRows: getMountedRows(view),
+      wrapActive: view.wrapEnabled,
+      blockRowCount: view.blockRows.length,
     };
   }
 
   public validateMountedNativeGeometry(): NativeGeometryValidation {
+    const rows = getMountedRows(this.view);
     const failures: string[] = [];
-    const rows = this.getMountedRows();
     const caretChecks = countValidCaretChecks(rows, failures);
     const selectionChecks = countValidSelectionChecks(rows, failures);
     const hitTestChecks = countValidHitTestChecks(this.scrollElement, rows, failures);
@@ -488,1599 +438,70 @@ export class VirtualizedTextView {
   }
 
   public textOffsetFromViewportPoint(clientX: number, clientY: number): number {
-    const metrics = this.viewportPointMetrics(clientX, clientY);
-    if (metrics.verticalDirection < 0) return this.lineStartOffset(this.rowForViewportY(metrics.y));
-    if (metrics.verticalDirection > 0) return this.lineEndOffset(this.rowForViewportY(metrics.y));
+    const view = this.view;
+    const metrics = viewportPointMetrics(view, clientX, clientY);
+    if (metrics.verticalDirection < 0)
+      return lineStartOffset(view, rowForViewportY(view, metrics.y));
+    if (metrics.verticalDirection > 0) return lineEndOffset(view, rowForViewportY(view, metrics.y));
 
-    const row = this.rowForViewportY(metrics.y);
-    const column = Math.floor(metrics.x / this.characterWidth());
-    return this.offsetForViewportColumn(row, column);
+    const row = rowForViewportY(view, metrics.y);
+    const column = Math.floor(metrics.x / Math.max(1, view.metrics.characterWidth));
+    return offsetForViewportColumn(view, row, column);
   }
 
   public textOffsetFromDomBoundary(node: Node, offset: number): number | null {
-    const row = this.rowFromDomBoundary(node);
-    if (!row) return null;
-    if (node === row.element) return this.rowElementBoundaryToOffset(row, offset);
-    const chunk = rowChunkFromDomBoundary(row, node);
-    if (chunk) return this.rowChunkBoundaryToOffset(chunk, node, offset);
-    if (!row.element.contains(node)) return null;
-    return row.endOffset;
+    return textOffsetFromDomBoundary(this.view, node, offset);
   }
 
   public setSelection(anchorOffset: number, headOffset: number): void {
-    this.selectionStart = clamp(Math.min(anchorOffset, headOffset), 0, this.text.length);
-    this.selectionEnd = clamp(
-      Math.max(anchorOffset, headOffset),
-      this.selectionStart,
-      this.text.length,
-    );
-    this.renderSelectionHighlight();
+    setSelection(this.view, anchorOffset, headOffset);
   }
 
   public clearSelection(): void {
-    this.selectionStart = null;
-    this.selectionEnd = null;
-    this.clearSelectionHighlight();
-    this.renderCaret();
+    clearSelection(this.view);
   }
 
   private renderSnapshot(snapshot: FixedRowVirtualizerSnapshot): void {
-    this.updateGutterWidthIfNeeded();
-    const rowsKey = snapshotRowsKey(
-      snapshot,
-      this.horizontalWindowKey(snapshot.virtualItems, snapshot),
-    );
-    if (rowsKey === this.lastRenderedRowsKey) return;
+    const view = this.view;
+    updateGutterWidthIfNeeded(view);
+    const key = rowsKey(view, snapshot);
+    if (key === view.lastRenderedRowsKey) return;
 
-    this.lastRenderedRowsKey = rowsKey;
-    this.applyTotalHeight(snapshot.totalSize);
-    this.updateContentWidth(snapshot.virtualItems);
-    this.reconcileRows(snapshot.virtualItems, snapshot);
-    this.renderTokenHighlights();
-    this.renderSelectionHighlight();
-    this.onViewportChange?.();
-  }
-
-  private reconcileRows(
-    items: readonly FixedRowVirtualItem[],
-    snapshot: FixedRowVirtualizerSnapshot,
-  ): void {
-    const reusableRows = this.releaseRowsOutside(items);
-    for (const item of items) {
-      this.mountOrUpdateRow(item, reusableRows, snapshot);
-    }
-
-    this.removeReusableRows(reusableRows);
-  }
-
-  private mountOrUpdateRow(
-    item: FixedRowVirtualItem,
-    reusableRows: MountedVirtualizedTextRow[],
-    snapshot: FixedRowVirtualizerSnapshot,
-  ): void {
-    const existing = this.rowElements.get(item.index);
-    if (existing) {
-      this.updateRow(existing, item, snapshot);
-      return;
-    }
-
-    const row = reusableRows.shift() ?? this.createRow();
-    this.updateRow(row, item, snapshot);
-    this.rowElements.set(item.index, row);
-  }
-
-  private createRow(): MountedVirtualizedTextRow {
-    const document = this.scrollElement.ownerDocument;
-    const element = document.createElement("div");
-    const gutterElement = document.createElement("div");
-    const gutterLabelElement = document.createElement("span");
-    const foldButtonElement = document.createElement("button");
-    const leftSpacerElement = document.createElement("span");
-    const foldPlaceholderElement = document.createElement("span");
-    const textNode = document.createTextNode("");
-
-    element.className = "editor-virtualized-row";
-    gutterElement.className = "editor-virtualized-gutter-row";
-    gutterLabelElement.className = "editor-virtualized-gutter-label editor-virtualized-line-number";
-    foldButtonElement.className = "editor-virtualized-fold-toggle";
-    foldButtonElement.type = "button";
-    foldButtonElement.hidden = true;
-    foldButtonElement.disabled = true;
-    foldButtonElement.tabIndex = -1;
-    leftSpacerElement.className = "editor-virtualized-row-spacer";
-    foldPlaceholderElement.className = "editor-virtualized-fold-placeholder";
-    foldPlaceholderElement.textContent = "...";
-    foldPlaceholderElement.hidden = true;
-    foldButtonElement.addEventListener("mousedown", preventFoldButtonMouseDown);
-    foldButtonElement.addEventListener("click", this.handleFoldButtonClick);
-    gutterLabelElement.setAttribute("aria-hidden", "true");
-    gutterElement.appendChild(gutterLabelElement);
-    gutterElement.appendChild(foldButtonElement);
-    element.appendChild(textNode);
-    this.gutterElement.appendChild(gutterElement);
-    this.spacer.appendChild(element);
-
-    return {
-      index: -1,
-      bufferRow: -1,
-      startOffset: 0,
-      endOffset: 0,
-      text: "",
-      kind: "text",
-      chunks: [],
-      top: Number.NaN,
-      height: Number.NaN,
-      textRevision: -1,
-      tokenHighlightSlotId: this.nextTokenHighlightSlotId++,
-      chunkKey: "",
-      foldMarkerKey: "",
-      foldCollapsed: false,
-      displayKind: "text",
-      element,
-      gutterElement,
-      gutterLabelElement,
-      foldButtonElement,
-      leftSpacerElement,
-      foldPlaceholderElement,
-      textNode,
-    };
-  }
-
-  private updateRow(
-    row: MountedVirtualizedTextRow,
-    item: FixedRowVirtualItem,
-    snapshot: FixedRowVirtualizerSnapshot,
-  ): void {
-    if (this.isRowCurrent(row, item, snapshot)) return;
-
-    const bufferRow = this.bufferRowForVirtualRow(item.index);
-    const text = this.lineText(item.index);
-    const startOffset = this.lineStartOffset(item.index);
-    const endOffset = this.lineEndOffset(item.index);
-    const foldMarker = this.foldMarkerForVirtualRow(item.index);
-    const displayKind = this.displayRowKind(item.index);
-
-    this.updateRowElement(row, item, text, startOffset, snapshot);
-    updateMutableRow(row, {
-      bufferRow,
-      endOffset,
-      kind: displayKind,
-      foldCollapsed: foldMarker?.collapsed ?? false,
-      foldMarkerKey: foldMarker?.key ?? "",
-      height: item.size,
-      index: item.index,
-      startOffset,
-      text,
-      textRevision: this.textRevision,
-      top: item.start,
-      chunkKey: this.rowChunkKey(text, snapshot),
-      displayKind,
-    });
-  }
-
-  private updateRowElement(
-    row: MountedVirtualizedTextRow,
-    item: FixedRowVirtualItem,
-    text: string,
-    startOffset: number,
-    snapshot: FixedRowVirtualizerSnapshot,
-  ): void {
-    if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
-    this.updateGutterRowElement(row, item);
-    if (row.top !== item.start) {
-      row.element.style.transform = `translate3d(0, ${item.start}px, 0)`;
-    }
-    if (this.displayRowKind(item.index) === "block") {
-      this.setBlockRowText(row, text, startOffset);
-      this.updateRowFoldPresentation(row, item);
-      return;
-    }
-
-    this.updateRowTextChunks(row, text, startOffset, snapshot);
-    this.updateRowFoldPresentation(row, item);
+    view.lastRenderedRowsKey = key;
+    renderRows(view, snapshot, (rowSlotId) => deleteTokenRangesForRow(view, rowSlotId));
+    renderTokenHighlights(view);
+    renderSelectionHighlight(view);
+    view.onViewportChange?.();
   }
 
   private applySameLineEdit(patch: SameLineEditPatch, nextText: string): void {
-    const snapshot = this.virtualizer.getSnapshot();
-    this.text = nextText;
-    this.textRevision += 1;
-    this.foldMap = null;
-    this.tokenRangesFollowLastTextEdit = true;
-    this.tokenRenderIndexDirty = true;
-    this.lineStarts = computeLineStarts(nextText);
-    this.rebuildDisplayRows();
-    this.clampStoredSelection();
-    this.resetContentWidthScan();
-    this.updateContentWidth(snapshot.virtualItems);
-    this.updateMountedRowsAfterSameLineEdit(snapshot.virtualItems, patch, snapshot);
+    const view = this.view;
+    const snapshot = view.virtualizer.getSnapshot();
+    view.text = nextText;
+    view.textRevision += 1;
+    view.foldMap = null;
+    view.tokenRangesFollowLastTextEdit = true;
+    view.tokenRenderIndexDirty = true;
+    view.lineStarts = computeLineStarts(nextText);
+    rebuildDisplayRows(view, horizontalViewportColumns(view));
+    clampStoredSelection(view);
+    resetContentWidthScan(view);
+    updateContentWidth(view, snapshot.virtualItems);
+    updateMountedRowsAfterSameLineEdit(view, snapshot.virtualItems, patch, snapshot);
   }
 
-  private updateMountedRowsAfterSameLineEdit(
-    items: readonly FixedRowVirtualItem[],
-    patch: SameLineEditPatch,
-    snapshot: FixedRowVirtualizerSnapshot,
+  private refreshWrapWidth(
+    viewportWidth = this.view.virtualizer.getSnapshot().viewportWidth,
   ): void {
-    for (const item of items) {
-      const row = this.rowElements.get(item.index);
-      if (!row) continue;
-      this.updateRowAfterSameLineEdit(row, item, patch, snapshot);
-    }
-  }
-
-  private updateRowAfterSameLineEdit(
-    row: MountedVirtualizedTextRow,
-    item: FixedRowVirtualItem,
-    patch: SameLineEditPatch,
-    snapshot: FixedRowVirtualizerSnapshot,
-  ): void {
-    const text = this.lineText(item.index);
-    const startOffset = this.lineStartOffset(item.index);
-    const endOffset = this.lineEndOffset(item.index);
-    const foldMarker = this.foldMarkerForVirtualRow(item.index);
-    const displayKind = this.displayRowKind(item.index);
-
-    this.updateRowElementForSameLineEdit(row, item, text, patch, startOffset, snapshot);
-    updateMutableRow(row, {
-      bufferRow: this.bufferRowForVirtualRow(item.index),
-      endOffset,
-      kind: displayKind,
-      foldCollapsed: foldMarker?.collapsed ?? false,
-      foldMarkerKey: foldMarker?.key ?? "",
-      height: item.size,
-      index: item.index,
-      startOffset,
-      text,
-      textRevision: this.textRevision,
-      top: item.start,
-      chunkKey: this.rowChunkKey(text, snapshot),
-      displayKind,
-    });
-  }
-
-  private updateRowElementForSameLineEdit(
-    row: MountedVirtualizedTextRow,
-    item: FixedRowVirtualItem,
-    text: string,
-    patch: SameLineEditPatch,
-    startOffset: number,
-    snapshot: FixedRowVirtualizerSnapshot,
-  ): void {
-    if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
-    this.updateGutterRowElement(row, item);
-    if (row.top !== item.start) {
-      row.element.style.transform = `translate3d(0, ${item.start}px, 0)`;
-    }
-    if (this.displayRowKind(item.index) === "block") {
-      this.setBlockRowText(row, text, startOffset);
-      this.updateRowFoldPresentation(row, item);
-      return;
-    }
-
-    this.updateRowTextForSameLineEdit(row, item, text, patch, startOffset, snapshot);
-    this.updateRowFoldPresentation(row, item);
-  }
-
-  private updateRowTextForSameLineEdit(
-    row: MountedVirtualizedTextRow,
-    item: FixedRowVirtualItem,
-    text: string,
-    patch: SameLineEditPatch,
-    startOffset: number,
-    snapshot: FixedRowVirtualizerSnapshot,
-  ): void {
-    if (item.index !== patch.rowIndex) {
-      if (row.text !== text) this.updateRowTextChunks(row, text, startOffset, snapshot);
-      if (row.text === text) this.syncRowChunkOffsets(row, startOffset);
-      return;
-    }
-
-    if (row.textNode.data !== row.text) {
-      this.updateRowTextChunks(row, text, startOffset, snapshot);
-      return;
-    }
-
-    if (this.shouldChunkLine(text)) {
-      this.updateRowTextChunks(row, text, startOffset, snapshot);
-      return;
-    }
-
-    row.textNode.replaceData(patch.localFrom, patch.deleteLength, patch.text);
-    this.syncDirectRowChunk(row, text, startOffset);
-  }
-
-  private syncRowChunkOffsets(row: MountedVirtualizedTextRow, startOffset: number): void {
-    const chunks = row.chunks.map((chunk) => ({
-      ...chunk,
-      startOffset: startOffset + chunk.localStart,
-      endOffset: startOffset + chunk.localEnd,
-    }));
-    updateMutableRowChunks(row, chunks);
-  }
-
-  private updateRowTextChunks(
-    row: MountedVirtualizedTextRow,
-    text: string,
-    startOffset: number,
-    snapshot = this.virtualizer.getSnapshot(),
-  ): void {
-    if (!this.shouldChunkLine(text)) {
-      this.setDirectRowText(row, text, startOffset);
-      return;
-    }
-
-    this.setChunkedRowText(row, text, startOffset, snapshot);
-  }
-
-  private setDirectRowText(
-    row: MountedVirtualizedTextRow,
-    text: string,
-    startOffset: number,
-  ): void {
-    if (row.element.firstChild !== row.textNode) {
-      row.element.replaceChildren(row.textNode);
-    }
-    if (row.textNode.data !== text) row.textNode.data = text;
-    this.syncDirectRowChunk(row, text, startOffset);
-  }
-
-  private syncDirectRowChunk(
-    row: MountedVirtualizedTextRow,
-    text: string,
-    startOffset: number,
-  ): void {
-    const chunk = {
-      startOffset,
-      endOffset: startOffset + text.length,
-      localStart: 0,
-      localEnd: text.length,
-      text,
-      element: null,
-      textNode: row.textNode,
-    };
-    updateMutableRowChunks(row, [chunk]);
-  }
-
-  private setBlockRowText(row: MountedVirtualizedTextRow, text: string, startOffset: number): void {
-    row.element.replaceChildren(row.textNode);
-    if (row.textNode.data !== text) row.textNode.data = text;
-    this.syncDirectRowChunk(row, text, startOffset);
-  }
-
-  private setChunkedRowText(
-    row: MountedVirtualizedTextRow,
-    text: string,
-    startOffset: number,
-    snapshot: FixedRowVirtualizerSnapshot,
-  ): void {
-    const window = this.horizontalChunkWindow(text.length, snapshot);
-    const chunks = this.createRowChunks(text, window, startOffset);
-    const elements = chunks
-      .map((chunk) => chunk.element)
-      .filter((element): element is HTMLSpanElement => element !== null);
-    row.leftSpacerElement.style.width = `${Math.round(window.start * this.characterWidth())}px`;
-    row.element.replaceChildren(row.leftSpacerElement, ...elements);
-    updateMutableRowChunks(row, chunks);
-  }
-
-  private createRowChunks(
-    text: string,
-    window: HorizontalChunkWindow,
-    startOffset: number,
-  ): VirtualizedTextChunk[] {
-    const chunks: VirtualizedTextChunk[] = [];
-
-    for (
-      let localStart = window.start;
-      localStart < window.end;
-      localStart += this.longLineChunkSize
-    ) {
-      chunks.push(this.createRowChunk(text, localStart, window.end, startOffset));
-    }
-
-    return chunks;
-  }
-
-  private createRowChunk(
-    text: string,
-    localStart: number,
-    windowEnd: number,
-    startOffset: number,
-  ): VirtualizedTextChunk {
-    const localEnd = Math.min(localStart + this.longLineChunkSize, windowEnd);
-    const element = this.scrollElement.ownerDocument.createElement("span");
-    const textNode = this.scrollElement.ownerDocument.createTextNode(
-      text.slice(localStart, localEnd),
+    const view = this.view;
+    const changed = refreshDisplayRowsForWrapWidth(
+      view,
+      horizontalViewportColumns(view, viewportWidth),
     );
+    if (!changed) return;
 
-    element.className = "editor-virtualized-row-chunk";
-    element.dataset.editorVirtualChunkStart = String(localStart);
-    element.appendChild(textNode);
-
-    return {
-      startOffset: startOffset + localStart,
-      endOffset: startOffset + localEnd,
-      localStart,
-      localEnd,
-      text: textNode.data,
-      element,
-      textNode,
-    };
-  }
-
-  private shouldChunkLine(text: string): boolean {
-    if (this.wrapEnabled) return false;
-    return text.length > this.longLineChunkThreshold;
-  }
-
-  private rowChunkKey(text: string, snapshot = this.virtualizer.getSnapshot()): string {
-    if (!this.shouldChunkLine(text)) return "direct";
-
-    const window = this.horizontalChunkWindow(text.length, snapshot);
-    return `${window.start}:${window.end}:${snapshot.viewportWidth}:${snapshot.scrollLeft}`;
-  }
-
-  private horizontalChunkWindow(
-    textLength: number,
-    snapshot = this.virtualizer.getSnapshot(),
-  ): HorizontalChunkWindow {
-    const viewportColumns = this.horizontalViewportColumns(snapshot.viewportWidth);
-    const leftColumn = Math.max(
-      0,
-      Math.floor(this.horizontalTextScrollLeft(snapshot.scrollLeft) / this.characterWidth()),
-    );
-    const start = alignChunkStart(
-      Math.max(0, leftColumn - this.horizontalOverscanColumns),
-      this.longLineChunkSize,
-    );
-    const end = alignChunkEnd(
-      Math.min(textLength, leftColumn + viewportColumns + this.horizontalOverscanColumns),
-      this.longLineChunkSize,
-    );
-
-    return { start, end: clamp(end, start, textLength) };
-  }
-
-  private horizontalViewportColumns(
-    viewportWidth = this.virtualizer.getSnapshot().viewportWidth,
-  ): number {
-    const width = Math.max(0, viewportWidth - this.gutterWidth());
-    return Math.max(1, Math.ceil(width / this.characterWidth()));
-  }
-
-  private horizontalTextScrollLeft(scrollLeft = this.virtualizer.getSnapshot().scrollLeft): number {
-    return Math.max(0, scrollLeft - this.gutterWidth());
-  }
-
-  private horizontalWindowKey(
-    items: readonly FixedRowVirtualItem[],
-    snapshot: FixedRowVirtualizerSnapshot,
-  ): string {
-    if (!this.hasHorizontalChunkedRows(items)) return "direct";
-
-    const scrollLeft = Math.floor(snapshot.scrollLeft);
-    return `${scrollLeft}:${snapshot.viewportWidth}:${this.longLineChunkSize}`;
-  }
-
-  private hasHorizontalChunkedRows(items: readonly FixedRowVirtualItem[]): boolean {
-    for (const item of items) {
-      if (this.shouldChunkLine(this.lineText(item.index))) return true;
-    }
-
-    return false;
-  }
-
-  private updateRowFoldPresentation(
-    row: MountedVirtualizedTextRow,
-    item: FixedRowVirtualItem,
-  ): void {
-    const marker = this.foldMarkerForVirtualRow(item.index);
-    this.updateFoldButton(row, marker);
-    this.updateFoldPlaceholder(row, marker);
-  }
-
-  private updateFoldButton(
-    row: MountedVirtualizedTextRow,
-    marker: VirtualizedFoldMarker | null,
-  ): void {
-    if (!marker) {
-      hideFoldButton(row.foldButtonElement);
-      return;
-    }
-
-    const state = marker.collapsed ? "collapsed" : "expanded";
-    showFoldButton(row.foldButtonElement, marker.key, state);
-  }
-
-  private updateFoldPlaceholder(
-    row: MountedVirtualizedTextRow,
-    marker: VirtualizedFoldMarker | null,
-  ): void {
-    const show = marker?.collapsed === true;
-    if (!show) {
-      hideFoldPlaceholder(row.foldPlaceholderElement);
-      return;
-    }
-
-    showFoldPlaceholder(row.foldPlaceholderElement, marker.key);
-    if (row.foldPlaceholderElement.isConnected) return;
-    row.element.appendChild(row.foldPlaceholderElement);
-  }
-
-  private updateGutterRowElement(row: MountedVirtualizedTextRow, item: FixedRowVirtualItem): void {
-    if (row.index !== item.index) {
-      row.gutterElement.dataset.editorVirtualGutterRow = String(item.index);
-      setCounterSet(row.gutterLabelElement, `editor-line ${item.index + 1}`);
-    }
-    if (row.top !== item.start) {
-      row.gutterElement.style.transform = `translate3d(0, ${item.start}px, 0)`;
-    }
-  }
-
-  private foldMarkerForVirtualRow(row: number): VirtualizedFoldMarker | null {
-    const displayRow = this.displayRows[row];
-    if (displayRow?.kind === "block") return null;
-    if (displayRow?.kind === "text" && displayRow.sourceStartColumn !== 0) return null;
-
-    const bufferRow = this.bufferRowForVirtualRow(row);
-    return this.foldMarkers.find((marker) => marker.startRow === bufferRow) ?? null;
-  }
-
-  private handleFoldButtonClick = (event: MouseEvent): void => {
-    const button = event.currentTarget;
-    if (!(button instanceof HTMLButtonElement)) return;
-
-    const key = button.dataset.editorFoldKey;
-    const marker = key ? this.foldMarkers.find((candidate) => candidate.key === key) : null;
-    if (!marker) return;
-
-    event.preventDefault();
-    event.stopPropagation();
-    this.onFoldToggle?.(marker);
-  };
-
-  private isRowCurrent(
-    row: MountedVirtualizedTextRow,
-    item: FixedRowVirtualItem,
-    snapshot: FixedRowVirtualizerSnapshot,
-  ): boolean {
-    const text = this.lineText(item.index);
-    const bufferRow = this.bufferRowForVirtualRow(item.index);
-    const foldMarker = this.foldMarkerForVirtualRow(item.index);
-    const displayKind = this.displayRowKind(item.index);
-    return (
-      row.index === item.index &&
-      row.bufferRow === bufferRow &&
-      row.top === item.start &&
-      row.height === item.size &&
-      row.text === text &&
-      row.chunkKey === this.rowChunkKey(text, snapshot) &&
-      row.foldMarkerKey === (foldMarker?.key ?? "") &&
-      row.foldCollapsed === (foldMarker?.collapsed ?? false) &&
-      row.displayKind === displayKind &&
-      row.textRevision === this.textRevision
-    );
-  }
-
-  private releaseRowsOutside(items: readonly FixedRowVirtualItem[]): MountedVirtualizedTextRow[] {
-    const mounted = new Set(items.map((item) => item.index));
-    const reusableRows: MountedVirtualizedTextRow[] = [];
-    for (const [index, row] of this.rowElements) {
-      if (mounted.has(index)) continue;
-      this.rowElements.delete(index);
-      reusableRows.push(row);
-    }
-
-    return reusableRows;
-  }
-
-  private removeReusableRows(rows: readonly MountedVirtualizedTextRow[]): void {
-    for (const row of rows) {
-      this.deleteTokenRangesForRow(row.tokenHighlightSlotId);
-      this.rowTokenSignatures.delete(row.tokenHighlightSlotId);
-      removeRowElements(row);
-    }
-  }
-
-  private resetContentWidthScan(): void {
-    this.contentWidth = 0;
-    this.maxVisualColumnsSeen = 0;
-    this.lastWidthScanStart = 0;
-    this.lastWidthScanEnd = -1;
-  }
-
-  private updateGutterWidthIfNeeded(): void {
-    if (!this.gutterWidthDirty) return;
-
-    this.gutterWidthDirty = false;
-    this.applyGutterWidth(gutterLabelColumns(this.lineStarts.length));
-  }
-
-  private applyGutterWidth(labelColumns: number): void {
-    setStyleValue(this.scrollElement, "--editor-gutter-label-columns", String(labelColumns));
-
-    const nextWidth = Math.max(
-      this.minimumGutterWidth,
-      Math.ceil(labelColumns * this.characterWidth() + GUTTER_EXTRA_WIDTH_PX),
-    );
-    if (nextWidth === this.currentGutterWidth) return;
-
-    this.currentGutterWidth = nextWidth;
-    this.applySpacerWidth();
-  }
-
-  private updateContentWidth(items: readonly FixedRowVirtualItem[]): void {
-    const first = items[0];
-    const last = items.at(-1);
-    if (!first || !last) {
-      this.applyContentWidth(0);
-      return;
-    }
-
-    this.scanVisualWidthRange(first.index, last.index);
-    this.applyContentWidth(this.maxVisualColumnsSeen);
-  }
-
-  private scanVisualWidthRange(startIndex: number, endIndex: number): void {
-    const overlapsLastScan = rangesIntersectInclusive(
-      startIndex,
-      endIndex,
-      this.lastWidthScanStart,
-      this.lastWidthScanEnd,
-    );
-    if (!overlapsLastScan) {
-      this.scanVisualColumns(startIndex, endIndex);
-      this.lastWidthScanStart = startIndex;
-      this.lastWidthScanEnd = endIndex;
-      return;
-    }
-
-    if (startIndex < this.lastWidthScanStart) {
-      this.scanVisualColumns(startIndex, this.lastWidthScanStart - 1);
-    }
-    if (endIndex > this.lastWidthScanEnd) {
-      this.scanVisualColumns(this.lastWidthScanEnd + 1, endIndex);
-    }
-
-    this.lastWidthScanStart = startIndex;
-    this.lastWidthScanEnd = endIndex;
-  }
-
-  private scanVisualColumns(startIndex: number, endIndex: number): void {
-    for (let row = startIndex; row <= endIndex; row += 1) {
-      this.maxVisualColumnsSeen = Math.max(
-        this.maxVisualColumnsSeen,
-        visualColumnLength(this.lineText(row), DEFAULT_TAB_SIZE),
-      );
-    }
-  }
-
-  private applyContentWidth(visualColumns: number): void {
-    const charWidth = this.characterWidth();
-    const width = Math.ceil(Math.max(charWidth, visualColumns * charWidth));
-    if (width === this.contentWidth) return;
-
-    this.contentWidth = width;
-    this.applySpacerWidth();
-  }
-
-  private applySpacerWidth(): void {
-    this.spacer.style.width = `${this.contentWidth + this.gutterWidth()}px`;
-  }
-
-  private applyRowHeight(rowHeight: number): void {
-    setStyleValue(this.scrollElement, "--editor-row-height", `${rowHeight}px`);
-  }
-
-  private applyTotalHeight(totalHeight: number): void {
-    const height = `${totalHeight}px`;
-    setStyleValue(this.spacer, "height", height);
-    setStyleValue(this.gutterElement, "height", height);
-  }
-
-  private getMountedRows(): readonly MountedVirtualizedTextRow[] {
-    return [...this.rowElements.values()].sort((a, b) => a.index - b.index);
-  }
-
-  private rowFromDomBoundary(node: Node): VirtualizedTextRow | null {
-    const element = rowElementFromNode(node, this.scrollElement);
-    if (!element) return null;
-
-    const rowIndex = Number(element.dataset.editorVirtualRow);
-    if (!Number.isInteger(rowIndex)) return null;
-    return this.rowElements.get(rowIndex) ?? null;
-  }
-
-  private rowElementBoundaryToOffset(row: VirtualizedTextRow, offset: number): number {
-    if (offset <= 0) return row.startOffset;
-    if (offset >= row.element.childNodes.length) return row.endOffset;
-
-    const child = row.element.childNodes.item(offset);
-    const chunk = child ? rowChunkFromDomBoundary(row, child) : null;
-    if (chunk) return chunk.startOffset;
-    return row.endOffset;
-  }
-
-  private rowChunkBoundaryToOffset(
-    chunk: VirtualizedTextChunk,
-    node: Node,
-    offset: number,
-  ): number {
-    if (node === chunk.textNode) {
-      return chunk.startOffset + clamp(offset, 0, chunk.textNode.length);
-    }
-    if (offset <= 0) return chunk.startOffset;
-    return chunk.endOffset;
-  }
-
-  private ensureOffsetMounted(offset: number): void {
-    if (this.resolveMountedOffset(offset)) return;
-
-    const row = this.rowForOffset(offset);
-    this.scrollToRow(row);
-    if (this.resolveMountedOffset(offset)) return;
-
-    this.scrollHorizontallyToOffset(row, offset);
-    this.syncVirtualizerMetricsFromScrollElement();
-  }
-
-  private scrollHorizontallyToOffset(row: number, offset: number): void {
-    const text = this.lineText(row);
-    if (!this.shouldChunkLine(text)) return;
-
-    const snapshot = this.virtualizer.getSnapshot();
-    const localOffset = clamp(offset - this.lineStartOffset(row), 0, text.length);
-    const targetLeft = this.gutterWidth() + localOffset * this.characterWidth();
-    const viewportRight = snapshot.scrollLeft + snapshot.viewportWidth;
-    if (targetLeft >= snapshot.scrollLeft && targetLeft <= viewportRight) return;
-
-    this.scrollElement.scrollLeft = Math.max(0, targetLeft - this.gutterWidth());
-  }
-
-  private positionInputInViewport(scrollTop: number, scrollLeft: number): void {
-    setStyleValue(this.inputElement, "top", `${scrollTop}px`);
-    setStyleValue(this.inputElement, "left", `${scrollLeft}px`);
-  }
-
-  private restoreScrollPosition(scrollTop: number, scrollLeft: number): void {
-    if (this.scrollElement.scrollTop === scrollTop && this.scrollElement.scrollLeft === scrollLeft)
-      return;
-
-    this.scrollElement.scrollTop = scrollTop;
-    this.scrollElement.scrollLeft = scrollLeft;
-    this.syncVirtualizerMetricsFromScrollElement();
-  }
-
-  private syncVirtualizerMetricsFromScrollElement(): void {
-    const snapshot = this.virtualizer.getSnapshot();
-    this.virtualizer.setScrollMetrics({
-      scrollTop: this.scrollElement.scrollTop,
-      scrollLeft: this.scrollElement.scrollLeft,
-      viewportHeight: snapshot.viewportHeight,
-      viewportWidth: snapshot.viewportWidth,
-    });
-  }
-
-  private scrollOffsetIntoView(offset: number): void {
-    const snapshot = this.virtualizer.getSnapshot();
-    const row = this.rowForOffset(offset);
-    const rowTop = this.rowTop(row);
-    const rowBottom = rowTop + this.rowHeight(row);
-    const scrollTop = this.scrollTopForVisibleRow(rowTop, rowBottom, snapshot);
-    const scrollLeft = this.scrollLeftForVisibleOffset(row, offset, snapshot);
-    if (scrollTop === snapshot.scrollTop && scrollLeft === snapshot.scrollLeft) return;
-
-    this.scrollElement.scrollTop = scrollTop;
-    this.scrollElement.scrollLeft = scrollLeft;
-    this.syncVirtualizerMetricsFromScrollElement();
-  }
-
-  private scrollOffsetToViewportEnd(offset: number): void {
-    const snapshot = this.virtualizer.getSnapshot();
-    const row = this.rowForOffset(offset);
-    const rowBottom = this.rowTop(row) + this.rowHeight(row);
-    const scrollTop = this.scrollTopForRowBottom(rowBottom, snapshot);
-    const scrollLeft = this.scrollLeftForVisibleOffset(row, offset, snapshot);
-    if (scrollTop === snapshot.scrollTop && scrollLeft === snapshot.scrollLeft) return;
-
-    this.scrollElement.scrollTop = scrollTop;
-    this.scrollElement.scrollLeft = scrollLeft;
-    this.syncVirtualizerMetricsFromScrollElement();
-  }
-
-  private scrollTopForRowBottom(rowBottom: number, snapshot: FixedRowVirtualizerSnapshot): number {
-    const maxScrollTop = Math.max(0, snapshot.totalSize - snapshot.viewportHeight);
-    return clamp(rowBottom - snapshot.viewportHeight, 0, maxScrollTop);
-  }
-
-  private scrollTopForVisibleRow(
-    rowTop: number,
-    rowBottom: number,
-    snapshot: FixedRowVirtualizerSnapshot,
-  ): number {
-    const viewportTop = snapshot.scrollTop;
-    const viewportBottom = viewportTop + snapshot.viewportHeight;
-    const maxScrollTop = Math.max(0, snapshot.totalSize - snapshot.viewportHeight);
-
-    if (rowTop < viewportTop) return clamp(rowTop, 0, maxScrollTop);
-    if (rowBottom > viewportBottom)
-      return clamp(rowBottom - snapshot.viewportHeight, 0, maxScrollTop);
-    return viewportTop;
-  }
-
-  private scrollLeftForVisibleOffset(
-    row: number,
-    offset: number,
-    snapshot: FixedRowVirtualizerSnapshot,
-  ): number {
-    const text = this.lineText(row);
-    const localOffset = clamp(offset - this.lineStartOffset(row), 0, text.length);
-    const caretLeft =
-      this.gutterWidth() +
-      bufferColumnToVisualColumn(text, localOffset, DEFAULT_TAB_SIZE) * this.characterWidth();
-    const viewportLeft = snapshot.scrollLeft + this.gutterWidth();
-    const viewportRight = snapshot.scrollLeft + snapshot.viewportWidth;
-    if (caretLeft < viewportLeft) return Math.max(0, caretLeft - this.gutterWidth());
-    if (caretLeft > viewportRight) return Math.max(0, caretLeft - snapshot.viewportWidth);
-    return snapshot.scrollLeft;
-  }
-
-  private resolveMountedOffset(
-    offset: number,
-  ): { readonly node: Text; readonly offset: number } | null {
-    const clamped = clamp(offset, 0, this.text.length);
-    const targetRow = this.rowForOffset(clamped);
-    for (const row of this.getMountedRows()) {
-      if (row.index !== targetRow) continue;
-      const rowOffset = clamp(clamped, row.startOffset, row.endOffset);
-      const chunk = mountedChunkForOffset(row, rowOffset);
-      if (!chunk) return null;
-      return {
-        node: chunk.textNode,
-        offset: clamp(rowOffset - chunk.startOffset, 0, chunk.textNode.length),
-      };
-    }
-
-    return null;
-  }
-
-  private addMountedSelectionRanges(start: number, end: number): void {
-    for (const row of this.getMountedRows()) {
-      this.addMountedSelectionRange(row, start, end);
-    }
-  }
-
-  private addMountedSelectionRange(row: VirtualizedTextRow, start: number, end: number): void {
-    if (!this.selectionHighlight) return;
-    if (end <= row.startOffset || start >= row.endOffset) return;
-
-    for (const chunk of row.chunks) {
-      this.addSelectionRangeToChunk(chunk, start, end);
-    }
-  }
-
-  private addSelectionRangeToChunk(chunk: VirtualizedTextChunk, start: number, end: number): void {
-    if (!this.selectionHighlight) return;
-    if (end <= chunk.startOffset || start >= chunk.endOffset) return;
-
-    const range = this.scrollElement.ownerDocument.createRange();
-    range.setStart(chunk.textNode, clamp(start - chunk.startOffset, 0, chunk.textNode.length));
-    range.setEnd(chunk.textNode, clamp(end - chunk.startOffset, 0, chunk.textNode.length));
-    this.selectionHighlight.add(range);
-  }
-
-  private clearSelectionHighlight(): void {
-    this.clearSelectionHighlightRanges();
-    this.lastSelectionHighlightSignature = "";
-    if (!this.selectionHighlightRegistered || !this.highlightRegistry) return;
-
-    this.highlightRegistry.delete(this.selectionHighlightName);
-    this.selectionHighlightRegistered = false;
-  }
-
-  private renderSelectionHighlight(): void {
-    const selectionRange = this.selectionRange();
-
-    this.renderCaret();
-    if (!selectionRange) {
-      this.clearSelectionHighlight();
-      return;
-    }
-    if (!this.selectionHighlight || !this.highlightRegistry) return;
-
-    const signature = this.selectionHighlightSignature(selectionRange.start, selectionRange.end);
-    if (signature === this.lastSelectionHighlightSignature) return;
-
-    this.lastSelectionHighlightSignature = signature;
-    this.clearSelectionHighlightRanges();
-    this.addMountedSelectionRanges(selectionRange.start, selectionRange.end);
-    if (this.selectionHighlight.size === 0) return;
-
-    this.ensureSelectionHighlightRegistered();
-  }
-
-  private selectionHighlightSignature(start: number, end: number): string {
-    const parts = [`${start}:${end}`];
-    for (const row of this.getMountedRows()) {
-      this.appendSelectionRowSignature(parts, row, start, end);
-    }
-
-    return parts.join("|");
-  }
-
-  private appendSelectionRowSignature(
-    parts: string[],
-    row: VirtualizedTextRow,
-    start: number,
-    end: number,
-  ): void {
-    if (end <= row.startOffset || start >= row.endOffset) return;
-
-    for (const chunk of row.chunks) {
-      const signature = selectionChunkSignature(row, chunk, start, end);
-      if (signature) parts.push(signature);
-    }
-  }
-
-  private renderCaret(): void {
-    if (this.selectionEnd === null || this.selectionStart !== this.selectionEnd) {
-      setElementHidden(this.caretElement, true);
-      return;
-    }
-
-    const position = this.caretPosition(this.selectionEnd);
-    if (!position) {
-      setElementHidden(this.caretElement, true);
-      return;
-    }
-
-    setElementHidden(this.caretElement, false);
-    setStyleValue(this.caretElement, "height", `${position.height}px`);
-    setStyleValue(
-      this.caretElement,
-      "transform",
-      `translate(${position.left}px, ${position.top}px)`,
-    );
-  }
-
-  private clampStoredSelection(): void {
-    if (this.selectionStart === null || this.selectionEnd === null) return;
-
-    this.selectionStart = clamp(this.selectionStart, 0, this.text.length);
-    this.selectionEnd = clamp(this.selectionEnd, this.selectionStart, this.text.length);
-  }
-
-  private renderTokenHighlights(): void {
-    if (!this.highlightRegistry || this.tokens.length === 0 || this.text.length === 0) {
-      this.clearTokenHighlights();
-      return;
-    }
-
-    const mountedRows = this.getMountedRows();
-    const segmentsByRow = this.tokenSegmentsForRows(mountedRows);
-    for (const row of mountedRows) {
-      this.reconcileTokenHighlightsForRow(row, segmentsByRow.get(row.tokenHighlightSlotId) ?? []);
-    }
-  }
-
-  private reconcileTokenHighlightsForRow(
-    row: MountedVirtualizedTextRow,
-    segments: readonly TokenRowSegment[],
-  ): void {
-    const signature = tokenRowSignature(row, segments);
-    if (this.rowTokenSignatures.get(row.tokenHighlightSlotId) === signature) return;
-
-    this.deleteTokenRangesForRow(row.tokenHighlightSlotId);
-    this.addTokenSegmentsForRow(row, segments);
-    this.rowTokenSignatures.set(row.tokenHighlightSlotId, signature);
-  }
-
-  private ensureTokenRenderIndex(): void {
-    if (!this.tokenRenderIndexDirty) return;
-
-    this.rebuildTokenRenderIndex();
-    this.tokenRenderIndexDirty = false;
-  }
-
-  private rebuildTokenRenderIndex(): void {
-    const entries: TokenRenderEntry[] = [];
-    for (let index = 0; index < this.tokens.length; index += 1) {
-      const token = this.tokens[index]!;
-      const entry = this.tokenRenderEntry(token, index);
-      if (!entry) continue;
-      entries.push(entry);
-    }
-
-    entries.sort(compareTokenRenderEntries);
-    this.tokenRenderEntries = entries;
-    this.tokenRenderEntryMaxEnds = tokenRenderEntryMaxEnds(entries);
-  }
-
-  private tokenRenderEntry(token: EditorToken, sourceIndex: number): TokenRenderEntry | null {
-    const style = normalizeTokenStyle(token.style);
-    if (!style) return null;
-
-    const start = clamp(token.start, 0, this.text.length);
-    const end = clamp(token.end, start, this.text.length);
-    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-    if (end <= start) return null;
-
-    return {
-      start,
-      end,
-      style,
-      styleKey: serializeTokenStyle(style),
-      sourceIndex,
-    };
-  }
-
-  private firstTokenRenderEntryStartingAtOrAfter(offset: number): number {
-    let low = 0;
-    let high = this.tokenRenderEntries.length;
-    while (low < high) {
-      const middle = Math.floor((low + high) / 2);
-      const token = this.tokenRenderEntries[middle]!;
-      if (token.start >= offset) {
-        high = middle;
-        continue;
-      }
-
-      low = middle + 1;
-    }
-
-    return low;
-  }
-
-  private firstTokenRenderEntryEndingAfter(offset: number, endIndex: number): number {
-    let low = 0;
-    let high = endIndex;
-    while (low < high) {
-      const middle = Math.floor((low + high) / 2);
-      const maxEnd = this.tokenRenderEntryMaxEnds[middle] ?? 0;
-      if (maxEnd > offset) {
-        high = middle;
-        continue;
-      }
-
-      low = middle + 1;
-    }
-
-    return low;
-  }
-
-  private tokenSegmentsForRows(
-    rows: readonly MountedVirtualizedTextRow[],
-  ): Map<number, TokenRowSegment[]> {
-    const segmentsByRow = new Map<number, TokenRowSegment[]>();
-    if (rows.length === 0) return segmentsByRow;
-
-    this.ensureTokenRenderIndex();
-    if (this.tokenRenderEntries.length === 0) return segmentsByRow;
-
-    for (const row of rows) {
-      this.appendTokenSegmentsForMountedRow(segmentsByRow, row);
-    }
-
-    return segmentsByRow;
-  }
-
-  private appendTokenSegmentsForMountedRow(
-    segmentsByRow: Map<number, TokenRowSegment[]>,
-    row: MountedVirtualizedTextRow,
-  ): void {
-    if (row.kind !== "text") return;
-
-    for (const chunk of row.chunks) {
-      this.appendTokenSegmentsForChunk(segmentsByRow, row, chunk);
-    }
-  }
-
-  private appendTokenSegmentsForChunk(
-    segmentsByRow: Map<number, TokenRowSegment[]>,
-    row: MountedVirtualizedTextRow,
-    chunk: VirtualizedTextChunk,
-  ): void {
-    if (chunk.endOffset <= chunk.startOffset) return;
-
-    const endIndex = this.firstTokenRenderEntryStartingAtOrAfter(chunk.endOffset);
-    const startIndex = this.firstTokenRenderEntryEndingAfter(chunk.startOffset, endIndex);
-    if (startIndex >= endIndex) return;
-
-    const segments = getOrCreateTokenSegments(segmentsByRow, row.tokenHighlightSlotId);
-    for (let index = startIndex; index < endIndex; index += 1) {
-      const token = this.tokenRenderEntries[index]!;
-      if (token.end <= chunk.startOffset) continue;
-      appendTokenSegmentForChunk(segments, chunk, token, token.style, token.styleKey);
-    }
-  }
-
-  private addTokenSegmentsForRow(
-    row: MountedVirtualizedTextRow,
-    segments: readonly TokenRowSegment[],
-  ): void {
-    const rangesByStyle = new Map<string, AbstractRange[]>();
-    const document = this.scrollElement.ownerDocument;
-    for (const segment of segments) {
-      const group = this.tokenGroups.get(segment.styleKey);
-      if (!group) continue;
-
-      const range = addTokenRangeToChunk(
-        document,
-        group.highlight,
-        segment.chunk,
-        segment.start,
-        segment.end,
-      );
-      if (!range) continue;
-      appendTokenRange(rangesByStyle, segment.styleKey, range);
-    }
-
-    if (rangesByStyle.size > 0) {
-      this.rowTokenRanges.set(row.tokenHighlightSlotId, rangesByStyle);
-    }
-  }
-
-  private ensureTokenGroup(
-    styleKey: string,
-    style: EditorTokenStyle,
-  ): { readonly group: TokenGroup | null; readonly created: boolean } {
-    const existing = this.tokenGroups.get(styleKey);
-    if (existing) return { group: existing, created: false };
-
-    const name = `${this.selectionHighlightName}-token-${this.nextTokenGroupId++}`;
-    const highlight = new Highlight();
-    if (!highlight) return { group: null, created: false };
-
-    const group = {
-      name,
-      highlight,
-      style,
-      styleKey,
-    };
-    this.tokenGroups.set(styleKey, group);
-    this.highlightRegistry?.set(name, group.highlight);
-    return { group, created: true };
-  }
-
-  private clearTokenHighlights(): void {
-    if (this.tokenGroups.size === 0 && this.rowTokenRanges.size === 0) return;
-
-    for (const group of this.tokenGroups.values()) {
-      this.highlightRegistry?.delete(group.name);
-    }
-
-    this.tokenGroups.clear();
-    this.clearRowTokenState();
-    this.nextTokenGroupId = 0;
-    this.rebuildStyleRules();
-  }
-
-  private syncTokenGroupsToTokenSet(): void {
-    if (this.text.length === 0) {
-      this.clearTokenHighlights();
-      return;
-    }
-
-    const styles = this.currentTokenStyles();
-    if (styles.size === 0) {
-      this.clearTokenHighlights();
-      return;
-    }
-
-    const added = this.ensureTokenGroupsForStyles(styles);
-    const removed = this.removeUnusedTokenGroups(new Set(styles.keys()));
-    if (added || removed) this.rebuildStyleRules();
-  }
-
-  private currentTokenStyles(): Map<string, EditorTokenStyle> {
-    this.ensureTokenRenderIndex();
-
-    const styles = new Map<string, EditorTokenStyle>();
-    for (const token of this.tokenRenderEntries) {
-      styles.set(token.styleKey, token.style);
-    }
-
-    return styles;
-  }
-
-  private ensureTokenGroupsForStyles(styles: ReadonlyMap<string, EditorTokenStyle>): boolean {
-    let added = false;
-    for (const [styleKey, style] of styles) {
-      const result = this.ensureTokenGroup(styleKey, style);
-      added = added || result.created;
-    }
-
-    return added;
-  }
-
-  private removeUnusedTokenGroups(styleKeys: ReadonlySet<string>): boolean {
-    let removed = false;
-    for (const [key, group] of this.tokenGroups) {
-      if (styleKeys.has(key)) continue;
-
-      this.highlightRegistry?.delete(group.name);
-      this.tokenGroups.delete(key);
-      removed = true;
-    }
-
-    if (!removed) return false;
-
-    this.clearRowTokenState();
-    return true;
-  }
-
-  private canKeepLiveTokenRanges(tokens: readonly EditorToken[]): boolean {
-    if (!this.tokenRangesFollowLastTextEdit) return false;
-    if (this.tokens.length !== tokens.length) return false;
-
-    return this.tokens.every((token, index) => {
-      const nextToken = tokens[index];
-      return nextToken ? tokenStylesEqual(token, nextToken) : false;
-    });
-  }
-
-  private deleteTokenRangesForRow(rowSlotId: number): void {
-    const rangesByStyle = this.rowTokenRanges.get(rowSlotId);
-    if (!rangesByStyle) return;
-
-    for (const [styleKey, capturedRanges] of rangesByStyle) {
-      const group = this.tokenGroups.get(styleKey);
-      if (!group) continue;
-
-      for (const range of capturedRanges) {
-        group.highlight.delete(range);
-      }
-    }
-
-    this.rowTokenRanges.delete(rowSlotId);
-  }
-
-  private clearRowTokenState(): void {
-    for (const rowSlotId of this.rowTokenRanges.keys()) {
-      this.deleteTokenRangesForRow(rowSlotId);
-    }
-
-    this.rowTokenSignatures.clear();
-    this.rowTokenRanges.clear();
-  }
-
-  private clearSelectionHighlightRanges(): void {
-    if (!this.selectionHighlight || this.selectionHighlight.size === 0) return;
-
-    this.selectionHighlight?.clear();
-  }
-
-  private ensureSelectionHighlightRegistered(): void {
-    if (this.selectionHighlightRegistered) return;
-    if (!this.selectionHighlight || !this.highlightRegistry) return;
-
-    this.highlightRegistry.set(this.selectionHighlightName, this.selectionHighlight);
-    this.selectionHighlightRegistered = true;
-  }
-
-  private selectionRange(): { readonly start: number; readonly end: number } | null {
-    if (this.selectionStart === null || this.selectionEnd === null) return null;
-    if (this.selectionStart === this.selectionEnd) return null;
-
-    return {
-      start: this.selectionStart,
-      end: this.selectionEnd,
-    };
-  }
-
-  private rebuildStyleRules(): void {
-    const rules = [
-      `::highlight(${this.selectionHighlightName}) { background-color: rgba(56, 189, 248, 0.35); }`,
-    ];
-    for (const group of this.tokenGroups.values()) {
-      rules.push(buildHighlightRule(group.name, group.style));
-    }
-
-    const nextRules = rules.join("\n");
-    if (this.styleEl.textContent === nextRules) return;
-
-    this.styleEl.textContent = nextRules;
-  }
-
-  private rebuildDisplayRows(viewportWidth = this.virtualizer.getSnapshot().viewportWidth): void {
-    this.currentWrapColumn = this.wrapColumn(viewportWidth);
-    this.displayRows = createDisplayRows({
-      text: this.text,
-      lineStarts: this.lineStarts,
-      visibleLineCount: this.foldVisibleLineCount(),
-      bufferRowForVisibleRow: (row) => this.foldBufferRowForVisibleRow(row),
-      wrapColumn: this.currentWrapColumn,
-      blocks: this.blockRows,
-      tabSize: DEFAULT_TAB_SIZE,
-    });
-  }
-
-  private refreshDisplayRowsForWrapWidth(
-    viewportWidth = this.virtualizer.getSnapshot().viewportWidth,
-  ): void {
-    if (!this.wrapEnabled) return;
-
-    const wrapColumn = this.wrapColumn(viewportWidth);
-    if (wrapColumn === this.currentWrapColumn) return;
-
-    this.rebuildDisplayRows(viewportWidth);
-    this.resetContentWidthScan();
-    this.lastRenderedRowsKey = "";
-    this.updateVirtualizerRows();
-  }
-
-  private updateVirtualizerRows(): void {
-    this.virtualizer.updateOptions({
-      count: this.visibleLineCount(),
-      rowSizes: this.rowSizes(),
-    });
-  }
-
-  private rowSizes(): readonly number[] | undefined {
-    if (!this.hasVariableRows()) return undefined;
-
-    const rowHeight = this.metrics.rowHeight;
-    return this.displayRows.map((row) => {
-      if (row.kind === "block") return row.heightRows * rowHeight;
-      return rowHeight;
-    });
-  }
-
-  private hasVariableRows(): boolean {
-    return this.displayRows.some((row) => row.kind === "block" && row.heightRows !== 1);
-  }
-
-  private rowTop(row: number): number {
-    const rowSizes = this.rowSizes();
-    if (!rowSizes) return row * this.getRowHeight();
-
-    let top = 0;
-    for (let index = 0; index < row; index += 1) top += rowSizes[index] ?? 0;
-    return top;
-  }
-
-  private rowHeight(row: number): number {
-    return this.rowSizes()?.[row] ?? this.getRowHeight();
-  }
-
-  private wrapColumn(viewportWidth: number): number | null {
-    if (!this.wrapEnabled) return null;
-
-    return this.horizontalViewportColumns(viewportWidth);
-  }
-
-  private displayRowKind(row: number): "text" | "block" {
-    return this.displayRows[row]?.kind ?? "text";
-  }
-
-  private offsetForViewportColumn(row: number, visualColumn: number): number {
-    const displayRow = this.displayRows[row];
-    if (!displayRow) return this.text.length;
-    if (displayRow.kind === "block") return displayRow.startOffset;
-
-    const bufferColumn = visualColumnToBufferColumn(
-      displayRow.text,
-      visualColumn,
-      "nearest",
-      DEFAULT_TAB_SIZE,
-    );
-    return displayRow.startOffset + clamp(bufferColumn, 0, displayRow.text.length);
-  }
-
-  private lineStartOffset(row: number): number {
-    return this.displayRows[row]?.startOffset ?? this.text.length;
-  }
-
-  private lineEndOffset(row: number): number {
-    return this.displayRows[row]?.endOffset ?? this.text.length;
-  }
-
-  private bufferLineStartOffset(row: number): number {
-    return this.lineStarts[row] ?? this.text.length;
-  }
-
-  private lineText(row: number): string {
-    return this.displayRows[row]?.text ?? "";
-  }
-
-  private sameLineEditPatch(edit: TextEdit): SameLineEditPatch | null {
-    if (this.foldMap) return null;
-    if (this.wrapEnabled || this.blockRows.length > 0) return null;
-    if (edit.from < 0 || edit.to < edit.from || edit.to > this.text.length) return null;
-    if (edit.text.includes("\n")) return null;
-    if (this.text.slice(edit.from, edit.to).includes("\n")) return null;
-
-    const rowIndex = this.rowForOffset(edit.from);
-    if (this.lineText(rowIndex).length > this.longLineChunkThreshold) return null;
-    return {
-      rowIndex,
-      localFrom: edit.from - this.lineStartOffset(rowIndex),
-      deleteLength: edit.to - edit.from,
-      text: edit.text,
-    };
-  }
-
-  private rowForOffset(offset: number): number {
-    const displayRow = this.displayRows.find((row) => {
-      if (row.kind !== "text") return false;
-      if (offset < row.startOffset) return false;
-      return offset <= row.endOffset;
-    });
-    if (displayRow) return displayRow.index;
-
-    return this.virtualRowForBufferRow(this.bufferRowForOffset(offset));
-  }
-
-  private bufferRowForOffset(offset: number): number {
-    const clamped = clamp(offset, 0, this.text.length);
-    let low = 0;
-    let high = this.lineStarts.length - 1;
-
-    while (low <= high) {
-      const middle = Math.floor((low + high) / 2);
-      const start = this.bufferLineStartOffset(middle);
-      const next = this.bufferLineStartOffset(middle + 1);
-      if (clamped < start) {
-        high = middle - 1;
-        continue;
-      }
-      if (clamped >= next && middle + 1 < this.lineStarts.length) {
-        low = middle + 1;
-        continue;
-      }
-      return middle;
-    }
-
-    return this.lineStarts.length - 1;
-  }
-
-  private rowForViewportY(y: number): number {
-    const offset = this.scrollElement.scrollTop + y;
-    const rowSizes = this.rowSizes();
-    if (!rowSizes)
-      return clamp(Math.floor(offset / this.getRowHeight()), 0, this.visibleLineCount() - 1);
-
-    let top = 0;
-    for (let row = 0; row < rowSizes.length; row += 1) {
-      top += rowSizes[row] ?? 0;
-      if (offset < top) return row;
-    }
-
-    return this.visibleLineCount() - 1;
-  }
-
-  private visibleLineCount(): number {
-    return Math.max(1, this.displayRows.length);
-  }
-
-  private foldVisibleLineCount(): number {
-    if (!this.foldMap) return this.lineStarts.length;
-
-    const hidden = this.foldMap.ranges.reduce((count, range) => {
-      return count + Math.max(0, range.endPoint.row - range.startPoint.row);
-    }, 0);
-    return Math.max(1, this.lineStarts.length - hidden);
-  }
-
-  private bufferRowForVirtualRow(row: number): number {
-    const displayRow = this.displayRows[row];
-    if (displayRow?.kind === "text") return displayRow.bufferRow;
-    if (displayRow?.kind === "block") return displayRow.anchorBufferRow;
-    return this.foldBufferRowForVisibleRow(row);
-  }
-
-  private foldBufferRowForVisibleRow(row: number): number {
-    if (!this.foldMap) return clamp(row, 0, this.lineStarts.length - 1);
-    const point = foldPointToBufferPoint(this.foldMap, asFoldPoint({ row, column: 0 }));
-    return clamp(point.row, 0, this.lineStarts.length - 1);
-  }
-
-  private virtualRowForBufferRow(row: number): number {
-    const match = this.displayRows.find((displayRow) => {
-      return displayRow.kind === "text" && displayRow.bufferRow === row;
-    });
-    if (match) return match.index;
-
-    return this.foldVirtualRowForBufferRow(row);
-  }
-
-  private foldVirtualRowForBufferRow(row: number): number {
-    if (!this.foldMap) return clamp(row, 0, this.visibleLineCount() - 1);
-
-    const point = bufferPointToFoldPoint(this.foldMap, { row, column: 0 });
-    return clamp(point.row, 0, this.visibleLineCount() - 1);
-  }
-
-  private viewportPointMetrics(
-    clientX: number,
-    clientY: number,
-  ): { readonly x: number; readonly y: number; readonly verticalDirection: number } {
-    const rect = this.scrollElement.getBoundingClientRect();
-    const padding = scrollElementPadding(this.scrollElement);
-    const left = rect.left + padding.left;
-    const top = rect.top + padding.top;
-    const right = Math.max(left, rect.right - padding.right);
-    const bottom = Math.max(top, rect.bottom - padding.bottom);
-
-    return {
-      x: this.viewportTextX(clientX, left, right, this.virtualizer.getSnapshot().scrollLeft),
-      y: clamp(clientY, top, Math.max(top, bottom - 1)) - top,
-      verticalDirection: pointVerticalDirection(clientY, top, bottom),
-    };
+    resetContentWidthScan(view);
+    view.lastRenderedRowsKey = "";
+    updateVirtualizerRows(view);
   }
-
-  private viewportTextX(clientX: number, left: number, right: number, scrollLeft: number): number {
-    const viewportX = clamp(clientX, left, right) - left;
-    const scrolledX = viewportX + scrollLeft;
-    return Math.max(0, scrolledX - this.gutterWidth());
-  }
-
-  private characterWidth(): number {
-    return Math.max(1, this.metrics.characterWidth);
-  }
-
-  private getRowHeight(): number {
-    const row = this.virtualizer.getSnapshot().virtualItems[0];
-    return row?.size ?? DEFAULT_ROW_HEIGHT;
-  }
-
-  private gutterWidth(): number {
-    return this.currentGutterWidth;
-  }
-
-  private caretPosition(offset: number): {
-    readonly left: number;
-    readonly top: number;
-    readonly height: number;
-  } | null {
-    const rowIndex = this.rowForOffset(offset);
-    const row = this.rowElements.get(rowIndex);
-    if (!row) return null;
-
-    const columnText = this.text.slice(row.startOffset, offset);
-    return {
-      left:
-        this.gutterWidth() +
-        visualColumnLength(columnText, DEFAULT_TAB_SIZE) * this.characterWidth(),
-      top: row.top,
-      height: row.height,
-    };
-  }
-}
-
-function gutterLabelColumns(lineCount: number): number {
-  if (lineCount < 100) return MIN_GUTTER_LABEL_COLUMNS;
-  return decimalDigitCount(lineCount) + HEBREW_GUTTER_LABEL_PADDING_COLUMNS;
-}
-
-function decimalDigitCount(value: number): number {
-  return String(Math.max(1, Math.floor(value))).length;
-}
-
-function selectionChunkSignature(
-  row: VirtualizedTextRow,
-  chunk: VirtualizedTextChunk,
-  start: number,
-  end: number,
-): string | null {
-  if (end <= chunk.startOffset || start >= chunk.endOffset) return null;
-
-  const localStart = clamp(start - chunk.startOffset, 0, chunk.textNode.length);
-  const localEnd = clamp(end - chunk.startOffset, 0, chunk.textNode.length);
-  return `${row.index}:${chunk.localStart}:${chunk.startOffset}:${localStart}:${localEnd}`;
-}
-
-function compareTokenRenderEntries(left: TokenRenderEntry, right: TokenRenderEntry): number {
-  return left.start - right.start || left.sourceIndex - right.sourceIndex;
-}
-
-function tokenRenderEntryMaxEnds(entries: readonly TokenRenderEntry[]): number[] {
-  const maxEnds: number[] = [];
-  let maxEnd = 0;
-
-  for (const entry of entries) {
-    maxEnd = Math.max(maxEnd, entry.end);
-    maxEnds.push(maxEnd);
-  }
-
-  return maxEnds;
 }
