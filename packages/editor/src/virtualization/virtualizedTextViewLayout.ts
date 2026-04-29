@@ -143,6 +143,21 @@ export function rowHeight(view: VirtualizedTextViewInternal, row: number): numbe
   return rowSizes(view)?.[row] ?? getRowHeight(view);
 }
 
+export function scrollPastEndPadding(
+  view: VirtualizedTextViewInternal,
+  viewportHeight: number,
+): number {
+  const lastRow = visibleLineCount(view) - 1;
+  return Math.max(0, viewportHeight - rowHeight(view, lastRow));
+}
+
+export function scrollableHeight(
+  view: VirtualizedTextViewInternal,
+  snapshot: FixedRowVirtualizerSnapshot,
+): number {
+  return snapshot.totalSize + scrollPastEndPadding(view, snapshot.viewportHeight);
+}
+
 export function displayRowKind(view: VirtualizedTextViewInternal, row: number): "text" | "block" {
   return view.displayRows[row]?.kind ?? "text";
 }

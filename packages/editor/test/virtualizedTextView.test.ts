@@ -85,6 +85,23 @@ describe("VirtualizedTextView", () => {
     });
   });
 
+  it("adds bottom scroll padding so the final row can align with the viewport top", () => {
+    view.setText(createLines(10));
+    view.setScrollMetrics(0, 100);
+
+    const spacer = container.querySelector(".editor-virtualized-spacer") as HTMLElement;
+    expect(view.getState().totalHeight).toBe(200);
+    expect(spacer.style.height).toBe("280px");
+
+    view.setScrollMetrics(180, 100);
+
+    expect(view.getState().visibleRange).toEqual({ start: 9, end: 10 });
+    expect(view.getState().mountedRows.at(-1)).toMatchObject({
+      index: 9,
+      top: 180,
+    });
+  });
+
   it("renders gutter rows with CSS counter line numbers", () => {
     view.setText("alpha\nbeta\ngamma");
     view.setScrollMetrics(0, 80);

@@ -35,6 +35,7 @@ import {
   rowForOffset,
   rowHeight,
   rowTop,
+  scrollableHeight,
   visibleLineCount,
 } from "./virtualizedTextViewLayout";
 import type {
@@ -63,7 +64,7 @@ export function renderRows(
   snapshot: FixedRowVirtualizerSnapshot,
   onRemoveSlot: (rowSlotId: number) => void,
 ): void {
-  applyTotalHeight(view, snapshot.totalSize);
+  applyTotalHeight(view, snapshot);
   updateContentWidth(view, snapshot.virtualItems);
   reconcileRows(view, snapshot.virtualItems, snapshot, onRemoveSlot);
 }
@@ -728,8 +729,11 @@ export function applyRowHeight(view: VirtualizedTextViewInternal, rowHeight: num
   setStyleValue(view.scrollElement, "--editor-row-height", `${rowHeight}px`);
 }
 
-function applyTotalHeight(view: VirtualizedTextViewInternal, totalHeight: number): void {
-  const height = `${totalHeight}px`;
+function applyTotalHeight(
+  view: VirtualizedTextViewInternal,
+  snapshot: FixedRowVirtualizerSnapshot,
+): void {
+  const height = `${scrollableHeight(view, snapshot)}px`;
   setStyleValue(view.spacer, "height", height);
   setStyleValue(view.gutterElement, "height", height);
 }
@@ -849,7 +853,7 @@ export function scrollOffsetIntoView(view: VirtualizedTextViewInternal, offset: 
   const row = rowForOffset(view, offset);
   const top = rowTop(view, row);
   const bottom = top + rowHeight(view, row);
-  const scrollTop = scrollTopForVisibleRow(top, bottom, snapshot);
+  const scrollTop = scrollTopForVisibleRow(view, top, bottom, snapshot);
   const scrollLeft = scrollLeftForVisibleOffset(view, row, offset, snapshot);
   if (scrollTop === snapshot.scrollTop && scrollLeft === snapshot.scrollLeft) return;
 
@@ -877,13 +881,14 @@ function scrollTopForRowBottom(rowBottom: number, snapshot: FixedRowVirtualizerS
 }
 
 function scrollTopForVisibleRow(
+  view: VirtualizedTextViewInternal,
   rowTopValue: number,
   rowBottom: number,
   snapshot: FixedRowVirtualizerSnapshot,
 ): number {
   const viewportTop = snapshot.scrollTop;
   const viewportBottom = viewportTop + snapshot.viewportHeight;
-  const maxScrollTop = Math.max(0, snapshot.totalSize - snapshot.viewportHeight);
+  const maxScrollTop = Math.max(0, scrollableHeight(view, snapshot) - snapshot.viewportHeight);
 
   if (rowTopValue < viewportTop) return clamp(rowTopValue, 0, maxScrollTop);
   if (rowBottom > viewportBottom)
