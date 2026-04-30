@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { BlockRow, DisplayRow, DisplayTextRow } from "../src/displayTransforms";
+import type { FixedRowVirtualizerSnapshot } from "../src/virtualization/fixedRowVirtualizer";
 import type { VirtualizedTextViewInternal } from "../src/virtualization/virtualizedTextViewInternals";
 import {
   hasVariableRows,
+  rowHeight,
   rowForOffset,
   rowSizes,
+  scrollableHeight,
   virtualRowForBufferRow,
 } from "../src/virtualization/virtualizedTextViewLayout";
 
@@ -96,6 +99,20 @@ describe("virtualized text view layout", () => {
     expect(hasVariableRows(view)).toBe(true);
     expect(rowSizes(view)).toEqual([20, 40]);
   });
+
+  it("uses measured row metrics without re-entering the virtualizer", () => {
+    const view = layoutView({
+      text: "x",
+      lineStarts: [0],
+      displayRows: [textRow(0, 0, 0, 1)],
+      foldMap: null,
+      blockRows: [],
+      wrapEnabled: false,
+    });
+
+    expect(rowHeight(view, 0)).toBe(20);
+    expect(scrollableHeight(view, fixedSnapshot({ totalSize: 20, viewportHeight: 60 }))).toBe(60);
+  });
 });
 
 type LayoutFields = Pick<
@@ -106,8 +123,33 @@ type LayoutFields = Pick<
 function layoutView(fields: LayoutFields): VirtualizedTextViewInternal {
   return {
     ...fields,
+    virtualizer: throwingVirtualizer(),
     metrics: { rowHeight: 20, characterWidth: 8 },
   } as VirtualizedTextViewInternal;
+}
+
+function throwingVirtualizer(): VirtualizedTextViewInternal["virtualizer"] {
+  return {
+    getSnapshot: () => {
+      throw new Error("unexpected virtualizer snapshot read");
+    },
+  } as VirtualizedTextViewInternal["virtualizer"];
+}
+
+function fixedSnapshot(
+  fields: Pick<FixedRowVirtualizerSnapshot, "totalSize" | "viewportHeight">,
+): FixedRowVirtualizerSnapshot {
+  return {
+    scrollTop: 0,
+    scrollLeft: 0,
+    viewportWidth: 0,
+    viewportHeight: fields.viewportHeight,
+    borderBoxWidth: 0,
+    borderBoxHeight: 0,
+    totalSize: fields.totalSize,
+    visibleRange: { start: 0, end: 1 },
+    virtualItems: [],
+  };
 }
 
 function textRow(

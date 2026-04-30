@@ -18,6 +18,7 @@ describe("createMinimapPlugin", () => {
       registerHighlighter: vi.fn(() => ({ dispose: vi.fn() })),
       registerTreeSitterLanguage: vi.fn(() => ({ dispose: vi.fn() })),
       registerViewContribution,
+      registerGutterContribution: vi.fn(() => ({ dispose: vi.fn() })),
     });
 
     expect(plugin.name).toBe("minimap");
@@ -39,6 +40,7 @@ describe("createMinimapPlugin", () => {
       registerHighlighter: vi.fn(() => ({ dispose: vi.fn() })),
       registerTreeSitterLanguage: vi.fn(() => ({ dispose: vi.fn() })),
       registerViewContribution,
+      registerGutterContribution: vi.fn(() => ({ dispose: vi.fn() })),
     });
 
     expect(registration?.createContribution(context())).toBeNull();
@@ -60,6 +62,7 @@ describe("createMinimapPlugin", () => {
         registerHighlighter: vi.fn(() => ({ dispose: vi.fn() })),
         registerTreeSitterLanguage: vi.fn(() => ({ dispose: vi.fn() })),
         registerViewContribution,
+        registerGutterContribution: vi.fn(() => ({ dispose: vi.fn() })),
       });
 
       const snapshotWithScrollbar = snapshot({
@@ -79,6 +82,10 @@ describe("createMinimapPlugin", () => {
       expect(contribution).not.toBeNull();
       expect(host?.style.right).toBe("30px");
       expect(testContext.reserveOverlayWidth).toHaveBeenCalledWith("right", 30);
+
+      vi.mocked(testContext.reserveOverlayWidth).mockClear();
+      contribution?.update(snapshotWithScrollbar, "viewport");
+      expect(testContext.reserveOverlayWidth).not.toHaveBeenCalled();
 
       const getComputedStyle = vi.spyOn(window, "getComputedStyle");
       contribution?.update(
@@ -116,9 +123,7 @@ function context(viewSnapshot = snapshot()): EditorViewContributionContext {
   };
 }
 
-function snapshot(
-  viewport: Partial<EditorViewSnapshot["viewport"]> = {},
-): EditorViewSnapshot {
+function snapshot(viewport: Partial<EditorViewSnapshot["viewport"]> = {}): EditorViewSnapshot {
   return {
     documentId: "minimap-test",
     languageId: "typescript",

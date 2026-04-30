@@ -184,7 +184,7 @@ class MinimapContribution implements EditorViewContribution {
   private updateNativeScrollbarGutter(): void {
     const gutter = nativeScrollbarGutter(
       this.latestSnapshot.viewport,
-      this.appliedReservedWidth,
+      this.reservedWidth,
       this.scrollElementBorderMetrics,
     );
     if (
@@ -280,7 +280,7 @@ function clamp(value: number, min: number, max: number): number {
 
 function nativeScrollbarGutter(
   viewport: EditorViewSnapshot["viewport"],
-  overlayWidth: number,
+  reservedOverlayWidth: number,
   border: ScrollElementBorderMetrics,
 ): {
   readonly vertical: number;
@@ -292,7 +292,7 @@ function nativeScrollbarGutter(
     viewport.clientWidth > 0 && viewport.scrollWidth > viewport.clientWidth;
   const vertical = hasVerticalScrollbar
     ? Math.max(
-        measuredVerticalScrollbarGutter(viewport, border.x, overlayWidth),
+        measuredVerticalScrollbarGutter(viewport, border.x, reservedOverlayWidth),
         OVERLAY_SCROLLBAR_GUTTER_FALLBACK,
       )
     : 0;
@@ -309,11 +309,11 @@ function nativeScrollbarGutter(
 function measuredVerticalScrollbarGutter(
   viewport: EditorViewSnapshot["viewport"],
   borderWidth: number,
-  overlayWidth: number,
+  reservedOverlayWidth: number,
 ): number {
   if (viewport.clientWidth <= 0) return 0;
 
-  const clientWidth = viewport.clientWidth + Math.max(0, overlayWidth);
+  const clientWidth = viewport.clientWidth + Math.max(0, reservedOverlayWidth);
   const borderBoxWidth = viewport.borderBoxWidth ?? clientWidth + borderWidth;
   return Math.max(0, borderBoxWidth - clientWidth - borderWidth);
 }

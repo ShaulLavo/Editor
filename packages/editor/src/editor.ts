@@ -188,6 +188,9 @@ export class Editor {
   private mouseSelectionAutoScrollFrame = 0;
   private useSessionSelectionForNextInput = false;
   private nativeInputGeneration = 0;
+  private notifyingViewContributions = false;
+  private activeViewContributionUpdateKind: EditorViewContributionUpdateKind | null = null;
+  private pendingViewContributionLayout = false;
 
   constructor(container: HTMLElement, options: EditorOptions = {}) {
     this.options = options;
@@ -523,9 +526,48 @@ export class Editor {
     change?: DocumentSessionChange | null,
   ): void {
     if (this.viewContributions.length === 0) return;
+    if (this.notifyingViewContributions) {
+      this.queueReentrantViewContributionUpdate(kind);
+      return;
+    }
 
+    this.notifyingViewContributions = true;
+    try {
+      this.updateViewContributions(kind, change ?? null);
+      this.flushPendingViewContributionLayout();
+    } finally {
+      this.notifyingViewContributions = false;
+      this.activeViewContributionUpdateKind = null;
+      this.pendingViewContributionLayout = false;
+    }
+  }
+
+  private queueReentrantViewContributionUpdate(kind: EditorViewContributionUpdateKind): void {
+    if (kind !== "layout") return;
+    if (this.activeViewContributionUpdateKind === "layout") return;
+
+    this.pendingViewContributionLayout = true;
+  }
+
+  private flushPendingViewContributionLayout(): void {
+    if (!this.pendingViewContributionLayout) return;
+
+    this.pendingViewContributionLayout = false;
+    this.updateViewContributions("layout", null);
+  }
+
+  private updateViewContributions(
+    kind: EditorViewContributionUpdateKind,
+    change: DocumentSessionChange | null,
+  ): void {
     const snapshot = this.createViewSnapshot();
-    for (const contribution of this.viewContributions) contribution.update(snapshot, kind, change);
+    this.activeViewContributionUpdateKind = kind;
+    try {
+      for (const contribution of this.viewContributions)
+        contribution.update(snapshot, kind, change);
+    } finally {
+      this.activeViewContributionUpdateKind = null;
+    }
   }
 
   private reserveOverlayWidth(side: EditorOverlaySide, width: number): void {

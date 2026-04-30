@@ -11,7 +11,6 @@ import {
 import type { TextEdit } from "../tokens";
 import { clamp } from "../style-utils";
 import {
-  DEFAULT_ROW_HEIGHT,
   asFoldPoint,
   computeLineStarts,
   foldMapMatchesText,
@@ -19,6 +18,7 @@ import {
   indexFoldMarkersByKey,
   indexFoldMarkersByStartRow,
   normalizeFoldMarkers,
+  normalizeRowHeight,
 } from "./virtualizedTextViewHelpers";
 import type { FixedRowVirtualizerSnapshot } from "./fixedRowVirtualizer";
 import type { SameLineEditPatch, VirtualizedFoldMarker } from "./virtualizedTextViewTypes";
@@ -328,8 +328,7 @@ export function foldVirtualRowForBufferRow(view: VirtualizedTextViewInternal, ro
 }
 
 export function getRowHeight(view: VirtualizedTextViewInternal): number {
-  const row = view.virtualizer.getSnapshot().virtualItems[0];
-  return row?.size ?? DEFAULT_ROW_HEIGHT;
+  return normalizeRowHeight(view.metrics.rowHeight);
 }
 
 export function rowForSnapshotOffset(

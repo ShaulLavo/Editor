@@ -638,6 +638,36 @@ describe("Editor", () => {
       expect(events.filter((kind) => kind === "layout")).toHaveLength(1);
     });
 
+    it("coalesces overlay reservations triggered during contribution updates", () => {
+      const events: EditorViewContributionUpdateKind[] = [];
+      let contributionContext: EditorViewContributionContext | null = null;
+      const plugin: EditorPlugin = {
+        activate: (context) =>
+          context.registerViewContribution({
+            createContribution: (context) => {
+              contributionContext = context;
+              return {
+                update: (_snapshot, kind) => {
+                  events.push(kind);
+                  if (events.length > 8) throw new Error("recursive contribution update");
+                  requireViewContributionContext(contributionContext).reserveOverlayWidth(
+                    "right",
+                    80 + events.length,
+                  );
+                },
+                dispose: () => undefined,
+              };
+            },
+          }),
+      };
+      editor.dispose();
+      editor = new Editor(container, { plugins: [plugin] });
+
+      editor.setContent("abc");
+
+      expect(events).toEqual(["viewport", "layout", "tokens", "layout", "content", "layout"]);
+    });
+
     it("disposes view contributions with the editor", () => {
       const events: ViewContributionEvent[] = [];
       editor.dispose();
