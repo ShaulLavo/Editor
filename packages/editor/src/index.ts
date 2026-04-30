@@ -33,6 +33,7 @@ export type {
   EditorOpenDocumentOptions,
   EditorOptions,
   EditorSetTextOptions,
+  EditorScrollPosition,
   EditorState,
   EditorSyntaxSessionFactory,
   EditorSyntaxStatus,

@@ -31,6 +31,7 @@ import type {
   EditorEditOptions,
   EditorOptions,
   EditorOpenDocumentOptions,
+  EditorScrollPosition,
   EditorSetTextOptions,
   EditorSessionOptions,
   EditorState,
@@ -81,6 +82,7 @@ export type {
   EditorSessionChangeHandler,
   EditorSessionOptions,
   EditorState,
+  EditorScrollPosition,
   EditorSyntaxSessionFactory,
   EditorSyntaxStatus,
   HighlightRegistry,
@@ -150,6 +152,27 @@ const syntaxRefreshDelay = (change: DocumentSessionChange | null): number => {
   return SYNTAX_EDIT_DEBOUNCE_MS;
 };
 
+function normalizeScrollOffset(
+  value: number | undefined,
+  fallback: number,
+  maxValue: number,
+): number {
+  if (value === undefined) return fallback;
+  if (!Number.isFinite(value)) return fallback;
+
+  return clamp(value, 0, Math.max(0, maxValue));
+}
+
+function preservedScrollPosition(
+  current: Required<EditorScrollPosition>,
+  override: EditorScrollPosition | undefined,
+): Required<EditorScrollPosition> {
+  return {
+    top: override?.top ?? current.top,
+    left: override?.left ?? current.left,
+  };
+}
+
 type NavigationTarget = {
   readonly offset: number;
   readonly extend: boolean;
@@ -162,6 +185,17 @@ type SessionChangeOptions = {
   readonly revealOffset?: number;
   readonly revealBlock?: "nearest" | "end";
 };
+
+type ResetOwnedDocumentOptions = {
+  readonly documentId: string | null;
+  readonly persistentIdentity: boolean;
+  readonly scrollPosition?: EditorScrollPosition;
+};
+
+const DOCUMENT_START_SCROLL_POSITION = {
+  top: 0,
+  left: 0,
+} satisfies Required<EditorScrollPosition>;
 
 export class Editor {
   private readonly view: VirtualizedTextView;
@@ -262,11 +296,13 @@ export class Editor {
   }
 
   setText(text: string, options: EditorSetTextOptions = {}): void {
+    const currentScrollPosition = this.getScrollPosition();
     const documentVersion = this.resetOwnedDocument(
       { text, languageId: options.languageId },
       {
         documentId: null,
         persistentIdentity: false,
+        scrollPosition: preservedScrollPosition(currentScrollPosition, options.scrollPosition),
       },
     );
     this.notifyChange(null);
@@ -288,6 +324,7 @@ export class Editor {
     const documentVersion = this.resetOwnedDocument(document, {
       documentId: document.documentId ?? null,
       persistentIdentity: true,
+      scrollPosition: document.scrollPosition,
     });
     this.notifyChange(null);
     this.refreshSyntax(documentVersion, null);
@@ -301,6 +338,7 @@ export class Editor {
       {
         documentId: null,
         persistentIdentity: false,
+        scrollPosition: DOCUMENT_START_SCROLL_POSITION,
       },
     );
   }
@@ -339,6 +377,18 @@ export class Editor {
     this.view.focusInput();
   }
 
+  getScrollPosition(): Required<EditorScrollPosition> {
+    const viewState = this.view.getState();
+    return {
+      top: viewState.scrollTop,
+      left: viewState.scrollLeft,
+    };
+  }
+
+  setScrollPosition(scrollPosition: EditorScrollPosition): void {
+    this.applyScrollPosition(scrollPosition);
+  }
+
   setTheme(theme: EditorTheme | null | undefined): void {
     this.configuredTheme = theme ?? null;
     this.applyResolvedTheme();
@@ -365,6 +415,7 @@ export class Editor {
     this.sessionOptions = options;
     this.view.setEditable(true);
     this.setDocument({ text: session.getText(), tokens: session.getTokens() });
+    this.applyDocumentScrollPosition(options.scrollPosition);
     this.syncDomSelection();
     this.notifyViewContributions("document", null);
   }
@@ -385,6 +436,7 @@ export class Editor {
     this.disposeHighlighterSession();
     this.detachSession();
     this.setContent("");
+    this.applyDocumentScrollPosition();
     this.notifyViewContributions("clear", null);
   }
 
@@ -401,7 +453,7 @@ export class Editor {
 
   private resetOwnedDocument(
     document: EditorOpenDocumentOptions,
-    options: { readonly documentId: string | null; readonly persistentIdentity: boolean },
+    options: ResetOwnedDocumentOptions,
   ): number {
     this.documentVersion += 1;
     const documentVersion = this.documentVersion;
@@ -434,6 +486,7 @@ export class Editor {
       : null;
     this.view.setEditable(true);
     this.setDocument({ text: this.session.getText(), tokens: [] });
+    this.applyDocumentScrollPosition(options.scrollPosition);
     this.syncDomSelection();
     this.notifyViewContributions("document", null);
     return documentVersion;
@@ -447,7 +500,38 @@ export class Editor {
       {
         documentId: null,
         persistentIdentity: false,
+        scrollPosition: DOCUMENT_START_SCROLL_POSITION,
       },
+    );
+  }
+
+  private applyDocumentScrollPosition(scrollPosition?: EditorScrollPosition): void {
+    this.applyScrollPosition({
+      top: scrollPosition?.top ?? DOCUMENT_START_SCROLL_POSITION.top,
+      left: scrollPosition?.left ?? DOCUMENT_START_SCROLL_POSITION.left,
+    });
+  }
+
+  private applyScrollPosition(scrollPosition: EditorScrollPosition): void {
+    const viewState = this.view.getState();
+    const scrollTop = normalizeScrollOffset(
+      scrollPosition.top,
+      viewState.scrollTop,
+      viewState.scrollHeight - viewState.viewportHeight,
+    );
+    const scrollLeft = normalizeScrollOffset(
+      scrollPosition.left,
+      viewState.scrollLeft,
+      viewState.scrollWidth - viewState.viewportWidth,
+    );
+
+    this.el.scrollTop = scrollTop;
+    this.el.scrollLeft = scrollLeft;
+    this.view.setScrollMetrics(
+      scrollTop,
+      viewState.viewportHeight,
+      viewState.viewportWidth,
+      scrollLeft,
     );
   }
 

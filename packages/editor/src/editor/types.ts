@@ -17,8 +17,14 @@ export interface HighlightRegistry {
 
 export type EditorSessionChangeHandler = (change: DocumentSessionChange) => void;
 
+export type EditorScrollPosition = {
+  readonly top?: number;
+  readonly left?: number;
+};
+
 export type EditorSessionOptions = {
   readonly onChange?: EditorSessionChangeHandler;
+  readonly scrollPosition?: EditorScrollPosition;
 };
 
 export type EditorSyntaxStatus = "plain" | "loading" | "ready" | "error";
@@ -51,6 +57,7 @@ export type EditorOptions = {
 
 export type EditorSetTextOptions = {
   readonly languageId?: EditorSyntaxLanguageId | null;
+  readonly scrollPosition?: EditorScrollPosition;
 };
 
 export type EditorOpenDocumentOptions = EditorSetTextOptions & {

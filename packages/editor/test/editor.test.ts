@@ -576,6 +576,50 @@ describe("Editor", () => {
       expect(events.at(-1)?.snapshot?.viewport.clientWidth).toBe(0);
     });
 
+    it("resets scroll when opening a new document without an explicit position", () => {
+      const events: ViewContributionEvent[] = [];
+      editor.dispose();
+      editor = new Editor(container, { plugins: [createViewContributionPlugin(events)] });
+
+      editor.openDocument({
+        documentId: "large.txt",
+        text: Array.from({ length: 200 }, (_value, index) => `line ${index}`).join("\n"),
+        scrollPosition: { top: 120 },
+      });
+
+      editor.openDocument({ documentId: "small.txt", text: "short" });
+
+      expect(editorRoot().scrollTop).toBe(0);
+      expect(editor.getScrollPosition()).toEqual({ top: 0, left: 0 });
+      expect(events.at(-1)?.snapshot?.viewport.scrollTop).toBe(0);
+    });
+
+    it("accepts an initial scroll position when opening a document", () => {
+      const text = Array.from({ length: 200 }, (_value, index) => `line ${index}`).join("\n");
+
+      editor.openDocument({
+        documentId: "large.txt",
+        text,
+        scrollPosition: { top: 120 },
+      });
+
+      expect(editorRoot().scrollTop).toBe(120);
+      expect(editor.getScrollPosition()).toEqual({ top: 120, left: 0 });
+    });
+
+    it("preserves and clamps scroll when replacing text", () => {
+      editor.openDocument({
+        documentId: "large.txt",
+        text: Array.from({ length: 200 }, (_value, index) => `line ${index}`).join("\n"),
+        scrollPosition: { top: 120 },
+      });
+
+      editor.setText("short");
+
+      expect(editorRoot().scrollTop).toBeLessThan(120);
+      expect(editor.getScrollPosition()).toEqual({ top: editorRoot().scrollTop, left: 0 });
+    });
+
     it("uses cached line starts when reserving overlay width", () => {
       let contributionContext: EditorViewContributionContext | null = null;
       const plugin: EditorPlugin = {
