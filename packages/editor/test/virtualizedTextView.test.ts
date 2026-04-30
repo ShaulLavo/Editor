@@ -188,7 +188,7 @@ describe("VirtualizedTextView", () => {
     expect(secondRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(true);
   });
 
-  it("keeps the cursor line at the selection head", () => {
+  it("clears the cursor line highlight while selecting text", () => {
     view.dispose();
     view = new VirtualizedTextView(container, {
       rowHeight: 20,
@@ -205,7 +205,7 @@ describe("VirtualizedTextView", () => {
 
     view.setSelection(10, 0);
 
-    expect(firstRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(true);
+    expect(firstRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(false);
     expect(secondRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(false);
   });
 

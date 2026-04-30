@@ -617,15 +617,22 @@ function createGutterRowContext(
 }
 
 export function cursorLineBufferRow(view: VirtualizedTextViewInternal): number | null {
-  if (view.selectionHead === null) return null;
+  if (!hasCollapsedSelection(view)) return null;
 
-  return bufferRowForOffset(view, view.selectionHead);
+  return bufferRowForOffset(view, view.selectionHead!);
 }
 
 export function cursorLineVirtualRow(view: VirtualizedTextViewInternal): number | null {
-  if (view.selectionHead === null) return null;
+  if (!hasCollapsedSelection(view)) return null;
 
-  return rowForOffset(view, view.selectionHead);
+  return rowForOffset(view, view.selectionHead!);
+}
+
+function hasCollapsedSelection(view: VirtualizedTextViewInternal): boolean {
+  if (view.selectionHead === null) return false;
+  if (view.selectionStart === null || view.selectionEnd === null) return false;
+
+  return view.selectionStart === view.selectionEnd;
 }
 
 export function refreshCursorLineRows(
