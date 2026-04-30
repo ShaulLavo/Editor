@@ -932,19 +932,19 @@ export class Editor {
     if (!this.session) return false;
 
     const start = context.event ? eventStartMs(context.event) : nowMs();
-    const change = this.addNextExactOccurrence();
-    if (!change) return false;
+    const result = this.addNextExactOccurrence();
+    if (!result) return false;
 
     this.syncSessionSelectionHighlight();
     this.useSessionSelectionForNextInput = true;
-    this.applySessionChange(change, "input.addNextOccurrence", start, {
-      revealOffset: this.lastSelectionHeadOffset(change),
+    this.applySessionChange(result.change, "input.addNextOccurrence", start, {
+      revealOffset: result.revealOffset,
       syncDomSelection: false,
     });
     return true;
   }
 
-  private addNextExactOccurrence(): DocumentSessionChange | null {
+  private addNextExactOccurrence(): OccurrenceSelectionChange | null {
     if (!this.session) return null;
 
     const snapshot = this.session.getSnapshot();
@@ -972,19 +972,25 @@ export class Editor {
       })),
       { anchor: range.start, head: range.end },
     ];
-    return this.session.setSelections(selections);
+    return {
+      change: this.session.setSelections(selections),
+      revealOffset: range.end,
+    };
   }
 
   private selectCurrentWordForOccurrence(
     text: string,
     selection: ResolvedSelection,
-  ): DocumentSessionChange | null {
+  ): OccurrenceSelectionChange | null {
     if (!this.session) return null;
 
     const range = wordRangeAtOffset(text, selection.headOffset);
     if (range.start === range.end) return null;
 
-    return this.session.setSelection(range.start, range.end);
+    return {
+      change: this.session.setSelection(range.start, range.end),
+      revealOffset: range.end,
+    };
   }
 
   private applyNavigationCommand(command: EditorCommandId, context: EditorCommandContext): boolean {
@@ -1029,13 +1035,6 @@ export class Editor {
 
   private primarySelectionHeadOffset(change: DocumentSessionChange): number | undefined {
     const selection = change.selections.selections[0];
-    if (!selection) return undefined;
-
-    return resolveSelection(change.snapshot, selection).headOffset;
-  }
-
-  private lastSelectionHeadOffset(change: DocumentSessionChange): number | undefined {
-    const selection = change.selections.selections.at(-1);
     if (!selection) return undefined;
 
     return resolveSelection(change.snapshot, selection).headOffset;
@@ -1416,6 +1415,11 @@ function viewContributionKindForChange(
 type ExactOccurrenceRange = {
   readonly start: number;
   readonly end: number;
+};
+
+type OccurrenceSelectionChange = {
+  readonly change: DocumentSessionChange;
+  readonly revealOffset: number;
 };
 
 function getOccurrenceQuery(

@@ -172,8 +172,15 @@
   width: 1px;
 }
 
-.editor-virtualized-caret {
+.editor-virtualized-caret-layer {
   animation: editor-virtualized-caret-blink 1s steps(1, end) infinite;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+}
+
+.editor-virtualized-caret {
   background: var(--editor-caret-color);
   left: 0;
   pointer-events: none;

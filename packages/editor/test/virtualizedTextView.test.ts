@@ -562,6 +562,22 @@ describe("VirtualizedTextView", () => {
     expect((carets[1] as HTMLElement).style.transform).toBe("translate(24px, 20px)");
   });
 
+  it("animates all carets through one shared blink layer", () => {
+    view.setText("abc\ndef\nxyz");
+    view.setScrollMetrics(0, 80);
+    view.setSelections([
+      { anchorOffset: 1, headOffset: 1 },
+      { anchorOffset: 5, headOffset: 5 },
+    ]);
+
+    const layer = container.querySelector(".editor-virtualized-caret-layer") as HTMLElement;
+    const carets = container.querySelectorAll(".editor-virtualized-caret");
+
+    expect(layer).not.toBeNull();
+    expect(carets).toHaveLength(2);
+    for (const caret of carets) expect(caret.parentElement).toBe(layer);
+  });
+
   it("does not rebuild unchanged mounted selection ranges", () => {
     view.setText("abc\ndef\nxyz");
     view.setScrollMetrics(0, 80);

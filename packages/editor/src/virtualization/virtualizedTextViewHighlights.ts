@@ -754,7 +754,7 @@ function createSecondaryCaretElement(view: VirtualizedTextViewInternal): HTMLDiv
   const element = view.scrollElement.ownerDocument.createElement("div");
   element.className = "editor-virtualized-caret editor-virtualized-caret-secondary";
   element.hidden = true;
-  view.spacer.appendChild(element);
+  view.caretLayerElement.appendChild(element);
   return element;
 }
 

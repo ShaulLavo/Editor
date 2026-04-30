@@ -43,6 +43,7 @@ export interface VirtualizedTextViewInternal {
   readonly spacer: HTMLDivElement;
   readonly gutterElement: HTMLDivElement;
   readonly gutterContributions: readonly EditorGutterContribution[];
+  readonly caretLayerElement: HTMLDivElement;
   readonly caretElement: HTMLDivElement;
   readonly secondaryCaretElements: HTMLDivElement[];
   readonly styleEl: HTMLStyleElement;

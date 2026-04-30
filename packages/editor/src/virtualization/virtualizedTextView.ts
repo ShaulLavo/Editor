@@ -127,6 +127,7 @@ export class VirtualizedTextView {
     const inputElement = createInputElement(container);
     const spacer = container.ownerDocument.createElement("div");
     const gutterElement = container.ownerDocument.createElement("div");
+    const caretLayerElement = container.ownerDocument.createElement("div");
     const caretElement = container.ownerDocument.createElement("div");
     const longLineChunkSize = normalizeChunkSize(options.longLineChunkSize);
     const longLineChunkThreshold = normalizeChunkThreshold(
@@ -143,6 +144,7 @@ export class VirtualizedTextView {
       spacer,
       gutterElement,
       gutterContributions,
+      caretLayerElement,
       caretElement,
       secondaryCaretElements: [],
       styleEl,
@@ -200,10 +202,12 @@ export class VirtualizedTextView {
     applyRowHeight(this.view, rowHeight);
     spacer.className = "editor-virtualized-spacer";
     gutterElement.className = "editor-virtualized-gutter";
+    caretLayerElement.className = "editor-virtualized-caret-layer";
     caretElement.className = "editor-virtualized-caret";
     caretElement.hidden = true;
+    caretLayerElement.appendChild(caretElement);
     if (gutterContributions.length > 0) spacer.appendChild(gutterElement);
-    spacer.appendChild(caretElement);
+    spacer.appendChild(caretLayerElement);
     scrollElement.appendChild(spacer);
     scrollElement.appendChild(inputElement);
     container.ownerDocument.head.appendChild(styleEl);

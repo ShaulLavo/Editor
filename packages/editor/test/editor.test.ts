@@ -1256,6 +1256,31 @@ describe("Editor", () => {
       expect(container.querySelectorAll(".editor-virtualized-caret")).toHaveLength(2);
     });
 
+    it("reveals the wrapped occurrence when Mod+D loops to the top", () => {
+      const session = createDocumentSession("foo\nx\nfoo\nx\nfoo");
+      session.setSelection(7);
+      editor.attachSession(session);
+      mockEditorViewport(editorRoot(), 80, 40);
+
+      dispatchEditorKey("d", primaryModifier());
+      dispatchEditorKey("d", primaryModifier());
+
+      expect(editorRoot().scrollTop).toBeGreaterThan(0);
+
+      dispatchEditorKey("d", primaryModifier());
+
+      const ranges = session.getSelections().selections.map((selection) => {
+        const resolved = resolveSelection(session.getSnapshot(), selection);
+        return { start: resolved.startOffset, end: resolved.endOffset };
+      });
+      expect(ranges).toEqual([
+        { start: 0, end: 3 },
+        { start: 6, end: 9 },
+        { start: 12, end: 15 },
+      ]);
+      expect(editorRoot().scrollTop).toBe(0);
+    });
+
     it("prevents browser defaults for no-op editor key commands", () => {
       editor.setText(" ");
 
