@@ -66,6 +66,36 @@ test("routes real keyboard typing after clicking the editor surface", async ({ p
     .toContain("beforeinput:insertText:X");
 });
 
+test("keeps Space from scrolling the focused editor", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(async (entry) => {
+    const { Editor } = await import(entry);
+    const app = document.querySelector("#app");
+    if (!app) throw new Error("Missing app root");
+
+    app.innerHTML = '<div id="host" style="display:flex;height:160px;width:700px"></div>';
+    const host = document.querySelector("#host");
+    if (!(host instanceof HTMLElement)) throw new Error("Missing editor host");
+
+    const editor = new Editor(host);
+    const text = Array.from({ length: 200 }, (_value, index) => `line ${index}`).join("\n");
+    editor.openDocument({ documentId: "note.txt", text });
+    (window as TestWindow).__editor = editor;
+  }, coreEntry);
+
+  await page.locator(".editor-virtualized").click({ position: { x: 80, y: 10 } });
+  await expect(page.locator(".editor-virtualized-input")).toBeFocused();
+
+  await page.keyboard.press("Space");
+
+  await expect
+    .poll(() => page.evaluate(() => (window as TestWindow).__editor?.getText()))
+    .toContain("line  0");
+  await expect
+    .poll(() => page.evaluate(() => document.querySelector(".editor-virtualized")?.scrollTop))
+    .toBe(0);
+});
+
 test("inserts repeated typing at a placed caret", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(async (entry) => {

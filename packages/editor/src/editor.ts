@@ -68,7 +68,6 @@ import {
   VirtualizedTextView,
   type VirtualizedFoldMarker,
 } from "./virtualization/virtualizedTextView";
-import { computeLineStarts } from "./virtualization/virtualizedTextViewHelpers";
 
 export type {
   EditorChangeHandler,
@@ -482,7 +481,7 @@ export class Editor {
       languageId: this.languageId,
       text: this.text,
       textVersion: this.documentVersion,
-      lineStarts: computeLineStarts(this.text),
+      lineStarts: this.view.getLineStarts(),
       tokens: this.tokens,
       selections: this.resolveViewSelections(),
       metrics: viewState.metrics,
@@ -520,7 +519,8 @@ export class Editor {
   }
 
   private reserveOverlayWidth(side: EditorOverlaySide, width: number): void {
-    this.view.reserveOverlayWidth(side, width);
+    if (!this.view.reserveOverlayWidth(side, width)) return;
+
     this.notifyViewContributions("layout", null);
   }
 
@@ -824,8 +824,15 @@ export class Editor {
     const fallbackText = keyboardFallbackText(event);
     if (fallbackText === null) return;
 
+    this.preventBrowserTextKeyDefault(event, fallbackText);
     this.scheduleKeyboardTextFallback(event, fallbackText);
   };
+
+  private preventBrowserTextKeyDefault(event: KeyboardEvent, text: string): void {
+    if (event.target === this.view.inputElement && text !== " ") return;
+
+    event.preventDefault();
+  }
 
   private scheduleKeyboardTextFallback(event: KeyboardEvent, text: string): void {
     const start = eventStartMs(event);

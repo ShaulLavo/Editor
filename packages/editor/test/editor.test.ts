@@ -13,6 +13,7 @@ import {
   type EditorHighlighterSession,
   type EditorPlugin,
   type EditorTheme,
+  type EditorViewContributionContext,
   type EditorViewContributionUpdateKind,
   type EditorViewSnapshot,
   type EditorState,
@@ -556,6 +557,74 @@ describe("Editor", () => {
       expect(events.at(-1)?.snapshot?.viewport.clientWidth).toBe(0);
     });
 
+    it("uses cached line starts when reserving overlay width", () => {
+      let contributionContext: EditorViewContributionContext | null = null;
+      const plugin: EditorPlugin = {
+        activate: (context) =>
+          context.registerViewContribution({
+            createContribution: (context) => {
+              contributionContext = context;
+              return {
+                update: () => undefined,
+                dispose: () => undefined,
+              };
+            },
+          }),
+      };
+      editor.dispose();
+      editor = new Editor(container, { plugins: [plugin] });
+
+      const text = Array.from({ length: 10_000 }, (_, row) => `line ${row}`).join("\n");
+      editor.openDocument({ documentId: "long.txt", text });
+      if (!contributionContext) throw new Error("missing view contribution context");
+
+      const originalIndexOf = String.prototype.indexOf;
+      let lineStartScans = 0;
+      String.prototype.indexOf = function indexOfSpy(
+        this: string,
+        searchString: string,
+        position?: number,
+      ): number {
+        if (String(this) === text && searchString === "\n") lineStartScans += 1;
+        return originalIndexOf.call(this, searchString, position);
+      };
+
+      try {
+        contributionContext.reserveOverlayWidth("right", 120);
+      } finally {
+        String.prototype.indexOf = originalIndexOf;
+      }
+
+      expect(lineStartScans).toBe(0);
+    });
+
+    it("skips layout updates for unchanged overlay reservations", () => {
+      const events: EditorViewContributionUpdateKind[] = [];
+      let contributionContext: EditorViewContributionContext | null = null;
+      const plugin: EditorPlugin = {
+        activate: (context) =>
+          context.registerViewContribution({
+            createContribution: (context) => {
+              contributionContext = context;
+              return {
+                update: (_snapshot, kind) => {
+                  events.push(kind);
+                },
+                dispose: () => undefined,
+              };
+            },
+          }),
+      };
+      editor.dispose();
+      editor = new Editor(container, { plugins: [plugin] });
+      if (!contributionContext) throw new Error("missing view contribution context");
+
+      contributionContext.reserveOverlayWidth("right", 80);
+      contributionContext.reserveOverlayWidth("right", 80);
+
+      expect(events.filter((kind) => kind === "layout")).toHaveLength(1);
+    });
+
     it("disposes view contributions with the editor", () => {
       const events: ViewContributionEvent[] = [];
       editor.dispose();
@@ -698,6 +767,37 @@ describe("Editor", () => {
 
       expect(session.getText()).toBe("abcX");
       expect(editor.getText()).toBe("abcX");
+    });
+
+    it("prevents browser scroll defaults when Space uses keydown fallback", async () => {
+      const session = createDocumentSession("abc");
+      editor.attachSession(session);
+
+      const event = dispatchEditorKey(" ");
+      await flushTimers();
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(session.getText()).toBe("abc ");
+      expect(editor.getText()).toBe("abc ");
+    });
+
+    it("prevents browser scroll defaults when focused input receives Space", async () => {
+      const session = createDocumentSession("abc");
+      editor.attachSession(session);
+      editor.focus();
+
+      const event = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: " ",
+      });
+      const dispatched = editorInput().dispatchEvent(event);
+      await flushTimers();
+
+      expect(dispatched).toBe(false);
+      expect(event.defaultPrevented).toBe(true);
+      expect(session.getText()).toBe("abc ");
+      expect(editor.getText()).toBe("abc ");
     });
 
     it("falls back to keydown line breaks when native beforeinput never arrives", async () => {

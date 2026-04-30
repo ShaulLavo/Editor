@@ -340,14 +340,13 @@ export class VirtualizedTextView {
     updateVirtualizerRows(view);
   }
 
-  public reserveOverlayWidth(side: "left" | "right", width: number): void {
+  public reserveOverlayWidth(side: "left" | "right", width: number): boolean {
     const value = width > 0 && Number.isFinite(width) ? `${Math.ceil(width)}px` : "";
-    if (side === "left") {
-      this.scrollElement.style.paddingLeft = value;
-      return;
-    }
+    const property = side === "left" ? "paddingLeft" : "paddingRight";
+    if (this.scrollElement.style[property] === value) return false;
 
-    this.scrollElement.style.paddingRight = value;
+    this.scrollElement.style[property] = value;
+    return true;
   }
 
   public scrollToRow(row: number): void {
@@ -386,6 +385,10 @@ export class VirtualizedTextView {
 
   public pageRowDelta(): number {
     return pageRowDelta(this.view);
+  }
+
+  public getLineStarts(): readonly number[] {
+    return this.view.lineStarts;
   }
 
   public createRange(
