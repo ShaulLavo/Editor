@@ -51,8 +51,7 @@ export class EditorKeymapController {
     const handle = getHotkeyManager().register(
       binding.hotkey,
       (event) => {
-        const handled = dispatch(binding.command, { event });
-        if (!handled) return;
+        dispatch(binding.command, { event });
 
         if (binding.preventDefault !== false) event.preventDefault();
         if (binding.stopPropagation !== false) event.stopPropagation();

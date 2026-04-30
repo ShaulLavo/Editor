@@ -1256,6 +1256,16 @@ describe("Editor", () => {
       expect(container.querySelectorAll(".editor-virtualized-caret")).toHaveLength(2);
     });
 
+    it("prevents browser defaults for no-op editor key commands", () => {
+      editor.setText(" ");
+
+      const addOccurrence = dispatchEditorKey("d", primaryModifier());
+      const clearSecondary = dispatchEditorKey("Escape");
+
+      expect(addOccurrence.defaultPrevented).toBe(true);
+      expect(clearSecondary.defaultPrevented).toBe(true);
+    });
+
     it("updates custom selection immediately while dragging", () => {
       const session = createDocumentSession("abcd");
       editor.attachSession(session);

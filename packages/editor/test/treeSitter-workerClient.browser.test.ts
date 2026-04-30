@@ -204,7 +204,6 @@ describe.skipIf(typeof Worker === "undefined")("tree-sitter worker client", () =
     expect(expandedRange.endOffset - expandedRange.startOffset).toBeGreaterThan(6);
     expect(shrunkRange).toMatchObject({ startOffset: 6, endOffset: 12 });
   });
-
 });
 
 async function registerDefaultLanguages(): Promise<void> {
