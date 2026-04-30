@@ -7,14 +7,6 @@ export {
 export * from "./documentSession";
 export * from "./displayTransforms";
 export * from "./foldMap";
-export {
-  createFoldGutterPlugin,
-  createLineGutterPlugin,
-  type FoldGutterIcon,
-  type FoldGutterIconContext,
-  type FoldGutterPluginOptions,
-  type LineGutterPluginOptions,
-} from "./gutters";
 export * from "./history";
 export * from "./pieceTable";
 export * from "./plugins";

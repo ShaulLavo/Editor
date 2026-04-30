@@ -120,64 +120,6 @@
   line-height: inherit;
 }
 
-.editor-virtualized-gutter-label {
-  color: var(--editor-gutter-foreground);
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  justify-content: flex-end;
-  line-height: inherit;
-  padding-left: 2px;
-  padding-right: 4px;
-  tab-size: 4;
-}
-
-.editor-virtualized-fold-toggle {
-  align-items: center;
-  appearance: none;
-  background: transparent;
-  border: 0;
-  color: #a1a1aa;
-  cursor: pointer;
-  display: inline-flex;
-  font: inherit;
-  height: 14px;
-  justify-self: center;
-  justify-content: center;
-  line-height: 1;
-  padding: 0;
-  pointer-events: auto;
-}
-
-.editor-virtualized-fold-toggle[hidden] {
-  display: inline-flex;
-  pointer-events: none;
-  visibility: hidden;
-}
-
-.editor-virtualized-fold-icon {
-  align-items: center;
-  color: inherit;
-  display: inline-flex;
-  flex: 0 0 auto;
-  font-size: 9px;
-  justify-content: center;
-  line-height: 1;
-  pointer-events: none;
-}
-
-.editor-virtualized-fold-toggle:hover {
-  color: #e4e4e7;
-}
-
-.editor-virtualized-line-number::before {
-  content: counter(editor-line, var(--editor-line-gutter-counter-style, decimal));
-}
-
-.editor-virtualized-line-number-active {
-  color: var(--editor-gutter-active-foreground);
-}
-
 .editor-virtualized-cursor-line-gutter {
   background: var(--editor-cursor-line-gutter-background);
 }

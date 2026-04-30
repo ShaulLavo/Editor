@@ -7,6 +7,7 @@ export {
 export { measureBrowserTextMetrics } from "./browserMetrics";
 export { VirtualizedTextView } from "./virtualizedTextView";
 export type { BrowserTextMetrics } from "./browserMetrics";
+export type { VirtualizedTextSelection } from "./virtualizedTextViewInternals";
 export type {
   FixedRowScrollMetrics,
   FixedRowVirtualItem,

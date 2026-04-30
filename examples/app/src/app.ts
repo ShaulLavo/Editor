@@ -1,6 +1,7 @@
-import { createFoldGutterPlugin, createLineGutterPlugin, Editor } from "@editor/core/editor";
+import { Editor } from "@editor/core/editor";
 import "@editor/core/style.css";
 import "@editor/minimap/style.css";
+import { createFoldGutterPlugin, createLineGutterPlugin } from "@editor/gutters";
 import { createMinimapPlugin } from "@editor/minimap";
 import { css, html, javaScript, json, typeScript } from "@editor/tree-sitter-languages";
 import { createEditorPane } from "./components/editorPane.ts";
@@ -9,8 +10,8 @@ import { createSidebar } from "./components/sidebar.ts";
 import { createStatusBar } from "./components/statusBar.ts";
 import { createTopBar } from "./components/topBar.ts";
 import { createFoldChevronIcon } from "./foldGutterIcon.ts";
-import { createShikiHighlighterPlugin } from "@editor/shiki";
 import { SourceController } from "./sourceController.ts";
+import { createShikiHighlighterPlugin } from "@editor/shiki";
 
 export function mountApp(): void {
   const app = document.getElementById("app")!;

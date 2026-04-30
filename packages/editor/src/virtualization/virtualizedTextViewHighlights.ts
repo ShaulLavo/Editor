@@ -35,7 +35,12 @@ import type {
   VirtualizedTextChunk,
   VirtualizedTextRow,
 } from "./virtualizedTextViewTypes";
-import type { TokenRenderEntry, VirtualizedTextViewInternal } from "./virtualizedTextViewInternals";
+import type {
+  TokenRenderEntry,
+  VirtualizedStoredSelection,
+  VirtualizedTextSelection,
+  VirtualizedTextViewInternal,
+} from "./virtualizedTextViewInternals";
 
 export function setTokens(view: VirtualizedTextViewInternal, tokens: readonly EditorToken[]): void {
   const copiedTokens = [...tokens];
@@ -72,15 +77,18 @@ export function setSelection(
   anchorOffset: number,
   headOffset: number,
 ): void {
+  setSelections(view, [{ anchorOffset, headOffset }]);
+}
+
+export function setSelections(
+  view: VirtualizedTextViewInternal,
+  selections: readonly VirtualizedTextSelection[],
+): void {
   const previousCursorLine = cursorLineBufferRow(view);
   const previousCursorRow = cursorLineVirtualRow(view);
-  view.selectionStart = clamp(Math.min(anchorOffset, headOffset), 0, view.text.length);
-  view.selectionEnd = clamp(
-    Math.max(anchorOffset, headOffset),
-    view.selectionStart,
-    view.text.length,
-  );
-  view.selectionHead = clamp(headOffset, 0, view.text.length);
+  const stored = selections.map((selection) => clampSelection(view, selection));
+  view.selections = stored;
+  setPrimarySelection(view, stored[0] ?? null);
   renderSelectionHighlight(view);
   refreshCursorLineRows(view, previousCursorLine, previousCursorRow);
 }
@@ -91,27 +99,26 @@ export function clearSelection(view: VirtualizedTextViewInternal): void {
   view.selectionStart = null;
   view.selectionEnd = null;
   view.selectionHead = null;
+  view.selections = [];
   clearSelectionHighlight(view);
   renderCaret(view);
   refreshCursorLineRows(view, previousCursorLine, previousCursorRow);
 }
 
 export function renderSelectionHighlight(view: VirtualizedTextViewInternal): void {
-  const range = selectionRange(view);
-
   renderCaret(view);
-  if (!range) {
+  if (!hasSelectionRanges(view.selections)) {
     clearSelectionHighlight(view);
     return;
   }
   if (!view.selectionHighlight || !view.highlightRegistry) return;
 
-  const signature = selectionHighlightSignature(view, range.start, range.end);
+  const signature = selectionHighlightSignature(view, view.selections);
   if (signature === view.lastSelectionHighlightSignature) return;
 
   view.lastSelectionHighlightSignature = signature;
   clearSelectionHighlightRanges(view);
-  addMountedSelectionRanges(view, range.start, range.end);
+  addMountedSelectionRanges(view, view.selections);
   if (view.selectionHighlight.size === 0) return;
 
   ensureSelectionHighlightRegistered(view);
@@ -119,11 +126,20 @@ export function renderSelectionHighlight(view: VirtualizedTextViewInternal): voi
 
 function addMountedSelectionRanges(
   view: VirtualizedTextViewInternal,
-  start: number,
-  end: number,
+  selections: readonly VirtualizedStoredSelection[],
 ): void {
   for (const row of getMountedRows(view)) {
-    addMountedSelectionRange(view, row, start, end);
+    addMountedSelectionRangesForRow(view, row, selections);
+  }
+}
+
+function addMountedSelectionRangesForRow(
+  view: VirtualizedTextViewInternal,
+  row: VirtualizedTextRow,
+  selections: readonly VirtualizedStoredSelection[],
+): void {
+  for (const selection of selections) {
+    addMountedSelectionRange(view, row, selection.start, selection.end);
   }
 }
 
@@ -134,6 +150,7 @@ function addMountedSelectionRange(
   end: number,
 ): void {
   if (!view.selectionHighlight) return;
+  if (start === end) return;
   if (end <= row.startOffset || start >= row.endOffset) return;
 
   for (const chunk of row.chunks) {
@@ -167,12 +184,13 @@ export function clearSelectionHighlight(view: VirtualizedTextViewInternal): void
 
 function selectionHighlightSignature(
   view: VirtualizedTextViewInternal,
-  start: number,
-  end: number,
+  selections: readonly VirtualizedStoredSelection[],
 ): string {
-  const parts = [`${start}:${end}`];
+  const parts = selections.map((selection) => {
+    return `${selection.start}:${selection.end}:${selection.head}`;
+  });
   for (const row of getMountedRows(view)) {
-    appendSelectionRowSignature(parts, row, start, end);
+    appendSelectionRowSignature(parts, row, selections);
   }
 
   return parts.join("|");
@@ -181,9 +199,20 @@ function selectionHighlightSignature(
 function appendSelectionRowSignature(
   parts: string[],
   row: VirtualizedTextRow,
+  selections: readonly VirtualizedStoredSelection[],
+): void {
+  for (const selection of selections) {
+    appendSelectionRangeRowSignature(parts, row, selection.start, selection.end);
+  }
+}
+
+function appendSelectionRangeRowSignature(
+  parts: string[],
+  row: VirtualizedTextRow,
   start: number,
   end: number,
 ): void {
+  if (start === end) return;
   if (end <= row.startOffset || start >= row.endOffset) return;
 
   for (const chunk of row.chunks) {
@@ -193,29 +222,51 @@ function appendSelectionRowSignature(
 }
 
 function renderCaret(view: VirtualizedTextViewInternal): void {
-  if (view.selectionEnd === null) {
-    setElementHidden(view.caretElement, true);
+  const selections = view.selections;
+  ensureCaretElementCount(view, selections.length);
+
+  if (selections.length === 0) {
+    hideCaretElement(view.caretElement);
+    hideSecondaryCaretElements(view, 0);
     return;
   }
 
-  const position = caretPosition(view, view.selectionHead ?? view.selectionEnd);
+  renderCaretElement(view, view.caretElement, selections[0]!);
+  renderSecondaryCaretElements(view, selections);
+}
+
+function renderSecondaryCaretElements(
+  view: VirtualizedTextViewInternal,
+  selections: readonly VirtualizedStoredSelection[],
+): void {
+  for (let index = 1; index < selections.length; index += 1) {
+    renderCaretElement(view, view.secondaryCaretElements[index - 1]!, selections[index]!);
+  }
+
+  hideSecondaryCaretElements(view, Math.max(0, selections.length - 1));
+}
+
+function renderCaretElement(
+  view: VirtualizedTextViewInternal,
+  element: HTMLElement,
+  selection: VirtualizedStoredSelection,
+): void {
+  const position = caretPosition(view, selection.head);
   if (!position) {
-    setElementHidden(view.caretElement, true);
+    hideCaretElement(element);
     return;
   }
 
-  setElementHidden(view.caretElement, false);
-  setStyleValue(view.caretElement, "height", `${position.height}px`);
-  setStyleValue(view.caretElement, "transform", `translate(${position.left}px, ${position.top}px)`);
+  setElementHidden(element, false);
+  setStyleValue(element, "height", `${position.height}px`);
+  setStyleValue(element, "transform", `translate(${position.left}px, ${position.top}px)`);
 }
 
 export function clampStoredSelection(view: VirtualizedTextViewInternal): void {
-  if (view.selectionStart === null || view.selectionEnd === null) return;
+  if (view.selections.length === 0) return;
 
-  view.selectionStart = clamp(view.selectionStart, 0, view.text.length);
-  view.selectionEnd = clamp(view.selectionEnd, view.selectionStart, view.text.length);
-  if (view.selectionHead !== null)
-    view.selectionHead = clamp(view.selectionHead, 0, view.text.length);
+  view.selections = view.selections.map((selection) => clampStoredSelectionRange(view, selection));
+  setPrimarySelection(view, view.selections[0] ?? null);
 }
 
 export function renderTokenHighlights(view: VirtualizedTextViewInternal): void {
@@ -654,16 +705,67 @@ function ensureSelectionHighlightRegistered(view: VirtualizedTextViewInternal): 
   view.selectionHighlightRegistered = true;
 }
 
-function selectionRange(
+function clampSelection(
   view: VirtualizedTextViewInternal,
-): { readonly start: number; readonly end: number } | null {
-  if (view.selectionStart === null || view.selectionEnd === null) return null;
-  if (view.selectionStart === view.selectionEnd) return null;
-
+  selection: VirtualizedTextSelection,
+): VirtualizedStoredSelection {
+  const anchor = clamp(selection.anchorOffset, 0, view.text.length);
+  const head = clamp(selection.headOffset, 0, view.text.length);
   return {
-    start: view.selectionStart,
-    end: view.selectionEnd,
+    start: Math.min(anchor, head),
+    end: Math.max(anchor, head),
+    head,
   };
+}
+
+function clampStoredSelectionRange(
+  view: VirtualizedTextViewInternal,
+  selection: VirtualizedStoredSelection,
+): VirtualizedStoredSelection {
+  const start = clamp(selection.start, 0, view.text.length);
+  return {
+    start,
+    end: clamp(selection.end, start, view.text.length),
+    head: clamp(selection.head, 0, view.text.length),
+  };
+}
+
+function setPrimarySelection(
+  view: VirtualizedTextViewInternal,
+  selection: VirtualizedStoredSelection | null,
+): void {
+  view.selectionStart = selection?.start ?? null;
+  view.selectionEnd = selection?.end ?? null;
+  view.selectionHead = selection?.head ?? null;
+}
+
+function hasSelectionRanges(selections: readonly VirtualizedStoredSelection[]): boolean {
+  return selections.some((selection) => selection.start !== selection.end);
+}
+
+function ensureCaretElementCount(view: VirtualizedTextViewInternal, selectionCount: number): void {
+  const neededSecondaryCount = Math.max(0, selectionCount - 1);
+  while (view.secondaryCaretElements.length < neededSecondaryCount) {
+    view.secondaryCaretElements.push(createSecondaryCaretElement(view));
+  }
+}
+
+function createSecondaryCaretElement(view: VirtualizedTextViewInternal): HTMLDivElement {
+  const element = view.scrollElement.ownerDocument.createElement("div");
+  element.className = "editor-virtualized-caret editor-virtualized-caret-secondary";
+  element.hidden = true;
+  view.spacer.appendChild(element);
+  return element;
+}
+
+function hideCaretElement(element: HTMLElement): void {
+  setElementHidden(element, true);
+}
+
+function hideSecondaryCaretElements(view: VirtualizedTextViewInternal, startIndex: number): void {
+  for (let index = startIndex; index < view.secondaryCaretElements.length; index += 1) {
+    hideCaretElement(view.secondaryCaretElements[index]!);
+  }
 }
 
 export function rebuildStyleRules(view: VirtualizedTextViewInternal): void {

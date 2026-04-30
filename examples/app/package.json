@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@editor/core": "workspace:*",
+    "@editor/gutters": "workspace:*",
     "@editor/minimap": "workspace:*",
     "@editor/shiki": "workspace:*",
     "@editor/tree-sitter-languages": "workspace:*"

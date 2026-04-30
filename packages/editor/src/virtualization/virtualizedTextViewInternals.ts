@@ -18,6 +18,17 @@ export type CreateRangeOptions = {
   readonly scrollIntoView?: boolean;
 };
 
+export type VirtualizedStoredSelection = {
+  readonly start: number;
+  readonly end: number;
+  readonly head: number;
+};
+
+export type VirtualizedTextSelection = {
+  readonly anchorOffset: number;
+  readonly headOffset: number;
+};
+
 export type TokenRenderEntry = {
   readonly start: number;
   readonly end: number;
@@ -33,6 +44,7 @@ export interface VirtualizedTextViewInternal {
   readonly gutterElement: HTMLDivElement;
   readonly gutterContributions: readonly EditorGutterContribution[];
   readonly caretElement: HTMLDivElement;
+  readonly secondaryCaretElements: HTMLDivElement[];
   readonly styleEl: HTMLStyleElement;
   readonly virtualizer: FixedRowVirtualizer;
   readonly longLineChunkSize: number;
@@ -71,6 +83,7 @@ export interface VirtualizedTextViewInternal {
   selectionStart: number | null;
   selectionEnd: number | null;
   selectionHead: number | null;
+  selections: readonly VirtualizedStoredSelection[];
   lastSelectionHighlightSignature: string;
   lastRenderedRowsKey: string;
   gutterWidthDirty: boolean;

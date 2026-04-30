@@ -12,6 +12,15 @@ function resolvedOffsets(session: DocumentSession): { start: number; end: number
   return { start: resolved.startOffset, end: resolved.endOffset };
 }
 
+function resolvedSelectionOffsets(
+  session: DocumentSession,
+): readonly { start: number; end: number }[] {
+  return session.getSelections().selections.map((selection) => {
+    const resolved = resolveSelection(session.getSnapshot(), selection);
+    return { start: resolved.startOffset, end: resolved.endOffset };
+  });
+}
+
 describe("DocumentSession", () => {
   it("creates a piece-table snapshot with a collapsed selection at the end", () => {
     const session = createDocumentSession("abc");
@@ -31,6 +40,46 @@ describe("DocumentSession", () => {
     expect(session.getText()).toBe("abc!");
     expect(resolvedOffsets(session)).toEqual({ start: 4, end: 4 });
     expect(session.canUndo()).toBe(true);
+  });
+
+  it("applies text to multiple selections as one undoable edit", () => {
+    const session = createDocumentSession("abcdef");
+    session.setSelections([
+      { anchor: 1, head: 2 },
+      { anchor: 4, head: 6 },
+    ]);
+
+    const change = session.applyText("X");
+
+    expect(change.edits).toEqual([
+      { from: 1, to: 2, text: "X" },
+      { from: 4, to: 6, text: "X" },
+    ]);
+    expect(session.getText()).toBe("aXcdX");
+    expect(resolvedSelectionOffsets(session)).toEqual([
+      { start: 2, end: 2 },
+      { start: 5, end: 5 },
+    ]);
+    expect(session.undo().text).toBe("abcdef");
+    expect(resolvedSelectionOffsets(session)).toEqual([
+      { start: 1, end: 2 },
+      { start: 4, end: 6 },
+    ]);
+  });
+
+  it("adds and clears secondary selections", () => {
+    const session = createDocumentSession("abcdef");
+    session.setSelection(1);
+    session.addSelection(4);
+
+    expect(resolvedSelectionOffsets(session)).toEqual([
+      { start: 1, end: 1 },
+      { start: 4, end: 4 },
+    ]);
+
+    session.clearSecondarySelections();
+
+    expect(resolvedSelectionOffsets(session)).toEqual([{ start: 1, end: 1 }]);
   });
 
   it("backspaces by code point", () => {

@@ -2,6 +2,8 @@ export type EditorCommandId =
   | "undo"
   | "redo"
   | "selectAll"
+  | "addNextOccurrence"
+  | "clearSecondarySelections"
   | "deleteBackward"
   | "deleteForward"
   | "cursorLeft"

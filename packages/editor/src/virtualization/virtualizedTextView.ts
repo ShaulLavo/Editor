@@ -33,6 +33,7 @@ import {
   renderSelectionHighlight,
   renderTokenHighlights,
   setSelection,
+  setSelections,
   setTokens as setViewTokens,
 } from "./virtualizedTextViewHighlights";
 import {
@@ -80,6 +81,7 @@ import {
 import type {
   CreateRangeOptions,
   RevealBlock,
+  VirtualizedTextSelection,
   VirtualizedTextViewInternal,
 } from "./virtualizedTextViewInternals";
 import type {
@@ -142,6 +144,7 @@ export class VirtualizedTextView {
       gutterElement,
       gutterContributions,
       caretElement,
+      secondaryCaretElements: [],
       styleEl,
       virtualizer,
       longLineChunkSize,
@@ -180,6 +183,7 @@ export class VirtualizedTextView {
       selectionStart: null,
       selectionEnd: null,
       selectionHead: null,
+      selections: [],
       lastSelectionHighlightSignature: "",
       lastRenderedRowsKey: "",
       gutterWidthDirty: true,
@@ -491,6 +495,10 @@ export class VirtualizedTextView {
 
   public setSelection(anchorOffset: number, headOffset: number): void {
     setSelection(this.view, anchorOffset, headOffset);
+  }
+
+  public setSelections(selections: readonly VirtualizedTextSelection[]): void {
+    setSelections(this.view, selections);
   }
 
   public clearSelection(): void {

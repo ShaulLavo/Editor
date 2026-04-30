@@ -5,6 +5,8 @@ import {
   createSelectionSet,
   deleteSelections,
   markSelectionSetDirty,
+  normalizeSelectionSet,
+  type AnchorSelection,
   type SelectionGoal,
   type SelectionSet,
 } from "./selections";
@@ -55,6 +57,16 @@ export type DocumentSession = {
     headOffset?: number,
     options?: DocumentSessionSelectionOptions,
   ): DocumentSessionChange;
+  setSelections(
+    selections: readonly DocumentSessionSelectionRange[],
+    options?: DocumentSessionSelectionOptions,
+  ): DocumentSessionChange;
+  addSelection(
+    anchorOffset: number,
+    headOffset?: number,
+    options?: DocumentSessionSelectionOptions,
+  ): DocumentSessionChange;
+  clearSecondarySelections(): DocumentSessionChange;
   setTokens(tokens: readonly EditorToken[]): DocumentSessionChange;
   adoptTokens(tokens: readonly EditorToken[]): DocumentSessionChange;
   getText(): string;
@@ -69,12 +81,14 @@ export type DocumentSessionSelectionOptions = {
   readonly goal?: SelectionGoal;
 };
 
-export type DocumentSessionEditHistoryMode = "record" | "skip";
-
-export type DocumentSessionEditSelection = {
+export type DocumentSessionSelectionRange = {
   readonly anchor: number;
   readonly head?: number;
 };
+
+export type DocumentSessionEditHistoryMode = "record" | "skip";
+
+export type DocumentSessionEditSelection = DocumentSessionSelectionRange;
 
 export type DocumentSessionApplyEditsOptions = {
   readonly history?: DocumentSessionEditHistoryMode;
@@ -194,13 +208,53 @@ class PieceTableDocumentSession implements DocumentSession {
     headOffset = anchorOffset,
     options: DocumentSessionSelectionOptions = {},
   ): DocumentSessionChange {
+    return this.setSelections([{ anchor: anchorOffset, head: headOffset }], options);
+  }
+
+  public setSelections(
+    selections: readonly DocumentSessionSelectionRange[],
+    options: DocumentSessionSelectionOptions = {},
+  ): DocumentSessionChange {
     const start = nowMs();
-    const selection = createAnchorSelection(this.history.current, anchorOffset, headOffset, {
-      goal: options.goal,
-    });
-    const selections = createSelectionSet([selection], true);
-    this.history = { ...this.history, selections };
+    this.history = {
+      ...this.history,
+      selections: this.createNormalizedSelectionSet(selections, options),
+    };
     return appendTiming(this.createChange("selection", []), "session.selection", start);
+  }
+
+  public addSelection(
+    anchorOffset: number,
+    headOffset = anchorOffset,
+    options: DocumentSessionSelectionOptions = {},
+  ): DocumentSessionChange {
+    const start = nowMs();
+    const nextSelection = this.createSelection(anchorOffset, headOffset, options);
+    const selections = createSelectionSet([...this.history.selections.selections, nextSelection]);
+    this.history = {
+      ...this.history,
+      selections: normalizeSelectionSet(this.history.current, selections),
+    };
+    return appendTiming(this.createChange("selection", []), "session.addSelection", start);
+  }
+
+  public clearSecondarySelections(): DocumentSessionChange {
+    const start = nowMs();
+    const normalized = normalizeSelectionSet(this.history.current, this.history.selections);
+    const primary = normalized.selections[0];
+    if (!primary || normalized.selections.length <= 1) {
+      return appendTiming(this.createChange("none", []), "session.clearSecondarySelections", start);
+    }
+
+    this.history = {
+      ...this.history,
+      selections: createSelectionSet([primary], true, this.history.current),
+    };
+    return appendTiming(
+      this.createChange("selection", []),
+      "session.clearSecondarySelections",
+      start,
+    );
   }
 
   public setTokens(tokens: readonly EditorToken[]): DocumentSessionChange {
@@ -267,6 +321,28 @@ class PieceTableDocumentSession implements DocumentSession {
     }
 
     return markSelectionSetDirty(this.history.selections);
+  }
+
+  private createNormalizedSelectionSet(
+    selections: readonly DocumentSessionSelectionRange[],
+    options: DocumentSessionSelectionOptions,
+  ): SelectionSet<PieceTableAnchor> {
+    const anchorSelections = selections.map((selection) => {
+      const head = selection.head ?? selection.anchor;
+      return this.createSelection(selection.anchor, head, options);
+    });
+    const set = createSelectionSet(anchorSelections);
+    return normalizeSelectionSet(this.history.current, set);
+  }
+
+  private createSelection(
+    anchorOffset: number,
+    headOffset: number,
+    options: DocumentSessionSelectionOptions,
+  ): AnchorSelection {
+    return createAnchorSelection(this.history.current, anchorOffset, headOffset, {
+      goal: options.goal,
+    });
   }
 
   private recordEditHistory(edits: readonly TextEdit[]): void {

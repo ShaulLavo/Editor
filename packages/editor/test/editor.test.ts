@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { detectPlatform } from "@tanstack/hotkeys";
+import { createFoldGutterPlugin, createLineGutterPlugin } from "../../gutters/src/index.ts";
 import {
   createDocumentSession,
-  createFoldGutterPlugin,
-  createLineGutterPlugin,
   createTreeSitterLanguagePlugin,
   Editor,
   resetEditorInstanceCount,
@@ -1173,6 +1172,88 @@ describe("Editor", () => {
       );
 
       expect(highlightsMap.has("editor-token-0-selection")).toBe(false);
+    });
+
+    it("adds an Option-click cursor and edits all cursors together", () => {
+      const session = createDocumentSession("abcdef");
+      session.setSelection(1);
+      editor.attachSession(session);
+      const textNode = rowTextNode();
+      const originalCaretRangeFromPoint = (
+        document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+      ).caretRangeFromPoint;
+      Object.defineProperty(document, "caretRangeFromPoint", {
+        configurable: true,
+        value: () => {
+          const range = document.createRange();
+          range.setStart(textNode, 4);
+          range.setEnd(textNode, 4);
+          return range;
+        },
+      });
+
+      try {
+        editorRoot().dispatchEvent(
+          new MouseEvent("mousedown", {
+            altKey: true,
+            bubbles: true,
+            cancelable: true,
+            detail: 1,
+          }),
+        );
+        editorRoot().dispatchEvent(createInsertEvent("X"));
+      } finally {
+        if (originalCaretRangeFromPoint) {
+          Object.defineProperty(document, "caretRangeFromPoint", {
+            configurable: true,
+            value: originalCaretRangeFromPoint,
+          });
+        } else {
+          Reflect.deleteProperty(document, "caretRangeFromPoint");
+        }
+      }
+
+      expect(session.getSelections().selections).toHaveLength(2);
+      expect(editor.getText()).toBe("aXbcdXef");
+      expect(container.querySelectorAll(".editor-virtualized-caret")).toHaveLength(2);
+    });
+
+    it("clears secondary cursors with Escape", () => {
+      const session = createDocumentSession("abcdef");
+      session.setSelection(1);
+      session.addSelection(4);
+      editor.attachSession(session);
+
+      dispatchEditorKey("Escape");
+
+      expect(session.getSelections().selections).toHaveLength(1);
+      expect(container.querySelectorAll(".editor-virtualized-caret:not([hidden])")).toHaveLength(1);
+    });
+
+    it("selects the current word then adds the next exact occurrence with Mod+D", () => {
+      const session = createDocumentSession("foo bar foo");
+      session.setSelection(1);
+      editor.attachSession(session);
+
+      dispatchEditorKey("d", primaryModifier());
+
+      let ranges = session.getSelections().selections.map((selection) => {
+        const resolved = resolveSelection(session.getSnapshot(), selection);
+        return { start: resolved.startOffset, end: resolved.endOffset };
+      });
+      expect(ranges).toEqual([{ start: 0, end: 3 }]);
+
+      dispatchEditorKey("d", primaryModifier());
+
+      ranges = session.getSelections().selections.map((selection) => {
+        const resolved = resolveSelection(session.getSnapshot(), selection);
+        return { start: resolved.startOffset, end: resolved.endOffset };
+      });
+      expect(ranges).toEqual([
+        { start: 0, end: 3 },
+        { start: 8, end: 11 },
+      ]);
+      expect(container.querySelectorAll(".editor-virtualized-caret")).toHaveLength(2);
     });
 
     it("updates custom selection immediately while dragging", () => {

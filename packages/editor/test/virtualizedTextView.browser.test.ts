@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  createFoldGutterContribution,
+  createLineGutterContribution,
+} from "../../gutters/src/index.ts";
 
 import "../src/style.css";
 import { VirtualizedTextView } from "../src";
-import { createFoldGutterContribution, createLineGutterContribution } from "../src/gutters";
 
 describe.skipIf(typeof globalThis.Highlight === "undefined")(
   "VirtualizedTextView native browser geometry",

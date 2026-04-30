@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createFoldGutterContribution,
+  createLineGutterContribution,
+} from "../../gutters/src/index.ts";
 import { projectTokensThroughEdit } from "../src/editor/tokenProjection";
-import { createFoldGutterContribution, createLineGutterContribution } from "../src/gutters";
 import {
   createFoldMap,
   createPieceTableSnapshot,
@@ -539,6 +542,24 @@ describe("VirtualizedTextView", () => {
     view.setSelection(1, 7);
 
     expect(highlightsMap.get("test-selection")?.size).toBe(2);
+  });
+
+  it("paints multiple selections and positions multiple carets", () => {
+    view.setText("abc\ndef\nxyz");
+    view.setScrollMetrics(0, 80);
+    view.setSelections([
+      { anchorOffset: 1, headOffset: 2 },
+      { anchorOffset: 5, headOffset: 7 },
+    ]);
+
+    const carets = container.querySelectorAll(".editor-virtualized-caret");
+
+    expect(highlightsMap.get("test-selection")?.size).toBe(2);
+    expect(carets).toHaveLength(2);
+    expect((carets[0] as HTMLElement).hidden).toBe(false);
+    expect((carets[1] as HTMLElement).hidden).toBe(false);
+    expect((carets[0] as HTMLElement).style.transform).toBe("translate(16px, 0px)");
+    expect((carets[1] as HTMLElement).style.transform).toBe("translate(24px, 20px)");
   });
 
   it("does not rebuild unchanged mounted selection ranges", () => {

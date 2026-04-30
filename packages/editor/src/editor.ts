@@ -43,11 +43,3 @@ export type {
   EditorViewContributionUpdateKind,
   EditorViewSnapshot,
 } from "./plugins";
-export {
-  createFoldGutterPlugin,
-  createLineGutterPlugin,
-  type FoldGutterIcon,
-  type FoldGutterIconContext,
-  type FoldGutterPluginOptions,
-  type LineGutterPluginOptions,
-} from "./gutters";
