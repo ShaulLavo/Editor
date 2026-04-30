@@ -11,7 +11,10 @@ import {
 } from "./syntax/treeSitter/registry";
 import type { BrowserTextMetrics } from "./virtualization/browserMetrics";
 import type { FixedRowVisibleRange } from "./virtualization/fixedRowVirtualizer";
-import type { VirtualizedFoldMarker } from "./virtualization/virtualizedTextViewTypes";
+import type {
+  EditorCursorLineHighlightOptions,
+  VirtualizedFoldMarker,
+} from "./virtualization/virtualizedTextViewTypes";
 
 export type EditorDisposable = {
   dispose(): void;
@@ -119,6 +122,7 @@ export type EditorGutterRowContext = {
   readonly kind: "text" | "block";
   readonly primaryText: boolean;
   readonly cursorLine: boolean;
+  readonly cursorLineHighlight: Required<EditorCursorLineHighlightOptions>;
   readonly foldMarker: VirtualizedFoldMarker | null;
   readonly lineCount: number;
   toggleFold(marker: VirtualizedFoldMarker): void;

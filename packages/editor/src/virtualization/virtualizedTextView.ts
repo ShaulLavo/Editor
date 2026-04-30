@@ -84,6 +84,7 @@ import type {
 } from "./virtualizedTextViewInternals";
 import type {
   DocumentWithCaretHitTesting,
+  EditorCursorLineHighlightOptions,
   NativeGeometryValidation,
   SameLineEditPatch,
   VirtualizedFoldMarker,
@@ -92,6 +93,7 @@ import type {
 } from "./virtualizedTextViewTypes";
 
 export type {
+  EditorCursorLineHighlightOptions,
   HighlightRegistry,
   NativeGeometryValidation,
   VirtualizedFoldMarker,
@@ -100,6 +102,12 @@ export type {
   VirtualizedTextViewOptions,
   VirtualizedTextViewState,
 } from "./virtualizedTextViewTypes";
+
+const DEFAULT_CURSOR_LINE_HIGHLIGHT: Required<EditorCursorLineHighlightOptions> = {
+  gutterNumber: false,
+  gutterBackground: true,
+  rowBackground: true,
+};
 
 export class VirtualizedTextView {
   public readonly scrollElement: HTMLDivElement;
@@ -141,6 +149,7 @@ export class VirtualizedTextView {
       horizontalOverscanColumns: normalizeHorizontalOverscan(options.horizontalOverscanColumns),
       onFoldToggle: options.onFoldToggle ?? null,
       onViewportChange: options.onViewportChange ?? null,
+      cursorLineHighlight: normalizeCursorLineHighlight(options.cursorLineHighlight),
       rowElements: new Map(),
       rowPool: [],
       highlightRegistry: options.highlightRegistry ?? getDefaultHighlightRegistry(),
@@ -531,4 +540,14 @@ export class VirtualizedTextView {
     view.lastRenderedRowsKey = "";
     updateVirtualizerRows(view);
   }
+}
+
+function normalizeCursorLineHighlight(
+  options: EditorCursorLineHighlightOptions | undefined,
+): Required<EditorCursorLineHighlightOptions> {
+  return {
+    gutterNumber: options?.gutterNumber ?? DEFAULT_CURSOR_LINE_HIGHLIGHT.gutterNumber,
+    gutterBackground: options?.gutterBackground ?? DEFAULT_CURSOR_LINE_HIGHLIGHT.gutterBackground,
+    rowBackground: options?.rowBackground ?? DEFAULT_CURSOR_LINE_HIGHLIGHT.rowBackground,
+  };
 }

@@ -133,6 +133,7 @@ export class Editor {
       className: "editor",
       highlightRegistry: getHighlightRegistry(),
       gutterContributions: [...this.pluginHost.getGutterContributions()],
+      cursorLineHighlight: options.cursorLineHighlight,
       onFoldToggle: this.handleFoldToggle,
       onViewportChange: this.handleViewportChange,
       selectionHighlightName: `${this.highlightPrefix}-selection`,
@@ -654,6 +655,7 @@ export class Editor {
     const start = nowMs();
     const change = this.session.setSelection(drag.anchorOffset, offset);
     const syncDomSelection = drag.anchorOffset === offset;
+    this.syncCustomSelectionHighlight(drag.anchorOffset, offset);
     this.useSessionSelectionForNextInput = true;
     this.applySessionChange(change, "input.selection", start, { syncDomSelection });
   };
@@ -1211,9 +1213,11 @@ export class Editor {
     const resolved = resolveSelection(this.session.getSnapshot(), selection);
     const start = clamp(resolved.startOffset, 0, this.text.length);
     const end = clamp(resolved.endOffset, start, this.text.length);
+    const anchor = clamp(resolved.anchorOffset, 0, this.text.length);
+    const head = clamp(resolved.headOffset, 0, this.text.length);
 
     if (this.isInputFocused()) {
-      this.syncCustomSelectionHighlight(start, end);
+      this.syncCustomSelectionHighlight(anchor, head);
       this.notifyViewContributions("selection", null);
       return;
     }
@@ -1222,7 +1226,7 @@ export class Editor {
     const domSelection = window.getSelection();
     domSelection?.removeAllRanges();
     if (range) domSelection?.addRange(range);
-    this.syncCustomSelectionHighlight(start, end);
+    this.syncCustomSelectionHighlight(anchor, head);
     this.notifyViewContributions("selection", null);
   }
 

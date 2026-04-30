@@ -5,6 +5,7 @@ import type { EditorToken, EditorTokenStyle } from "../tokens";
 import type { BrowserTextMetrics } from "./browserMetrics";
 import type { FixedRowVirtualizer } from "./fixedRowVirtualizer";
 import type {
+  EditorCursorLineHighlightOptions,
   HighlightRegistry,
   MountedVirtualizedTextRow,
   TokenGroup,
@@ -39,6 +40,7 @@ export interface VirtualizedTextViewInternal {
   readonly horizontalOverscanColumns: number;
   readonly onFoldToggle: ((marker: VirtualizedFoldMarker) => void) | null;
   readonly onViewportChange: (() => void) | null;
+  readonly cursorLineHighlight: Required<EditorCursorLineHighlightOptions>;
   readonly rowElements: Map<number, MountedVirtualizedTextRow>;
   readonly rowPool: MountedVirtualizedTextRow[];
   readonly highlightRegistry: HighlightRegistry | null;

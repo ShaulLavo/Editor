@@ -24,8 +24,9 @@ import {
 import {
   caretPosition,
   cursorLineBufferRow,
+  cursorLineVirtualRow,
   getMountedRows,
-  refreshCursorLineGutterRows,
+  refreshCursorLineRows,
 } from "./virtualizedTextViewRows";
 import type {
   MountedVirtualizedTextRow,
@@ -72,6 +73,7 @@ export function setSelection(
   headOffset: number,
 ): void {
   const previousCursorLine = cursorLineBufferRow(view);
+  const previousCursorRow = cursorLineVirtualRow(view);
   view.selectionStart = clamp(Math.min(anchorOffset, headOffset), 0, view.text.length);
   view.selectionEnd = clamp(
     Math.max(anchorOffset, headOffset),
@@ -80,17 +82,18 @@ export function setSelection(
   );
   view.selectionHead = clamp(headOffset, 0, view.text.length);
   renderSelectionHighlight(view);
-  refreshCursorLineGutterRows(view, previousCursorLine);
+  refreshCursorLineRows(view, previousCursorLine, previousCursorRow);
 }
 
 export function clearSelection(view: VirtualizedTextViewInternal): void {
   const previousCursorLine = cursorLineBufferRow(view);
+  const previousCursorRow = cursorLineVirtualRow(view);
   view.selectionStart = null;
   view.selectionEnd = null;
   view.selectionHead = null;
   clearSelectionHighlight(view);
   renderCaret(view);
-  refreshCursorLineGutterRows(view, previousCursorLine);
+  refreshCursorLineRows(view, previousCursorLine, previousCursorRow);
 }
 
 export function renderSelectionHighlight(view: VirtualizedTextViewInternal): void {
@@ -190,12 +193,12 @@ function appendSelectionRowSignature(
 }
 
 function renderCaret(view: VirtualizedTextViewInternal): void {
-  if (view.selectionEnd === null || view.selectionStart !== view.selectionEnd) {
+  if (view.selectionEnd === null) {
     setElementHidden(view.caretElement, true);
     return;
   }
 
-  const position = caretPosition(view, view.selectionEnd);
+  const position = caretPosition(view, view.selectionHead ?? view.selectionEnd);
   if (!position) {
     setElementHidden(view.caretElement, true);
     return;

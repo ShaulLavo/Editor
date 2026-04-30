@@ -150,7 +150,7 @@ describe("VirtualizedTextView", () => {
     );
   });
 
-  it("highlights the line gutter number for the cursor row", () => {
+  it("highlights cursor row backgrounds without the gutter number by default", () => {
     view.dispose();
     view = new VirtualizedTextView(container, {
       rowHeight: 20,
@@ -168,14 +168,119 @@ describe("VirtualizedTextView", () => {
     const secondLabel = container.querySelector(
       '[data-editor-virtual-gutter-row="1"] .editor-virtualized-line-number',
     ) as HTMLSpanElement;
+    const firstRow = container.querySelector('[data-editor-virtual-row="0"]') as HTMLDivElement;
+    const secondRow = container.querySelector('[data-editor-virtual-row="1"]') as HTMLDivElement;
+
+    view.setSelection(0, 0);
+    expect(firstLabel.classList.contains("editor-virtualized-line-number-active")).toBe(false);
+    expect(secondLabel.classList.contains("editor-virtualized-line-number-active")).toBe(false);
+    expect(firstLabel.classList.contains("editor-virtualized-cursor-line-gutter")).toBe(true);
+    expect(secondLabel.classList.contains("editor-virtualized-cursor-line-gutter")).toBe(false);
+    expect(firstRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(true);
+    expect(secondRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(false);
+
+    view.setSelection(6, 6);
+    expect(firstLabel.classList.contains("editor-virtualized-line-number-active")).toBe(false);
+    expect(secondLabel.classList.contains("editor-virtualized-line-number-active")).toBe(false);
+    expect(firstLabel.classList.contains("editor-virtualized-cursor-line-gutter")).toBe(false);
+    expect(secondLabel.classList.contains("editor-virtualized-cursor-line-gutter")).toBe(true);
+    expect(firstRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(false);
+    expect(secondRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(true);
+  });
+
+  it("keeps the cursor line at the selection head", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 0,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      gutterContributions: [createLineGutterContribution()],
+    });
+    view.setText("alpha\nbeta\ngamma");
+    view.setScrollMetrics(0, 80);
+
+    const firstRow = container.querySelector('[data-editor-virtual-row="0"]') as HTMLDivElement;
+    const secondRow = container.querySelector('[data-editor-virtual-row="1"]') as HTMLDivElement;
+
+    view.setSelection(10, 0);
+
+    expect(firstRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(true);
+    expect(secondRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(false);
+  });
+
+  it("can customize cursor line gutter and row highlights", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 0,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      gutterContributions: [createLineGutterContribution()],
+      cursorLineHighlight: {
+        gutterNumber: true,
+        gutterBackground: true,
+        rowBackground: true,
+      },
+    });
+    view.setText("alpha\nbeta\ngamma");
+    view.setScrollMetrics(0, 80);
+
+    const firstLabel = container.querySelector(
+      '[data-editor-virtual-gutter-row="0"] .editor-virtualized-line-number',
+    ) as HTMLSpanElement;
+    const secondLabel = container.querySelector(
+      '[data-editor-virtual-gutter-row="1"] .editor-virtualized-line-number',
+    ) as HTMLSpanElement;
+    const firstRow = container.querySelector('[data-editor-virtual-row="0"]') as HTMLDivElement;
+    const secondRow = container.querySelector('[data-editor-virtual-row="1"]') as HTMLDivElement;
 
     view.setSelection(0, 0);
     expect(firstLabel.classList.contains("editor-virtualized-line-number-active")).toBe(true);
     expect(secondLabel.classList.contains("editor-virtualized-line-number-active")).toBe(false);
+    expect(firstLabel.classList.contains("editor-virtualized-cursor-line-gutter")).toBe(true);
+    expect(secondLabel.classList.contains("editor-virtualized-cursor-line-gutter")).toBe(false);
+    expect(firstRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(true);
+    expect(secondRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(false);
 
     view.setSelection(6, 6);
     expect(firstLabel.classList.contains("editor-virtualized-line-number-active")).toBe(false);
     expect(secondLabel.classList.contains("editor-virtualized-line-number-active")).toBe(true);
+    expect(firstLabel.classList.contains("editor-virtualized-cursor-line-gutter")).toBe(false);
+    expect(secondLabel.classList.contains("editor-virtualized-cursor-line-gutter")).toBe(true);
+    expect(firstRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(false);
+    expect(secondRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(true);
+  });
+
+  it("can limit cursor line gutter backgrounds to specific gutter contributions", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 0,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      gutterContributions: [createLineGutterContribution(), createFoldGutterContribution()],
+      cursorLineHighlight: {
+        gutterBackground: ["fold-gutter"],
+        rowBackground: false,
+      },
+    });
+    view.setText("alpha\nbeta\ngamma");
+    view.setScrollMetrics(0, 80);
+
+    const firstLineGutter = container.querySelector(
+      '[data-editor-virtual-gutter-row="0"] [data-editor-gutter-contribution="line-gutter"]',
+    ) as HTMLElement;
+    const firstFoldGutter = container.querySelector(
+      '[data-editor-virtual-gutter-row="0"] [data-editor-gutter-contribution="fold-gutter"]',
+    ) as HTMLElement;
+    const firstRow = container.querySelector('[data-editor-virtual-row="0"]') as HTMLDivElement;
+
+    view.setSelection(0, 0);
+
+    expect(firstLineGutter.classList.contains("editor-virtualized-cursor-line-gutter")).toBe(false);
+    expect(firstFoldGutter.classList.contains("editor-virtualized-cursor-line-gutter")).toBe(true);
+    expect(firstRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(false);
   });
 
   it("sizes the gutter from deterministic CSS columns", () => {
@@ -469,6 +574,26 @@ describe("VirtualizedTextView", () => {
     const caret = container.querySelector(".editor-virtualized-caret") as HTMLElement;
     expect(caret.hidden).toBe(false);
     expect(caret.style.transform).toBe("translate(16px, 0px)");
+  });
+
+  it("positions a caret at the end of a selection", () => {
+    view.setText("abcd\ndef");
+    view.setScrollMetrics(0, 40);
+    view.setSelection(1, 6);
+
+    const caret = container.querySelector(".editor-virtualized-caret") as HTMLElement;
+    expect(caret.hidden).toBe(false);
+    expect(caret.style.transform).toBe("translate(8px, 20px)");
+  });
+
+  it("positions a caret at the head of a reversed selection", () => {
+    view.setText("abcd\ndef");
+    view.setScrollMetrics(0, 40);
+    view.setSelection(6, 1);
+
+    const caret = container.querySelector(".editor-virtualized-caret") as HTMLElement;
+    expect(caret.hidden).toBe(false);
+    expect(caret.style.transform).toBe("translate(8px, 0px)");
   });
 
   it("paints selections only across mounted horizontal chunks", () => {

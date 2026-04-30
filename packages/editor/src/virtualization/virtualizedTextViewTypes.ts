@@ -29,6 +29,13 @@ export type VirtualizedTextViewOptions = {
   readonly wrap?: boolean;
   readonly blockRows?: readonly BlockRow[];
   readonly gutterContributions?: readonly EditorGutterContribution[];
+  readonly cursorLineHighlight?: EditorCursorLineHighlightOptions;
+};
+
+export type EditorCursorLineHighlightOptions = {
+  readonly gutterNumber?: boolean;
+  readonly gutterBackground?: boolean | readonly string[];
+  readonly rowBackground?: boolean;
 };
 
 export type VirtualizedTextChunk = {

@@ -6,6 +6,7 @@ import type {
 } from "../syntax/session";
 import type { EditorPlugin } from "../plugins";
 import type { EditorTheme } from "../theme";
+import type { EditorCursorLineHighlightOptions } from "../virtualization/virtualizedTextViewTypes";
 import type { EditorKeymapOptions } from "./keymap";
 import type { TextEdit } from "../tokens";
 
@@ -53,6 +54,7 @@ export type EditorOptions = {
   readonly onChange?: EditorChangeHandler;
   readonly plugins?: readonly EditorPlugin[];
   readonly keymap?: EditorKeymapOptions;
+  readonly cursorLineHighlight?: EditorCursorLineHighlightOptions;
 };
 
 export type EditorSetTextOptions = {

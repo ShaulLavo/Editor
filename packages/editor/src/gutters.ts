@@ -155,7 +155,7 @@ function updateLineGutterCell(element: HTMLElement, row: EditorGutterRowContext)
   setElementHidden(element, !row.primaryText);
   element.classList.toggle(
     "editor-virtualized-line-number-active",
-    row.primaryText && row.cursorLine,
+    row.primaryText && row.cursorLine && row.cursorLineHighlight.gutterNumber,
   );
   if (!row.primaryText) return;
 

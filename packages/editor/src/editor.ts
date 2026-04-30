@@ -23,6 +23,7 @@ export type {
 } from "./editor/types";
 export type { EditorCommandContext, EditorCommandId } from "./editor/commands";
 export type { EditorKeyBinding, EditorKeymapOptions } from "./editor/keymap";
+export type { EditorCursorLineHighlightOptions } from "./virtualization/virtualizedTextViewTypes";
 export type { EditorSyntaxTheme, EditorSyntaxThemeColor, EditorTheme } from "./theme";
 export type {
   EditorDisposable,

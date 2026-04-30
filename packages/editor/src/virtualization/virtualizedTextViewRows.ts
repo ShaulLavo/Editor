@@ -229,6 +229,7 @@ function updateRowElement(
   snapshot: FixedRowVirtualizerSnapshot,
 ): void {
   if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
+  updateCursorLineContentClass(view, row.element, isCursorLineVirtualRow(view, item.index));
   updateGutterRowElement(view, row, item);
   if (row.top !== item.start) {
     row.element.style.transform = `translate3d(0, ${item.start}px, 0)`;
@@ -588,6 +589,7 @@ function updateGutterContributionCells(
 
     setStyleValue(cell, "width", `${gutterContributionWidth(contribution, widthContext)}px`);
     contribution.updateCell(cell, context);
+    updateCursorLineGutterCellClass(view, cell, contribution.id, context.cursorLine);
   }
 }
 
@@ -607,6 +609,7 @@ function createGutterRowContext(
     kind: displayRowKind(view, index),
     primaryText: isPrimaryTextRow(view, index),
     cursorLine: isCursorLineGutterRow(view, index, bufferRow),
+    cursorLineHighlight: view.cursorLineHighlight,
     foldMarker: foldMarkerForVirtualRow(view, index),
     lineCount: view.lineStarts.length,
     toggleFold: (marker) => view.onFoldToggle?.(marker),
@@ -619,24 +622,95 @@ export function cursorLineBufferRow(view: VirtualizedTextViewInternal): number |
   return bufferRowForOffset(view, view.selectionHead);
 }
 
-export function refreshCursorLineGutterRows(
+export function cursorLineVirtualRow(view: VirtualizedTextViewInternal): number | null {
+  if (view.selectionHead === null) return null;
+
+  return rowForOffset(view, view.selectionHead);
+}
+
+export function refreshCursorLineRows(
   view: VirtualizedTextViewInternal,
   previousBufferRow: number | null,
+  previousVirtualRow: number | null,
+): void {
+  const nextBufferRow = cursorLineBufferRow(view);
+  const nextVirtualRow = cursorLineVirtualRow(view);
+  if (previousBufferRow === nextBufferRow && previousVirtualRow === nextVirtualRow) return;
+
+  for (const row of view.rowElements.values()) {
+    if (
+      !shouldRefreshCursorLineRow(
+        row,
+        previousBufferRow,
+        nextBufferRow,
+        previousVirtualRow,
+        nextVirtualRow,
+      )
+    ) {
+      continue;
+    }
+
+    updateCursorLineContentClass(view, row.element, row.index === nextVirtualRow);
+    refreshCursorLineGutterCells(view, row);
+  }
+}
+
+function shouldRefreshCursorLineRow(
+  row: MountedVirtualizedTextRow,
+  previousBufferRow: number | null,
+  nextBufferRow: number | null,
+  previousVirtualRow: number | null,
+  nextVirtualRow: number | null,
+): boolean {
+  if (row.index === previousVirtualRow || row.index === nextVirtualRow) return true;
+
+  return row.bufferRow === previousBufferRow || row.bufferRow === nextBufferRow;
+}
+
+function refreshCursorLineGutterCells(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
 ): void {
   if (view.gutterContributions.length === 0) return;
 
-  const nextBufferRow = cursorLineBufferRow(view);
-  if (previousBufferRow === nextBufferRow) return;
+  updateGutterContributionCells(view, row, {
+    index: row.index,
+    size: row.height,
+    start: row.top,
+  });
+}
 
-  for (const row of view.rowElements.values()) {
-    if (row.bufferRow !== previousBufferRow && row.bufferRow !== nextBufferRow) continue;
+function updateCursorLineContentClass(
+  view: VirtualizedTextViewInternal,
+  element: HTMLElement,
+  active: boolean,
+): void {
+  element.classList.toggle(
+    "editor-virtualized-cursor-line-row",
+    view.cursorLineHighlight.rowBackground && active,
+  );
+}
 
-    updateGutterContributionCells(view, row, {
-      index: row.index,
-      size: row.height,
-      start: row.top,
-    });
-  }
+function updateCursorLineGutterCellClass(
+  view: VirtualizedTextViewInternal,
+  element: HTMLElement,
+  contributionId: string,
+  active: boolean,
+): void {
+  element.classList.toggle(
+    "editor-virtualized-cursor-line-gutter",
+    cursorLineGutterBackgroundEnabled(view, contributionId) && active,
+  );
+}
+
+function cursorLineGutterBackgroundEnabled(
+  view: VirtualizedTextViewInternal,
+  contributionId: string,
+): boolean {
+  const setting = view.cursorLineHighlight.gutterBackground;
+  if (typeof setting === "boolean") return setting;
+
+  return setting.includes(contributionId);
 }
 
 function isCursorLineGutterRow(
@@ -649,6 +723,10 @@ function isCursorLineGutterRow(
   if (!isPrimaryTextRow(view, row)) return false;
 
   return bufferRow === cursorBufferRow;
+}
+
+function isCursorLineVirtualRow(view: VirtualizedTextViewInternal, row: number): boolean {
+  return cursorLineVirtualRow(view) === row;
 }
 
 export function foldMarkerForVirtualRow(

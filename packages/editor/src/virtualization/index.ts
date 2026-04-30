@@ -16,6 +16,7 @@ export type {
   FixedRowVisibleRange,
 } from "./fixedRowVirtualizer";
 export type {
+  EditorCursorLineHighlightOptions,
   HighlightRegistry as VirtualizedTextHighlightRegistry,
   NativeGeometryValidation,
   VirtualizedFoldMarker,

@@ -25,6 +25,11 @@ export function mountApp(): void {
 
   let controller: SourceController | null = null;
   const editor = new Editor(editorPane.element, {
+    cursorLineHighlight: {
+      gutterNumber: true,
+      gutterBackground: ["fold-gutter"],
+      rowBackground: true,
+    },
     plugins: [
       javaScript({ jsx: true }),
       typeScript({ tsx: true }),
