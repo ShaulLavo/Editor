@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createPieceTableSnapshot, type DocumentSessionChange } from "@editor/core";
 
-import { createShikiHighlighterSession, disposeShikiWorker } from "../src";
+import { createShikiHighlighterSession, disposeShikiWorker, loadShikiTheme } from "../src";
 
 const createChange = (text: string, edit: { from: number; to: number; text: string }) =>
   ({
@@ -39,6 +39,13 @@ describe.skipIf(typeof Worker === "undefined")("Shiki worker highlighter", () =>
     expect(result.tokens.length).toBeGreaterThan(0);
     expect(result.tokens.every((token) => token.start >= 0 && token.end <= text.length)).toBe(true);
     session!.dispose();
+  });
+
+  it("loads theme colors without a highlighter session", async () => {
+    const theme = await loadShikiTheme({ theme: "github-dark" });
+
+    expect(theme?.backgroundColor).toBeTruthy();
+    expect(theme?.foregroundColor).toBeTruthy();
   });
 
   it("updates tokens after an incremental edit", async () => {

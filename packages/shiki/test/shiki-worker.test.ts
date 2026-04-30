@@ -128,6 +128,45 @@ describe("shiki worker", () => {
       },
     } satisfies ShikiWorkerResponse);
   });
+
+  it("returns editor theme colors without opening a document", async () => {
+    const postMessage = vi.fn();
+    const getTheme = vi.fn(() => ({
+      bg: "#ffffff",
+      fg: "#24292e",
+    }));
+    (globalThis as { self?: unknown }).self = { postMessage };
+    createHighlighter.mockResolvedValue({ getTheme });
+    await import("../src/shiki.worker");
+
+    const onmessage = (globalThis as { self: { onmessage: (event: MessageEvent) => void } }).self
+      .onmessage;
+    onmessage(
+      new MessageEvent("message", {
+        data: request("theme", {
+          theme: "github-light",
+          themes: [],
+        }),
+      }),
+    );
+    await waitFor(() => postMessage.mock.calls.length > 0);
+
+    expect(createHighlighter).toHaveBeenCalledWith({ langs: [], themes: ["github-light"] });
+    expect(postMessage).toHaveBeenCalledWith({
+      id: 1,
+      ok: true,
+      result: {
+        theme: {
+          backgroundColor: "#ffffff",
+          foregroundColor: "#24292e",
+          gutterBackgroundColor: "#ffffff",
+          gutterForegroundColor: undefined,
+          caretColor: "#24292e",
+          minimapBackgroundColor: "#ffffff",
+        },
+      },
+    } satisfies ShikiWorkerResponse);
+  });
 });
 
 function request(

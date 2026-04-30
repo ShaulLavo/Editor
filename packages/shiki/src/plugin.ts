@@ -6,6 +6,7 @@ import type {
 import {
   canUseShikiWorker,
   createShikiHighlighterSession,
+  loadShikiTheme,
   type ShikiHighlighterSessionOptions,
 } from "./workerClient";
 
@@ -36,6 +37,7 @@ export function createShikiHighlighterPlugin(
     name: "shiki-highlighter",
     activate(context) {
       return context.registerHighlighter({
+        loadTheme: () => loadConfiguredTheme(options),
         createSession: (sessionOptions) => createSession(sessionOptions, options),
       });
     },
@@ -59,6 +61,12 @@ const createSession = (
     themes: pluginOptions.preloadThemes,
   } satisfies ShikiHighlighterSessionOptions);
 };
+
+const loadConfiguredTheme = (options: ShikiHighlighterPluginOptions) =>
+  loadShikiTheme({
+    theme: options.theme ?? DEFAULT_THEME,
+    themes: options.preloadThemes,
+  });
 
 const shikiLanguageForSession = (
   options: EditorHighlighterSessionOptions,

@@ -100,12 +100,18 @@ function createMockHighlighterSession(
   };
 }
 
-function createHighlighterPlugin(session: EditorHighlighterSession): EditorPlugin {
+function createHighlighterPlugin(
+  session: EditorHighlighterSession,
+  options: { readonly loadTheme?: () => Promise<EditorTheme | null | undefined> } = {},
+): EditorPlugin {
   return {
-    activate: (context) =>
-      context.registerHighlighter({
+    activate: (context) => {
+      const provider = {
         createSession: () => session,
-      }),
+      };
+      if (!options.loadTheme) return context.registerHighlighter(provider);
+      return context.registerHighlighter({ ...provider, loadTheme: options.loadTheme });
+    },
   };
 }
 
@@ -1890,6 +1896,57 @@ describe("Editor", () => {
       expect(root.style.getPropertyValue("--editor-foreground")).toBe("#24292e");
       expect(root.style.getPropertyValue("--editor-gutter-foreground")).toBe("#6e7781");
       expect(root.style.getPropertyValue("--editor-syntax-keyword")).toBe("#cf222e");
+    });
+
+    it("applies highlighter provider theme colors before a document is opened", async () => {
+      const highlighter = createMockHighlighterSession();
+      editor.dispose();
+      editor = new Editor(container, {
+        plugins: withTestLanguagePlugins(
+          createHighlighterPlugin(highlighter, {
+            loadTheme: async () => ({
+              backgroundColor: "#ffffff",
+              foregroundColor: "#24292e",
+            }),
+          }),
+        ),
+      });
+      await flushMicrotasks();
+
+      const root = editorRoot();
+      expect(root.style.getPropertyValue("--editor-background")).toBe("#ffffff");
+      expect(root.style.getPropertyValue("--editor-foreground")).toBe("#24292e");
+      expect(editor.getState()).toMatchObject({ length: 0, canUndo: false });
+    });
+
+    it("keeps highlighter provider theme colors after clearing a document", async () => {
+      const highlighter = createMockHighlighterSession({
+        refresh: async () =>
+          createHighlightResult([], {
+            backgroundColor: "#0d1117",
+          }),
+      });
+      editor.dispose();
+      editor = new Editor(container, {
+        plugins: withTestLanguagePlugins(
+          createHighlighterPlugin(highlighter, {
+            loadTheme: async () => ({ backgroundColor: "#ffffff" }),
+          }),
+        ),
+      });
+      await flushMicrotasks();
+
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
+      await flushMicrotasks();
+      expect(editorRoot().style.getPropertyValue("--editor-background")).toBe("#0d1117");
+
+      editor.clearDocument();
+
+      expect(editorRoot().style.getPropertyValue("--editor-background")).toBe("#ffffff");
     });
 
     it("keeps Tree-sitter folds when plugin highlights are active", async () => {

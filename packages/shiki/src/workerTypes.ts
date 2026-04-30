@@ -27,15 +27,22 @@ export type ShikiWorkerDisposeRequest = {
   readonly type: "dispose";
 };
 
+export type ShikiWorkerThemeRequest = {
+  readonly type: "theme";
+  readonly theme: string;
+  readonly themes: readonly string[];
+};
+
 export type ShikiWorkerRequestPayload =
   | ShikiWorkerOpenRequest
   | ShikiWorkerEditRequest
   | ShikiWorkerDisposeDocumentRequest
-  | ShikiWorkerDisposeRequest;
+  | ShikiWorkerDisposeRequest
+  | ShikiWorkerThemeRequest;
 
 export type ShikiWorkerResult = {
-  readonly documentId: string;
-  readonly tokens: readonly EditorToken[];
+  readonly documentId?: string;
+  readonly tokens?: readonly EditorToken[];
   readonly theme?: EditorTheme;
 };
 

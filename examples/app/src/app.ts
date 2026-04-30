@@ -172,7 +172,7 @@ export function mountApp(): void {
       json(),
       createLineGutterPlugin(),
       createFoldGutterPlugin({
-        width: 14,
+        width: 16,
         icon: createFoldChevronIcon,
         iconClassName: "app-fold-gutter-icon",
       }),

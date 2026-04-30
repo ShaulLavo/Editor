@@ -3,6 +3,7 @@ import type {
   EditorHighlightResult,
   EditorHighlighterSession,
   EditorHighlighterSessionOptions,
+  EditorTheme,
 } from "@editor/core";
 import type {
   ShikiWorkerDocumentOptions,
@@ -16,6 +17,11 @@ export type ShikiHighlighterSessionOptions = EditorHighlighterSessionOptions & {
   readonly lang: string;
   readonly theme: string;
   readonly langs?: readonly string[];
+  readonly themes?: readonly string[];
+};
+
+export type ShikiThemeOptions = {
+  readonly theme: string;
   readonly themes?: readonly string[];
 };
 
@@ -37,6 +43,19 @@ export function createShikiHighlighterSession(
 ): EditorHighlighterSession | null {
   if (!canUseShikiWorker()) return null;
   return new ShikiHighlighterSession(options);
+}
+
+export async function loadShikiTheme(
+  options: ShikiThemeOptions,
+): Promise<EditorTheme | null | undefined> {
+  if (!canUseShikiWorker()) return undefined;
+
+  const result = await postRequest({
+    type: "theme",
+    theme: options.theme,
+    themes: options.themes ?? [],
+  });
+  return result?.theme;
 }
 
 export async function disposeShikiWorker(): Promise<void> {

@@ -35,6 +35,7 @@ export type EditorHighlighterSession = EditorDisposable & {
 };
 
 export type EditorHighlighterProvider = {
+  loadTheme?(): Promise<EditorTheme | null | undefined>;
   createSession(options: EditorHighlighterSessionOptions): EditorHighlighterSession | null;
 };
 
@@ -174,6 +175,17 @@ export class EditorPluginHost implements EditorDisposable {
     }
 
     return null;
+  }
+
+  public async loadHighlighterTheme(): Promise<EditorTheme | null | undefined> {
+    for (const provider of this.highlighters) {
+      if (!provider.loadTheme) continue;
+
+      const theme = await provider.loadTheme();
+      if (theme !== undefined) return theme;
+    }
+
+    return undefined;
   }
 
   public hasTreeSitterLanguage(languageId: string | null | undefined): boolean {

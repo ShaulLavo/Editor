@@ -9,6 +9,7 @@ import type {
   ShikiWorkerRequest,
   ShikiWorkerResponse,
   ShikiWorkerResult,
+  ShikiWorkerThemeRequest,
 } from "./workerTypes";
 
 type DocumentState = {
@@ -54,6 +55,9 @@ const runRequest = (
   if (payload.type === "disposeDocument") {
     disposeDocument(payload.documentId);
     return Promise.resolve(undefined);
+  }
+  if (payload.type === "theme") {
+    return loadTheme(payload);
   }
 
   disposeAll();
@@ -118,15 +122,28 @@ const ensureHighlighter = (
 ): Promise<HighlighterGeneric<string, string>> => {
   const langs = unique([options.lang, ...options.langs]);
   const themes = unique([options.theme, ...options.themes]);
+  return ensureHighlighterFor(langs, themes);
+};
+
+const ensureHighlighterFor = (
+  langs: readonly string[],
+  themes: readonly string[],
+): Promise<HighlighterGeneric<string, string>> => {
   const key = highlighterKey(langs, themes);
   const existing = highlighterPromises.get(key);
   if (existing) return existing;
 
-  const promise = createHighlighter({ langs, themes }) as Promise<
+  const promise = createHighlighter({ langs: [...langs], themes: [...themes] }) as Promise<
     HighlighterGeneric<string, string>
   >;
   highlighterPromises.set(key, promise);
   return promise;
+};
+
+const loadTheme = async (payload: ShikiWorkerThemeRequest): Promise<ShikiWorkerResult> => {
+  const themes = unique([payload.theme, ...payload.themes]);
+  const highlighter = await ensureHighlighterFor([], themes);
+  return { theme: editorThemeFromHighlighter(highlighter, payload.theme) };
 };
 
 const resultFromState = (state: DocumentState): ShikiWorkerResult => ({

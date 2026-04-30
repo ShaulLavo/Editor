@@ -181,9 +181,13 @@ export class Editor {
   private syntaxSession: EditorSyntaxSession | null = null;
   private highlighterSession: EditorHighlighterSession | null = null;
   private configuredTheme: EditorTheme | null = null;
+  private providerHighlighterTheme: EditorTheme | null = null;
   private highlighterTheme: EditorTheme | null = null;
   private readonly syntaxRequests = new LatestAsyncRequest<EditorSyntaxResult>();
   private readonly highlightRequests = new LatestAsyncRequest<EditorHighlightResult>();
+  private readonly highlighterThemeRequests = new LatestAsyncRequest<
+    EditorTheme | null | undefined
+  >();
   private tokens: readonly EditorToken[] = [];
   private documentVersion = 0;
   private mouseSelectionDrag: MouseSelectionDrag | null = null;
@@ -210,6 +214,7 @@ export class Editor {
     this.foldState = new EditorFoldState(this.view, () => this.session?.getSnapshot() ?? null);
     this.el = this.view.scrollElement;
     this.applyResolvedTheme();
+    this.refreshHighlighterTheme();
     this.keymap = new EditorKeymapController({
       target: this.el,
       keymap: options.keymap,
@@ -386,6 +391,7 @@ export class Editor {
   dispose(): void {
     this.uninstallEditingHandlers();
     this.keymap.dispose();
+    this.highlighterThemeRequests.dispose();
     this.disposeSyntaxSession();
     this.disposeHighlighterSession();
     this.detachSession();
@@ -464,6 +470,14 @@ export class Editor {
     this.highlighterSession?.dispose();
     this.highlighterSession = null;
     this.setHighlighterTheme(null);
+  }
+
+  private refreshHighlighterTheme(): void {
+    this.highlighterThemeRequests.schedule({
+      run: () => this.pluginHost.loadHighlighterTheme(),
+      apply: (theme) => this.setProviderHighlighterTheme(theme),
+      fail: () => this.setProviderHighlighterTheme(null),
+    });
   }
 
   private createViewContributionContext(container: HTMLElement): EditorViewContributionContext {
@@ -1381,8 +1395,15 @@ export class Editor {
     this.applyResolvedTheme();
   }
 
+  private setProviderHighlighterTheme(theme: EditorTheme | null | undefined): void {
+    this.providerHighlighterTheme = theme ?? null;
+    this.applyResolvedTheme();
+  }
+
   private applyResolvedTheme(): void {
-    this.view.setTheme(mergeEditorThemes(this.configuredTheme, this.highlighterTheme));
+    this.view.setTheme(
+      mergeEditorThemes(this.configuredTheme, this.providerHighlighterTheme, this.highlighterTheme),
+    );
   }
 
   private syncDomSelection(): void {

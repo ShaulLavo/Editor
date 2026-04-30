@@ -4,6 +4,7 @@ export {
   canUseShikiWorker,
   createShikiHighlighterSession,
   disposeShikiWorker,
+  loadShikiTheme,
 } from "./workerClient";
 
 export { snapshotToEditorTokens, tokenLinesToEditorTokens } from "./editor-tokens";
@@ -20,4 +21,4 @@ export type {
   TokenPatch,
 } from "./tokenizer";
 export type { ShikiHighlighterPluginOptions, ShikiLanguageMap } from "./plugin";
-export type { ShikiHighlighterSessionOptions } from "./workerClient";
+export type { ShikiHighlighterSessionOptions, ShikiThemeOptions } from "./workerClient";
