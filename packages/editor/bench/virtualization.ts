@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { Window } from "happy-dom";
 
-import { VirtualizedTextView } from "../src";
+import { VirtualizedTextView, type VirtualizedFoldMarker } from "../src";
 
 type Sample = {
   readonly name: string;
@@ -89,6 +89,18 @@ function measureLargeDocument(view: VirtualizedTextView): Sample {
   return sample("large-document", view, start);
 }
 
+function measureLargeFoldMarkerScroll(view: VirtualizedTextView): Sample {
+  view.setText(buildLargeDocument());
+  view.setFoldMarkers(buildLargeFoldMarkers());
+
+  const start = performance.now();
+  view.setScrollMetrics(0, VIEWPORT_HEIGHT);
+  view.setScrollMetrics(500_000, VIEWPORT_HEIGHT);
+  view.setScrollMetrics(1_500_000, VIEWPORT_HEIGHT);
+
+  return sample("large-fold-marker-scroll", view, start);
+}
+
 function measureLongLine(view: VirtualizedTextView): Sample {
   const text = "x".repeat(LONG_LINE_LENGTH);
   const start = performance.now();
@@ -134,7 +146,9 @@ function printSample(sample: Sample): void {
 }
 
 function assertVirtualization(sample: Sample): void {
-  if (sample.name === "large-document" && sample.mountedRows > MAX_MOUNTED_ROWS) {
+  const isLargeRowSample =
+    sample.name === "large-document" || sample.name === "large-fold-marker-scroll";
+  if (isLargeRowSample && sample.mountedRows > MAX_MOUNTED_ROWS) {
     throw new Error(`mounted ${sample.mountedRows} rows; expected <= ${MAX_MOUNTED_ROWS}`);
   }
 
@@ -145,12 +159,34 @@ function assertVirtualization(sample: Sample): void {
   }
 }
 
+function buildLargeFoldMarkers(): VirtualizedFoldMarker[] {
+  const markers: VirtualizedFoldMarker[] = [];
+  for (let row = 0; row < LARGE_LINE_COUNT - 1; row += 2) {
+    markers.push({
+      key: `fold-${row}`,
+      startOffset: row,
+      endOffset: row + 1,
+      startRow: row,
+      endRow: row + 1,
+      collapsed: false,
+    });
+  }
+
+  return markers;
+}
+
 const document = installDom();
 const largeView = createView(document);
 const largeSample = measureLargeDocument(largeView);
 printSample(largeSample);
 assertVirtualization(largeSample);
 largeView.dispose();
+
+const largeFoldMarkerView = createView(document);
+const largeFoldMarkerSample = measureLargeFoldMarkerScroll(largeFoldMarkerView);
+printSample(largeFoldMarkerSample);
+assertVirtualization(largeFoldMarkerSample);
+largeFoldMarkerView.dispose();
 
 const longLineView = createView(document);
 const longLineSample = measureLongLine(longLineView);

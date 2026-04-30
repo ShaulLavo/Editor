@@ -158,6 +158,8 @@ export class VirtualizedTextView {
       displayRows: [],
       foldMap: null,
       foldMarkers: [],
+      foldMarkerByStartRow: new Map(),
+      foldMarkerByKey: new Map(),
       blockRows: options.blockRows ?? [],
       wrapEnabled: options.wrap ?? false,
       currentWrapColumn: null,

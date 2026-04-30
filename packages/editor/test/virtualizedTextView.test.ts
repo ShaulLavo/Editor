@@ -4,7 +4,9 @@ import {
   createFoldMap,
   createPieceTableSnapshot,
   measureBrowserTextMetrics,
+  treeSitterCapturesToEditorTokens,
   VirtualizedTextView,
+  type VirtualizedFoldMarker,
   type VirtualizedTextHighlightRegistry,
 } from "../src";
 
@@ -473,6 +475,29 @@ describe("VirtualizedTextView", () => {
     expect(second?.range.endOffset).toBe(6);
   });
 
+  it("does not scan offscreen Tree-sitter token styles while rendering the viewport", () => {
+    const lines = createLines(10_000).split("\n");
+    const captures = lineStartOffsets(lines).map((offset) => ({
+      captureName: "variable",
+      endIndex: offset + 4,
+      startIndex: offset,
+    }));
+    const tokens = treeSitterCapturesToEditorTokens(captures);
+
+    Object.defineProperty(tokens[5_000]!, "style", {
+      configurable: true,
+      get: () => {
+        throw new Error("unexpected offscreen token style scan");
+      },
+    });
+
+    view.setText(lines.join("\n"));
+    view.setScrollMetrics(0, 20);
+
+    expect(() => view.setTokens(tokens)).not.toThrow();
+    expect(tokenHighlightRanges().length).toBeGreaterThan(0);
+  });
+
   it("skips token highlight work when same-line edits only move existing token ranges", () => {
     view.setText("world");
     view.setScrollMetrics(0, 20);
@@ -682,6 +707,22 @@ describe("VirtualizedTextView", () => {
     expect(hiddenOffsetRange?.startOffset).toBe(1);
   });
 
+  it("renders fold controls from a large indexed marker set", () => {
+    const lines = Array.from({ length: 2_000 }, (_, index) => `line ${index}`);
+    view.setText(lines.join("\n"));
+    view.setFoldMarkers(createEveryOtherFoldMarkers(lines, 1_000));
+    view.setScrollMetrics(400 * 20, 100);
+
+    const gutterRow = container.querySelector<HTMLDivElement>(
+      '[data-editor-virtual-gutter-row="400"]',
+    );
+    const button = gutterRow?.querySelector<HTMLButtonElement>(".editor-virtualized-fold-toggle");
+
+    expect(button).toBeDefined();
+    expect(button?.hidden).toBe(false);
+    expect(button?.dataset.editorFoldKey).toBe("fold-400");
+  });
+
   it("validates native geometry ranges over mounted rows", () => {
     view.setText("abc\ndef");
     view.setScrollMetrics(0, 40);
@@ -725,6 +766,28 @@ function lineStartOffsets(lines: readonly string[]): number[] {
   }
 
   return offsets;
+}
+
+function createEveryOtherFoldMarkers(
+  lines: readonly string[],
+  count: number,
+): VirtualizedFoldMarker[] {
+  const offsets = lineStartOffsets(lines);
+  const markers: VirtualizedFoldMarker[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const startRow = index * 2;
+    const endRow = startRow + 1;
+    markers.push({
+      key: `fold-${startRow}`,
+      startOffset: offsets[startRow]!,
+      endOffset: offsets[endRow]!,
+      startRow,
+      endRow,
+      collapsed: false,
+    });
+  }
+
+  return markers;
 }
 
 function tokenHighlightNames(): string[] {

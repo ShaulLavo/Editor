@@ -55,6 +55,8 @@ export interface VirtualizedTextViewInternal {
   displayRows: DisplayRow[];
   foldMap: FoldMap | null;
   foldMarkers: readonly VirtualizedFoldMarker[];
+  foldMarkerByStartRow: ReadonlyMap<number, VirtualizedFoldMarker>;
+  foldMarkerByKey: ReadonlyMap<string, VirtualizedFoldMarker>;
   blockRows: readonly BlockRow[];
   wrapEnabled: boolean;
   currentWrapColumn: number | null;

@@ -3,6 +3,7 @@ import {
   copyTokenProjectionMetadata,
   tokenProjectionLiveRangeStatus,
 } from "../editor/tokenProjection";
+import { getEditorTokenIndex, type EditorTokenIndex } from "../editor/tokenIndex";
 import {
   buildHighlightRule,
   clamp,
@@ -319,12 +320,54 @@ function firstTokenRenderEntryEndingAfter(
   return low;
 }
 
+function firstIndexedTokenStartingAtOrAfter(
+  tokens: readonly EditorToken[],
+  offset: number,
+): number {
+  let low = 0;
+  let high = tokens.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (tokens[middle]!.start >= offset) {
+      high = middle;
+      continue;
+    }
+
+    low = middle + 1;
+  }
+
+  return low;
+}
+
+function firstIndexedTokenEndingAfter(
+  tokenIndex: EditorTokenIndex,
+  offset: number,
+  endIndex: number,
+): number {
+  let low = 0;
+  let high = endIndex;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const maxEnd = tokenIndex.maxEnds[middle] ?? 0;
+    if (maxEnd > offset) {
+      high = middle;
+      continue;
+    }
+
+    low = middle + 1;
+  }
+
+  return low;
+}
+
 function tokenSegmentsForRows(
   view: VirtualizedTextViewInternal,
   rows: readonly MountedVirtualizedTextRow[],
 ): Map<number, TokenRowSegment[]> {
   const segmentsByRow = new Map<number, TokenRowSegment[]>();
   if (rows.length === 0) return segmentsByRow;
+
+  if (appendIndexedTokenSegmentsForRows(view, segmentsByRow, rows)) return segmentsByRow;
 
   ensureTokenRenderIndex(view);
   if (view.tokenRenderEntries.length === 0) return segmentsByRow;
@@ -334,6 +377,56 @@ function tokenSegmentsForRows(
   }
 
   return segmentsByRow;
+}
+
+function appendIndexedTokenSegmentsForRows(
+  view: VirtualizedTextViewInternal,
+  segmentsByRow: Map<number, TokenRowSegment[]>,
+  rows: readonly MountedVirtualizedTextRow[],
+): boolean {
+  const tokenIndex = getEditorTokenIndex(view.tokens);
+  if (!tokenIndex?.sortedByStart) return false;
+
+  for (const row of rows) {
+    appendIndexedTokenSegmentsForMountedRow(view, tokenIndex, segmentsByRow, row);
+  }
+
+  return true;
+}
+
+function appendIndexedTokenSegmentsForMountedRow(
+  view: VirtualizedTextViewInternal,
+  tokenIndex: EditorTokenIndex,
+  segmentsByRow: Map<number, TokenRowSegment[]>,
+  row: MountedVirtualizedTextRow,
+): void {
+  if (row.kind !== "text") return;
+
+  for (const chunk of row.chunks) {
+    appendIndexedTokenSegmentsForChunk(view, tokenIndex, segmentsByRow, row, chunk);
+  }
+}
+
+function appendIndexedTokenSegmentsForChunk(
+  view: VirtualizedTextViewInternal,
+  tokenIndex: EditorTokenIndex,
+  segmentsByRow: Map<number, TokenRowSegment[]>,
+  row: MountedVirtualizedTextRow,
+  chunk: VirtualizedTextChunk,
+): void {
+  if (chunk.endOffset <= chunk.startOffset) return;
+
+  const endIndex = firstIndexedTokenStartingAtOrAfter(view.tokens, chunk.endOffset);
+  const startIndex = firstIndexedTokenEndingAfter(tokenIndex, chunk.startOffset, endIndex);
+  if (startIndex >= endIndex) return;
+
+  const segments = getOrCreateTokenSegments(segmentsByRow, row.tokenHighlightSlotId);
+  for (let index = startIndex; index < endIndex; index += 1) {
+    const token = tokenRenderEntry(view, view.tokens[index]!, index);
+    if (!token) continue;
+    if (token.end <= chunk.startOffset) continue;
+    appendTokenSegmentForChunk(segments, chunk, token, token.style, token.styleKey);
+  }
 }
 
 function appendTokenSegmentsForMountedRow(
@@ -375,8 +468,10 @@ function addTokenSegmentsForRow(
 ): void {
   const rangesByStyle = new Map<string, AbstractRange[]>();
   const document = view.scrollElement.ownerDocument;
+  let styleRulesDirty = false;
   for (const segment of segments) {
-    const group = view.tokenGroups.get(segment.styleKey);
+    const result = ensureTokenGroup(view, segment.styleKey, segment.style);
+    const group = result.group;
     if (!group) continue;
 
     const range = addTokenRangeToChunk(
@@ -387,12 +482,16 @@ function addTokenSegmentsForRow(
       segment.end,
     );
     if (!range) continue;
+
+    styleRulesDirty = styleRulesDirty || result.created;
     appendTokenRange(rangesByStyle, segment.styleKey, range);
   }
 
   if (rangesByStyle.size > 0) {
     view.rowTokenRanges.set(row.tokenHighlightSlotId, rangesByStyle);
   }
+
+  if (styleRulesDirty) rebuildStyleRules(view);
 }
 
 function ensureTokenGroup(

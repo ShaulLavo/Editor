@@ -74,6 +74,30 @@ export function normalizeFoldMarkers(
     .toSorted((left, right) => left.startRow - right.startRow || left.endRow - right.endRow);
 }
 
+export function indexFoldMarkersByStartRow(
+  markers: readonly VirtualizedFoldMarker[],
+): ReadonlyMap<number, VirtualizedFoldMarker> {
+  const index = new Map<number, VirtualizedFoldMarker>();
+  for (const marker of markers) {
+    if (index.has(marker.startRow)) continue;
+    index.set(marker.startRow, marker);
+  }
+
+  return index;
+}
+
+export function indexFoldMarkersByKey(
+  markers: readonly VirtualizedFoldMarker[],
+): ReadonlyMap<string, VirtualizedFoldMarker> {
+  const index = new Map<string, VirtualizedFoldMarker>();
+  for (const marker of markers) {
+    if (index.has(marker.key)) continue;
+    index.set(marker.key, marker);
+  }
+
+  return index;
+}
+
 export function preventFoldButtonMouseDown(event: MouseEvent): void {
   event.preventDefault();
   event.stopPropagation();

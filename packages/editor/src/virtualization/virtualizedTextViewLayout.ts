@@ -16,6 +16,8 @@ import {
   computeLineStarts,
   foldMapMatchesText,
   foldMarkersEqual,
+  indexFoldMarkersByKey,
+  indexFoldMarkersByStartRow,
   normalizeFoldMarkers,
 } from "./virtualizedTextViewHelpers";
 import type { FixedRowVirtualizerSnapshot } from "./fixedRowVirtualizer";
@@ -57,7 +59,12 @@ export function setFoldStateLayout(
     return { foldMapChanged: false, foldMarkersChanged: false, changed: false };
   }
 
-  view.foldMarkers = nextFoldMarkers;
+  if (foldMarkersChanged) {
+    view.foldMarkers = nextFoldMarkers;
+    view.foldMarkerByStartRow = indexFoldMarkersByStartRow(nextFoldMarkers);
+    view.foldMarkerByKey = indexFoldMarkersByKey(nextFoldMarkers);
+  }
+
   view.foldMap = nextFoldMap;
   return { foldMapChanged, foldMarkersChanged, changed: true };
 }

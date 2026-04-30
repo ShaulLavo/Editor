@@ -562,7 +562,7 @@ export function foldMarkerForVirtualRow(
   if (displayRow?.kind === "text" && displayRow.sourceStartColumn !== 0) return null;
 
   const bufferRow = bufferRowForVirtualRow(view, row);
-  return view.foldMarkers.find((marker) => marker.startRow === bufferRow) ?? null;
+  return view.foldMarkerByStartRow.get(bufferRow) ?? null;
 }
 
 function handleFoldButtonClick(view: VirtualizedTextViewInternal, event: MouseEvent): void {
@@ -570,7 +570,7 @@ function handleFoldButtonClick(view: VirtualizedTextViewInternal, event: MouseEv
   if (!(button instanceof HTMLButtonElement)) return;
 
   const key = button.dataset.editorFoldKey;
-  const marker = key ? view.foldMarkers.find((candidate) => candidate.key === key) : null;
+  const marker = key ? view.foldMarkerByKey.get(key) : null;
   if (!marker) return;
 
   event.preventDefault();
@@ -584,22 +584,24 @@ function isRowCurrent(
   item: FixedRowVirtualItem,
   snapshot: FixedRowVirtualizerSnapshot,
 ): boolean {
-  const text = lineText(view, item.index);
+  if (row.index !== item.index) return false;
+  if (row.top !== item.start) return false;
+  if (row.height !== item.size) return false;
+  if (row.textRevision !== view.textRevision) return false;
+
   const bufferRow = bufferRowForVirtualRow(view, item.index);
-  const foldMarker = foldMarkerForVirtualRow(view, item.index);
+  if (row.bufferRow !== bufferRow) return false;
+
   const rowKind = displayRowKind(view, item.index);
-  return (
-    row.index === item.index &&
-    row.bufferRow === bufferRow &&
-    row.top === item.start &&
-    row.height === item.size &&
-    row.text === text &&
-    row.chunkKey === rowChunkKey(view, text, snapshot) &&
-    row.foldMarkerKey === (foldMarker?.key ?? "") &&
-    row.foldCollapsed === (foldMarker?.collapsed ?? false) &&
-    row.displayKind === rowKind &&
-    row.textRevision === view.textRevision
-  );
+  if (row.displayKind !== rowKind) return false;
+
+  const text = lineText(view, item.index);
+  if (row.text !== text) return false;
+  if (row.chunkKey !== rowChunkKey(view, text, snapshot)) return false;
+
+  const foldMarker = foldMarkerForVirtualRow(view, item.index);
+  if (row.foldMarkerKey !== (foldMarker?.key ?? "")) return false;
+  return row.foldCollapsed === (foldMarker?.collapsed ?? false);
 }
 
 function releaseRowsOutside(

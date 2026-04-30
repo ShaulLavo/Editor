@@ -1,9 +1,11 @@
 import type { EditorToken, TextEdit } from "../tokens";
-
-type TokenProjectionIndex = {
-  readonly maxEnds: readonly number[];
-  readonly sortedByStart: boolean;
-};
+import {
+  appendEditorTokenIndexEntry,
+  copyEditorTokenIndex,
+  getEditorTokenIndex,
+  setEditorTokenIndex,
+  type EditorTokenIndex,
+} from "./tokenIndex";
 
 type TokenProjectionMetadata = {
   readonly keepsLiveRanges: boolean;
@@ -18,7 +20,6 @@ type TokenProjectionBuilder = {
   sortedByStart: boolean;
 };
 
-const tokenProjectionIndexes = new WeakMap<readonly EditorToken[], TokenProjectionIndex>();
 const tokenProjectionMetadata = new WeakMap<readonly EditorToken[], TokenProjectionMetadata>();
 
 export function projectTokensThroughEdit(
@@ -49,8 +50,7 @@ export function copyTokenProjectionMetadata(
   sourceTokens: readonly EditorToken[],
   copiedTokens: readonly EditorToken[],
 ): void {
-  const index = tokenProjectionIndexes.get(sourceTokens);
-  if (index) tokenProjectionIndexes.set(copiedTokens, index);
+  copyEditorTokenIndex(sourceTokens, copiedTokens);
 
   const metadata = tokenProjectionMetadata.get(sourceTokens);
   if (metadata) tokenProjectionMetadata.set(copiedTokens, metadata);
@@ -84,7 +84,7 @@ function projectIndexedTokensThroughEdit(
   previousText: string,
   delta: number,
 ): readonly EditorToken[] | null {
-  const index = tokenProjectionIndexes.get(tokens);
+  const index = getEditorTokenIndex(tokens);
   if (!index?.sortedByStart) return null;
 
   const prefixEnd = unchangedPrefixEnd(index, edit);
@@ -177,7 +177,7 @@ function finishTokenProjection(
   keepsLiveRanges: boolean,
 ): readonly EditorToken[] {
   const projectedTokens = builder.tokens;
-  tokenProjectionIndexes.set(projectedTokens, {
+  setEditorTokenIndex(projectedTokens, {
     maxEnds: builder.maxEnds,
     sortedByStart: builder.sortedByStart,
   });
@@ -196,14 +196,11 @@ function createTokenProjectionBuilder(): TokenProjectionBuilder {
 }
 
 function appendBuiltToken(builder: TokenProjectionBuilder, token: EditorToken): void {
-  if (token.start < builder.previousStart) builder.sortedByStart = false;
-  builder.maxEnd = Math.max(builder.maxEnd, token.end);
-  builder.maxEnds.push(builder.maxEnd);
-  builder.previousStart = token.start;
+  appendEditorTokenIndexEntry(builder, token);
   builder.tokens.push(token);
 }
 
-function unchangedPrefixEnd(index: TokenProjectionIndex, edit: TextEdit): number {
+function unchangedPrefixEnd(index: EditorTokenIndex, edit: TextEdit): number {
   if (edit.from === edit.to) return firstTokenEndingAtOrAfter(index, edit.from);
   return firstTokenEndingAfter(index, edit.from);
 }
@@ -213,7 +210,7 @@ function shiftedSuffixStart(tokens: readonly EditorToken[], edit: TextEdit): num
   return firstTokenStartingAtOrAfter(tokens, edit.to);
 }
 
-function firstTokenEndingAfter(index: TokenProjectionIndex, offset: number): number {
+function firstTokenEndingAfter(index: EditorTokenIndex, offset: number): number {
   let low = 0;
   let high = index.maxEnds.length;
   while (low < high) {
@@ -229,7 +226,7 @@ function firstTokenEndingAfter(index: TokenProjectionIndex, offset: number): num
   return low;
 }
 
-function firstTokenEndingAtOrAfter(index: TokenProjectionIndex, offset: number): number {
+function firstTokenEndingAtOrAfter(index: EditorTokenIndex, offset: number): number {
   let low = 0;
   let high = index.maxEnds.length;
   while (low < high) {
