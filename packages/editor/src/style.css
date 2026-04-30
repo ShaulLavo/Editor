@@ -63,12 +63,7 @@
   --editor-syntax-type-parameter: #5eead4;
   --editor-syntax-variable: #e4e4e7;
   --editor-syntax-variable-builtin: #fdba74;
-  --editor-gutter-label-columns: 3;
-  --editor-gutter-min-width: 36px;
-  --editor-gutter-width: max(
-    var(--editor-gutter-min-width),
-    calc((var(--editor-gutter-label-columns) * 1ch) + 18px)
-  );
+  --editor-gutter-width: 0px;
   --editor-row-height: 20px;
 
   flex: 1;
@@ -99,19 +94,24 @@
 .editor-virtualized-gutter-row {
   align-items: center;
   box-sizing: border-box;
-  column-gap: 2px;
-  display: grid;
-  grid-template-columns: max-content 10px;
+  display: flex;
   height: var(--editor-row-height);
-  justify-content: end;
+  justify-content: flex-end;
   line-height: var(--editor-row-height);
   left: 0;
-  padding-left: 2px;
-  padding-right: 4px;
   position: absolute;
   right: 0;
   top: 0;
   user-select: none;
+}
+
+.editor-virtualized-gutter-cell {
+  align-items: center;
+  box-sizing: border-box;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: var(--editor-row-height);
+  line-height: inherit;
 }
 
 .editor-virtualized-gutter-label {
@@ -119,8 +119,10 @@
   font-size: 11px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  justify-self: end;
+  justify-content: flex-end;
   line-height: inherit;
+  padding-left: 2px;
+  padding-right: 4px;
   tab-size: 4;
 }
 
@@ -139,7 +141,6 @@
   line-height: 1;
   padding: 0;
   pointer-events: auto;
-  width: 10px;
 }
 
 .editor-virtualized-fold-toggle[hidden] {
@@ -149,12 +150,8 @@
 }
 
 .editor-virtualized-fold-toggle::before {
-  content: "v";
+  content: attr(data-editor-fold-indicator);
   font-size: 9px;
-}
-
-.editor-virtualized-fold-toggle[data-editor-fold-state="collapsed"]::before {
-  content: ">";
 }
 
 .editor-virtualized-fold-toggle:hover {
@@ -162,7 +159,7 @@
 }
 
 .editor-virtualized-line-number::before {
-  content: counter(editor-line, var(--editor-gutter-style, decimal));
+  content: counter(editor-line, var(--editor-line-gutter-counter-style, decimal));
 }
 
 .editor-virtualized-row {

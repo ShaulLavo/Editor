@@ -1,4 +1,4 @@
-import { Editor } from "@editor/core/editor";
+import { createFoldGutterPlugin, createLineGutterPlugin, Editor } from "@editor/core/editor";
 import "@editor/core/style.css";
 import "@editor/minimap/style.css";
 import { createMinimapPlugin } from "@editor/minimap";
@@ -11,6 +11,7 @@ import { createStatusBar } from "./components/statusBar.ts";
 import type { StatusBar } from "./components/statusBar.ts";
 import { createTopBar } from "./components/topBar.ts";
 import type { TopBar } from "./components/topBar.ts";
+import { createShikiHighlighterPlugin } from "@editor/shiki";
 import {
   fetchRepositorySource,
   REPOSITORY_NAME,
@@ -160,7 +161,9 @@ export function mountApp(): void {
       html(),
       css(),
       json(),
-      // createShikiHighlighterPlugin({ theme: "github-dark" }),
+      createLineGutterPlugin(),
+      createFoldGutterPlugin(),
+      createShikiHighlighterPlugin({ theme: "github-dark" }),
       createMinimapPlugin(),
     ],
     onChange: (state) => {

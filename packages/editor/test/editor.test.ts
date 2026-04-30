@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { detectPlatform } from "@tanstack/hotkeys";
 import {
   createDocumentSession,
+  createFoldGutterPlugin,
+  createLineGutterPlugin,
   createTreeSitterLanguagePlugin,
   Editor,
   resetEditorInstanceCount,
@@ -143,6 +145,10 @@ function createTestLanguagePlugin(): EditorPlugin {
 
 function withTestLanguagePlugins(...plugins: readonly EditorPlugin[]): readonly EditorPlugin[] {
   return [createTestLanguagePlugin(), ...plugins];
+}
+
+function withTestGutterPlugins(...plugins: readonly EditorPlugin[]): readonly EditorPlugin[] {
+  return withTestLanguagePlugins(createLineGutterPlugin(), createFoldGutterPlugin(), ...plugins);
 }
 
 type ViewContributionEvent = {
@@ -1804,7 +1810,7 @@ describe("Editor", () => {
       });
       editor.dispose();
       editor = new Editor(container, {
-        plugins: withTestLanguagePlugins(createHighlighterPlugin(highlighter)),
+        plugins: withTestGutterPlugins(createHighlighterPlugin(highlighter)),
       });
       setEditorSyntaxSessionFactory((options) => {
         created.push(options);
@@ -1865,7 +1871,7 @@ describe("Editor", () => {
       });
       editor.dispose();
       editor = new Editor(container, {
-        plugins: withTestLanguagePlugins(createHighlighterPlugin(highlighter)),
+        plugins: withTestGutterPlugins(createHighlighterPlugin(highlighter)),
       });
       setEditorSyntaxSessionFactory(() =>
         createMockSyntaxSession({
@@ -1896,6 +1902,8 @@ describe("Editor", () => {
     it("renders syntax fold controls and toggles collapsed rows", async () => {
       const text = "if (x) {\n  y();\n}\nz();";
       const foldEnd = text.indexOf("\nz();");
+      editor.dispose();
+      editor = new Editor(container, { plugins: withTestGutterPlugins() });
       setEditorSyntaxSessionFactory(() =>
         createMockSyntaxSession({
           refresh: async () =>
@@ -1936,6 +1944,8 @@ describe("Editor", () => {
     it("hides fold controls on rows without fold candidates", async () => {
       const text = "if (x) {\n  y();\n}\nz();";
       const foldEnd = text.indexOf("\nz();");
+      editor.dispose();
+      editor = new Editor(container, { plugins: withTestGutterPlugins() });
       setEditorSyntaxSessionFactory(() =>
         createMockSyntaxSession({
           refresh: async () =>
@@ -2043,6 +2053,8 @@ describe("Editor", () => {
       const text = "if (x) {\n  y();\n}\nz();";
       const foldEnd = text.indexOf("\nz();");
       const editResult = createDeferred<EditorSyntaxResult>();
+      editor.dispose();
+      editor = new Editor(container, { plugins: withTestGutterPlugins() });
       setEditorSyntaxSessionFactory(() =>
         createMockSyntaxSession({
           refresh: async () =>
@@ -2082,6 +2094,8 @@ describe("Editor", () => {
       const foldEnd = text.indexOf("\nz();");
       const changes: DocumentSessionChange[] = [];
       let refreshCount = 0;
+      editor.dispose();
+      editor = new Editor(container, { plugins: withTestGutterPlugins() });
       setEditorSyntaxSessionFactory(() =>
         createMockSyntaxSession({
           refresh: async () => {
@@ -2150,6 +2164,8 @@ describe("Editor", () => {
       const foldStart = text.indexOf("if");
       const foldEnd = text.indexOf("\nz();");
       const editResult = createDeferred<EditorSyntaxResult>();
+      editor.dispose();
+      editor = new Editor(container, { plugins: withTestGutterPlugins() });
       setEditorSyntaxSessionFactory(() =>
         createMockSyntaxSession({
           refresh: async () =>

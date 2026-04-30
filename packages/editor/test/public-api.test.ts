@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createFoldGutterPlugin,
+  createLineGutterPlugin,
   createPieceTableSnapshot,
   Editor,
   getPieceTableText,
@@ -15,6 +17,8 @@ describe("public API facade", () => {
     const state = { documentId: null } as EditorState;
 
     expect(Editor).toBeTypeOf("function");
+    expect(createLineGutterPlugin).toBeTypeOf("function");
+    expect(createFoldGutterPlugin).toBeTypeOf("function");
     expect(getPieceTableText(snapshot)).toBe("abc");
     expect(edit).toEqual({ from: 1, to: 2, text: "B" });
     expect(state.documentId).toBeNull();

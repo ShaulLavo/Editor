@@ -90,6 +90,9 @@ export type { EditorKeyBinding, EditorKeymapOptions } from "./editor/keymap";
 export type { EditorSyntaxTheme, EditorSyntaxThemeColor, EditorTheme } from "./theme";
 export type {
   EditorDisposable,
+  EditorGutterContribution,
+  EditorGutterRowContext,
+  EditorGutterWidthContext,
   EditorHighlightResult,
   EditorHighlighterProvider,
   EditorHighlighterSession,
@@ -103,6 +106,12 @@ export type {
   EditorViewContributionUpdateKind,
   EditorViewSnapshot,
 } from "./plugins";
+export {
+  createFoldGutterPlugin,
+  createLineGutterPlugin,
+  type FoldGutterPluginOptions,
+  type LineGutterPluginOptions,
+} from "./gutters";
 
 let editorInstanceCount = 0;
 const SYNTAX_EDIT_DEBOUNCE_MS = 75;
@@ -188,6 +197,7 @@ export class Editor {
     this.view = new VirtualizedTextView(container, {
       className: "editor",
       highlightRegistry: getHighlightRegistry(),
+      gutterContributions: [...this.pluginHost.getGutterContributions()],
       onFoldToggle: this.handleFoldToggle,
       onViewportChange: this.handleViewportChange,
       selectionHighlightName: `${this.highlightPrefix}-selection`,

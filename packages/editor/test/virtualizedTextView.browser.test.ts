@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import "../src/style.css";
 import { VirtualizedTextView } from "../src";
+import { createFoldGutterContribution, createLineGutterContribution } from "../src/gutters";
 
 describe.skipIf(typeof globalThis.Highlight === "undefined")(
   "VirtualizedTextView native browser geometry",
@@ -47,14 +48,17 @@ describe.skipIf(typeof globalThis.Highlight === "undefined")(
     });
 
     it("sets deterministic gutter CSS variables without marker measurement", () => {
+      view?.dispose();
+      view = new VirtualizedTextView(container, {
+        rowHeight: 20,
+        overscan: 0,
+        gutterContributions: [createLineGutterContribution(), createFoldGutterContribution()],
+      });
       view!.setText(Array.from({ length: 10_000 }, (_, index) => `line ${index}`).join("\n"));
       view!.setScrollMetrics(9_999 * 20, 20, 360);
 
-      expect(getComputedStyle(view!.scrollElement).getPropertyValue("--editor-gutter-style")).toBe(
-        "",
-      );
-      expect(view!.scrollElement.style.getPropertyValue("--editor-gutter-label-columns")).toBe("5");
-      expect(view!.scrollElement.style.getPropertyValue("--editor-gutter-width")).toBe("");
+      expect(view!.scrollElement.style.getPropertyValue("--editor-gutter-label-columns")).toBe("");
+      expect(view!.scrollElement.style.getPropertyValue("--editor-gutter-width")).toMatch(/px$/);
     });
   },
 );

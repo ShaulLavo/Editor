@@ -1,3 +1,4 @@
+import type { EditorGutterContribution } from "../plugins";
 import type { EditorTokenStyle } from "../tokens";
 import type { BlockRow } from "../displayTransforms";
 import type { BrowserTextMetrics } from "./browserMetrics";
@@ -27,6 +28,7 @@ export type VirtualizedTextViewOptions = {
   readonly onViewportChange?: () => void;
   readonly wrap?: boolean;
   readonly blockRows?: readonly BlockRow[];
+  readonly gutterContributions?: readonly EditorGutterContribution[];
 };
 
 export type VirtualizedTextChunk = {
@@ -111,8 +113,7 @@ export type TokenRowSegment = {
 
 export type MountedVirtualizedTextRow = VirtualizedTextRow & {
   readonly gutterElement: HTMLDivElement;
-  readonly gutterLabelElement: HTMLSpanElement;
-  readonly foldButtonElement: HTMLButtonElement;
+  readonly gutterCells: Map<string, HTMLElement>;
   readonly leftSpacerElement: HTMLSpanElement;
   readonly foldPlaceholderElement: HTMLSpanElement;
   readonly top: number;

@@ -575,10 +575,15 @@ export function retireRowElements(rows: readonly MountedVirtualizedTextRow[]): v
 export function restoreRowElements(
   row: MountedVirtualizedTextRow,
   rowParent: HTMLDivElement,
-  gutterParent: HTMLDivElement,
+  gutterParent: HTMLDivElement | null,
 ): void {
   restoreElement(row.element, rowParent);
-  restoreElement(row.gutterElement, gutterParent);
+  if (gutterParent) {
+    restoreElement(row.gutterElement, gutterParent);
+    return;
+  }
+
+  row.gutterElement.remove();
 }
 
 function retireElement(element: HTMLElement, rowAttribute: string): void {

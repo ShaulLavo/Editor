@@ -4,23 +4,24 @@ import {
   visualColumnLength,
 } from "../displayTransforms";
 import { clamp } from "../style-utils";
+import type {
+  EditorGutterContribution,
+  EditorGutterRowContext,
+  EditorGutterWidthContext,
+} from "../plugins";
 import type { FixedRowVirtualItem, FixedRowVirtualizerSnapshot } from "./fixedRowVirtualizer";
 import {
   alignChunkEnd,
   alignChunkStart,
-  hideFoldButton,
   hideFoldPlaceholder,
   mountedChunkForOffset,
-  preventFoldButtonMouseDown,
   rangesIntersectInclusive,
   restoreRowElements,
   retireRowElements,
   rowChunkFromDomBoundary,
   rowElementFromNode,
   scrollElementPadding,
-  setCounterSet,
   setStyleValue,
-  showFoldButton,
   showFoldPlaceholder,
   snapshotRowsKey,
   updateMutableRow,
@@ -49,8 +50,7 @@ import type {
 } from "./virtualizedTextViewTypes";
 import type { VirtualizedTextViewInternal } from "./virtualizedTextViewInternals";
 
-const GUTTER_EXTRA_WIDTH_PX = 18;
-const MIN_GUTTER_LABEL_COLUMNS = 3;
+const GUTTER_CELL_CLASS = "editor-virtualized-gutter-cell";
 
 export function rowsKey(
   view: VirtualizedTextViewInternal,
@@ -96,7 +96,8 @@ function mountOrUpdateRow(
   }
 
   const row = reusableRows.pop() ?? view.rowPool.pop() ?? createRow(view);
-  restoreRowElements(row, view.spacer, view.gutterElement);
+  const gutterParent = view.gutterContributions.length > 0 ? view.gutterElement : null;
+  restoreRowElements(row, view.spacer, gutterParent);
   updateRow(view, row, item, snapshot);
   view.rowElements.set(item.index, row);
 }
@@ -105,31 +106,20 @@ function createRow(view: VirtualizedTextViewInternal): MountedVirtualizedTextRow
   const document = view.scrollElement.ownerDocument;
   const element = document.createElement("div");
   const gutterElement = document.createElement("div");
-  const gutterLabelElement = document.createElement("span");
-  const foldButtonElement = document.createElement("button");
   const leftSpacerElement = document.createElement("span");
   const foldPlaceholderElement = document.createElement("span");
   const textNode = document.createTextNode("");
+  const gutterCells = createGutterCells(view, document);
 
   element.className = "editor-virtualized-row";
   gutterElement.className = "editor-virtualized-gutter-row";
-  gutterLabelElement.className = "editor-virtualized-gutter-label editor-virtualized-line-number";
-  foldButtonElement.className = "editor-virtualized-fold-toggle";
-  foldButtonElement.type = "button";
-  foldButtonElement.hidden = true;
-  foldButtonElement.disabled = true;
-  foldButtonElement.tabIndex = -1;
   leftSpacerElement.className = "editor-virtualized-row-spacer";
   foldPlaceholderElement.className = "editor-virtualized-fold-placeholder";
   foldPlaceholderElement.textContent = "...";
   foldPlaceholderElement.hidden = true;
-  foldButtonElement.addEventListener("mousedown", preventFoldButtonMouseDown);
-  foldButtonElement.addEventListener("click", (event) => handleFoldButtonClick(view, event));
-  gutterLabelElement.setAttribute("aria-hidden", "true");
-  gutterElement.appendChild(gutterLabelElement);
-  gutterElement.appendChild(foldButtonElement);
+  for (const cell of gutterCells.values()) gutterElement.appendChild(cell);
   element.appendChild(textNode);
-  view.gutterElement.appendChild(gutterElement);
+  if (view.gutterContributions.length > 0) view.gutterElement.appendChild(gutterElement);
   view.spacer.appendChild(element);
 
   return {
@@ -150,12 +140,47 @@ function createRow(view: VirtualizedTextViewInternal): MountedVirtualizedTextRow
     displayKind: "text",
     element,
     gutterElement,
-    gutterLabelElement,
-    foldButtonElement,
+    gutterCells,
     leftSpacerElement,
     foldPlaceholderElement,
     textNode,
   };
+}
+
+function createGutterCells(
+  view: VirtualizedTextViewInternal,
+  document: Document,
+): Map<string, HTMLElement> {
+  const cells = new Map<string, HTMLElement>();
+  for (const contribution of view.gutterContributions) {
+    cells.set(contribution.id, createGutterCell(contribution, document));
+  }
+
+  return cells;
+}
+
+function createGutterCell(contribution: EditorGutterContribution, document: Document): HTMLElement {
+  const cell = contribution.createCell(document);
+  cell.classList.add(GUTTER_CELL_CLASS);
+  if (contribution.className) cell.classList.add(contribution.className);
+  cell.dataset.editorGutterContribution = contribution.id;
+  return cell;
+}
+
+export function disposeGutterCells(view: VirtualizedTextViewInternal): void {
+  const rows = [...view.rowElements.values(), ...view.rowPool];
+  for (const row of rows) disposeRowGutterCells(view, row);
+}
+
+function disposeRowGutterCells(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
+): void {
+  for (const contribution of view.gutterContributions) {
+    const cell = row.gutterCells.get(contribution.id);
+    if (cell) contribution.disposeCell?.(cell);
+  }
+  row.gutterCells.clear();
 }
 
 function updateRow(
@@ -164,7 +189,10 @@ function updateRow(
   item: FixedRowVirtualItem,
   snapshot: FixedRowVirtualizerSnapshot,
 ): void {
-  if (isRowCurrent(view, row, item, snapshot)) return;
+  if (isRowCurrent(view, row, item, snapshot)) {
+    updateGutterRowElement(view, row, item);
+    return;
+  }
 
   const bufferRow = bufferRowForVirtualRow(view, item.index);
   const text = lineText(view, item.index);
@@ -200,7 +228,7 @@ function updateRowElement(
   snapshot: FixedRowVirtualizerSnapshot,
 ): void {
   if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
-  updateGutterRowElement(row, item);
+  updateGutterRowElement(view, row, item);
   if (row.top !== item.start) {
     row.element.style.transform = `translate3d(0, ${item.start}px, 0)`;
   }
@@ -268,7 +296,7 @@ function updateRowElementForSameLineEdit(
   snapshot: FixedRowVirtualizerSnapshot,
 ): void {
   if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
-  updateGutterRowElement(row, item);
+  updateGutterRowElement(view, row, item);
   if (row.top !== item.start) {
     row.element.style.transform = `translate3d(0, ${item.start}px, 0)`;
   }
@@ -511,21 +539,7 @@ function updateRowFoldPresentation(
   item: FixedRowVirtualItem,
 ): void {
   const marker = foldMarkerForVirtualRow(view, item.index);
-  updateFoldButton(row, marker);
   updateFoldPlaceholder(row, marker);
-}
-
-function updateFoldButton(
-  row: MountedVirtualizedTextRow,
-  marker: VirtualizedFoldMarker | null,
-): void {
-  if (!marker) {
-    hideFoldButton(row.foldButtonElement);
-    return;
-  }
-
-  const state = marker.collapsed ? "collapsed" : "expanded";
-  showFoldButton(row.foldButtonElement, marker.key, state);
 }
 
 function updateFoldPlaceholder(
@@ -543,39 +557,72 @@ function updateFoldPlaceholder(
   row.element.appendChild(row.foldPlaceholderElement);
 }
 
-function updateGutterRowElement(row: MountedVirtualizedTextRow, item: FixedRowVirtualItem): void {
+function updateGutterRowElement(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
+  item: FixedRowVirtualItem,
+): void {
+  if (view.gutterContributions.length === 0) return;
+
   if (row.index !== item.index) {
     row.gutterElement.dataset.editorVirtualGutterRow = String(item.index);
-    setCounterSet(row.gutterLabelElement, `editor-line ${item.index + 1}`);
   }
   if (row.top !== item.start) {
     row.gutterElement.style.transform = `translate3d(0, ${item.start}px, 0)`;
   }
+
+  updateGutterContributionCells(view, row, item);
+}
+
+function updateGutterContributionCells(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
+  item: FixedRowVirtualItem,
+): void {
+  const context = createGutterRowContext(view, item);
+  const widthContext = gutterWidthContext(view);
+  for (const contribution of view.gutterContributions) {
+    const cell = row.gutterCells.get(contribution.id);
+    if (!cell) continue;
+
+    setStyleValue(cell, "width", `${gutterContributionWidth(contribution, widthContext)}px`);
+    contribution.updateCell(cell, context);
+  }
+}
+
+function createGutterRowContext(
+  view: VirtualizedTextViewInternal,
+  item: FixedRowVirtualItem,
+): EditorGutterRowContext {
+  const index = item.index;
+  return {
+    index,
+    bufferRow: bufferRowForVirtualRow(view, index),
+    startOffset: lineStartOffset(view, index),
+    endOffset: lineEndOffset(view, index),
+    text: lineText(view, index),
+    kind: displayRowKind(view, index),
+    primaryText: isPrimaryTextRow(view, index),
+    foldMarker: foldMarkerForVirtualRow(view, index),
+    lineCount: view.lineStarts.length,
+    toggleFold: (marker) => view.onFoldToggle?.(marker),
+  };
 }
 
 export function foldMarkerForVirtualRow(
   view: VirtualizedTextViewInternal,
   row: number,
 ): VirtualizedFoldMarker | null {
-  const displayRow = view.displayRows[row];
-  if (displayRow?.kind === "block") return null;
-  if (displayRow?.kind === "text" && displayRow.sourceStartColumn !== 0) return null;
+  if (!isPrimaryTextRow(view, row)) return null;
 
   const bufferRow = bufferRowForVirtualRow(view, row);
   return view.foldMarkerByStartRow.get(bufferRow) ?? null;
 }
 
-function handleFoldButtonClick(view: VirtualizedTextViewInternal, event: MouseEvent): void {
-  const button = event.currentTarget;
-  if (!(button instanceof HTMLButtonElement)) return;
-
-  const key = button.dataset.editorFoldKey;
-  const marker = key ? view.foldMarkerByKey.get(key) : null;
-  if (!marker) return;
-
-  event.preventDefault();
-  event.stopPropagation();
-  view.onFoldToggle?.(marker);
+function isPrimaryTextRow(view: VirtualizedTextViewInternal, row: number): boolean {
+  const displayRow = view.displayRows[row];
+  if (displayRow?.kind !== "text") return false;
+  return displayRow.sourceStartColumn === 0;
 }
 
 function isRowCurrent(
@@ -647,20 +694,41 @@ export function updateGutterWidthIfNeeded(view: VirtualizedTextViewInternal): vo
   if (!view.gutterWidthDirty) return;
 
   view.gutterWidthDirty = false;
-  applyGutterWidth(view, gutterLabelColumns(view.lineStarts.length));
+  applyGutterWidth(view);
 }
 
-function applyGutterWidth(view: VirtualizedTextViewInternal, labelColumns: number): void {
-  setStyleValue(view.scrollElement, "--editor-gutter-label-columns", String(labelColumns));
-
-  const nextWidth = Math.max(
-    view.minimumGutterWidth,
-    Math.ceil(labelColumns * characterWidth(view) + GUTTER_EXTRA_WIDTH_PX),
-  );
+function applyGutterWidth(view: VirtualizedTextViewInternal): void {
+  const nextWidth = gutterContributionsWidth(view);
+  setStyleValue(view.scrollElement, "--editor-gutter-width", `${nextWidth}px`);
   if (nextWidth === view.currentGutterWidth) return;
 
   view.currentGutterWidth = nextWidth;
   applySpacerWidth(view);
+}
+
+function gutterContributionsWidth(view: VirtualizedTextViewInternal): number {
+  if (view.gutterContributions.length === 0) return 0;
+
+  const context = gutterWidthContext(view);
+  return view.gutterContributions.reduce((width, contribution) => {
+    return width + gutterContributionWidth(contribution, context);
+  }, 0);
+}
+
+function gutterContributionWidth(
+  contribution: EditorGutterContribution,
+  context: ReturnType<typeof gutterWidthContext>,
+): number {
+  const width = contribution.width(context);
+  if (!Number.isFinite(width) || width <= 0) return 0;
+  return Math.ceil(width);
+}
+
+function gutterWidthContext(view: VirtualizedTextViewInternal): EditorGutterWidthContext {
+  return {
+    lineCount: view.lineStarts.length,
+    metrics: view.metrics,
+  };
 }
 
 export function updateContentWidth(
@@ -1019,13 +1087,4 @@ export function caretPosition(
 export function pageRowDelta(view: VirtualizedTextViewInternal): number {
   const { viewportHeight } = view.virtualizer.getSnapshot();
   return Math.max(1, Math.floor(viewportHeight / getRowHeight(view)) - 1);
-}
-
-function gutterLabelColumns(lineCount: number): number {
-  if (lineCount < 100) return MIN_GUTTER_LABEL_COLUMNS;
-  return decimalDigitCount(lineCount);
-}
-
-function decimalDigitCount(value: number): number {
-  return String(Math.max(1, Math.floor(value))).length;
 }

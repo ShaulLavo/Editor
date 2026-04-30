@@ -18,7 +18,6 @@ import {
   getDefaultHighlightRegistry,
   normalizeChunkSize,
   normalizeChunkThreshold,
-  normalizeGutterWidth,
   normalizeHorizontalOverscan,
   normalizeRowHeight,
 } from "./virtualizedTextViewHelpers";
@@ -57,6 +56,7 @@ import {
 } from "./virtualizedTextViewLayout";
 import {
   applyRowHeight,
+  disposeGutterCells,
   ensureOffsetMounted,
   getMountedRows,
   gutterWidth,
@@ -108,7 +108,7 @@ export class VirtualizedTextView {
 
   public constructor(container: HTMLElement, options: VirtualizedTextViewOptions = {}) {
     const overscan = options.overscan ?? DEFAULT_OVERSCAN;
-    const gutterWidth = normalizeGutterWidth(options.gutterWidth);
+    const gutterContributions = [...(options.gutterContributions ?? [])];
 
     const styleEl = container.ownerDocument.createElement("style");
     const scrollElement = createScrollElement(container, options.className);
@@ -132,7 +132,7 @@ export class VirtualizedTextView {
       inputElement,
       spacer,
       gutterElement,
-      minimumGutterWidth: gutterWidth,
+      gutterContributions,
       caretElement,
       styleEl,
       virtualizer,
@@ -173,7 +173,7 @@ export class VirtualizedTextView {
       lastSelectionHighlightSignature: "",
       lastRenderedRowsKey: "",
       gutterWidthDirty: true,
-      currentGutterWidth: gutterWidth,
+      currentGutterWidth: 0,
       contentWidth: 0,
       maxVisualColumnsSeen: 0,
       lastWidthScanStart: 0,
@@ -182,13 +182,13 @@ export class VirtualizedTextView {
       metrics: { ...measuredMetrics, rowHeight },
     };
 
-    scrollElement.style.setProperty("--editor-gutter-min-width", `${gutterWidth}px`);
+    scrollElement.style.setProperty("--editor-gutter-width", "0px");
     applyRowHeight(this.view, rowHeight);
     spacer.className = "editor-virtualized-spacer";
     gutterElement.className = "editor-virtualized-gutter";
     caretElement.className = "editor-virtualized-caret";
     caretElement.hidden = true;
-    spacer.appendChild(gutterElement);
+    if (gutterContributions.length > 0) spacer.appendChild(gutterElement);
     spacer.appendChild(caretElement);
     scrollElement.appendChild(spacer);
     scrollElement.appendChild(inputElement);
@@ -205,6 +205,7 @@ export class VirtualizedTextView {
     clearSelectionHighlight(view);
     clearTokenHighlights(view);
     view.virtualizer.dispose();
+    disposeGutterCells(view);
     this.scrollElement.remove();
     view.styleEl.remove();
     view.rowElements.clear();

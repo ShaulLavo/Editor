@@ -11,6 +11,7 @@ import {
 } from "./syntax/treeSitter/registry";
 import type { BrowserTextMetrics } from "./virtualization/browserMetrics";
 import type { FixedRowVisibleRange } from "./virtualization/fixedRowVirtualizer";
+import type { VirtualizedFoldMarker } from "./virtualization/virtualizedTextViewTypes";
 
 export type EditorDisposable = {
   dispose(): void;
@@ -103,6 +104,33 @@ export type EditorViewContributionProvider = {
   createContribution(context: EditorViewContributionContext): EditorViewContribution | null;
 };
 
+export type EditorGutterWidthContext = {
+  readonly lineCount: number;
+  readonly metrics: BrowserTextMetrics;
+};
+
+export type EditorGutterRowContext = {
+  readonly index: number;
+  readonly bufferRow: number;
+  readonly startOffset: number;
+  readonly endOffset: number;
+  readonly text: string;
+  readonly kind: "text" | "block";
+  readonly primaryText: boolean;
+  readonly foldMarker: VirtualizedFoldMarker | null;
+  readonly lineCount: number;
+  toggleFold(marker: VirtualizedFoldMarker): void;
+};
+
+export type EditorGutterContribution = {
+  readonly id: string;
+  readonly className?: string;
+  createCell(document: Document): HTMLElement;
+  width(context: EditorGutterWidthContext): number;
+  updateCell(element: HTMLElement, row: EditorGutterRowContext): void;
+  disposeCell?(element: HTMLElement): void;
+};
+
 export type EditorPluginContext = {
   registerHighlighter(provider: EditorHighlighterProvider): EditorDisposable;
   registerTreeSitterLanguage(
@@ -110,6 +138,7 @@ export type EditorPluginContext = {
     options?: TreeSitterLanguageRegistrationOptions,
   ): EditorDisposable;
   registerViewContribution(provider: EditorViewContributionProvider): EditorDisposable;
+  registerGutterContribution(contribution: EditorGutterContribution): EditorDisposable;
 };
 
 export type EditorPlugin = {
@@ -125,6 +154,7 @@ export class EditorPluginHost implements EditorDisposable {
   private readonly highlighters: EditorHighlighterProvider[] = [];
   private readonly treeSitterLanguages = new TreeSitterLanguageRegistry();
   private readonly viewContributions: EditorViewContributionProvider[] = [];
+  private readonly gutterContributions: EditorGutterContribution[] = [];
   private readonly disposables: EditorDisposable[] = [];
 
   public constructor(plugins: readonly EditorPlugin[] = []) {
@@ -167,11 +197,16 @@ export class EditorPluginHost implements EditorDisposable {
     return contributions;
   }
 
+  public getGutterContributions(): readonly EditorGutterContribution[] {
+    return this.gutterContributions;
+  }
+
   public dispose(): void {
     while (this.disposables.length > 0) this.disposables.pop()?.dispose();
     this.highlighters.length = 0;
     this.treeSitterLanguages.clear();
     this.viewContributions.length = 0;
+    this.gutterContributions.length = 0;
   }
 
   private createContext(): EditorPluginContext {
@@ -180,6 +215,7 @@ export class EditorPluginHost implements EditorDisposable {
       registerTreeSitterLanguage: (contribution, options) =>
         this.registerTreeSitterLanguage(contribution, options),
       registerViewContribution: (provider) => this.registerViewContribution(provider),
+      registerGutterContribution: (contribution) => this.registerGutterContribution(contribution),
     };
   }
 
@@ -218,6 +254,21 @@ export class EditorPluginHost implements EditorDisposable {
     if (index === -1) return;
 
     this.viewContributions.splice(index, 1);
+  }
+
+  private registerGutterContribution(contribution: EditorGutterContribution): EditorDisposable {
+    this.gutterContributions.push(contribution);
+
+    return {
+      dispose: () => this.unregisterGutterContribution(contribution),
+    };
+  }
+
+  private unregisterGutterContribution(contribution: EditorGutterContribution): void {
+    const index = this.gutterContributions.indexOf(contribution);
+    if (index === -1) return;
+
+    this.gutterContributions.splice(index, 1);
   }
 
   private adoptActivationResult(

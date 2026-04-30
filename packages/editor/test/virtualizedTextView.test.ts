@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectTokensThroughEdit } from "../src/editor/tokenProjection";
+import { createFoldGutterContribution, createLineGutterContribution } from "../src/gutters";
 import {
   createFoldMap,
   createPieceTableSnapshot,
@@ -73,14 +74,15 @@ describe("VirtualizedTextView", () => {
     Reflect.deleteProperty(globalThis, "Highlight");
   });
 
-  it("mounts only visible and overscanned rows for large documents", () => {
+  it("mounts only visible and overscanned rows for large documents without default gutters", () => {
     view.setText(createLines(100_000));
     view.setScrollMetrics(0, 100);
 
     const rows = container.querySelectorAll("[data-editor-virtual-row]");
     const gutterRows = container.querySelectorAll("[data-editor-virtual-gutter-row]");
     expect(rows).toHaveLength(7);
-    expect(gutterRows).toHaveLength(7);
+    expect(gutterRows).toHaveLength(0);
+    expect(view.scrollElement.style.getPropertyValue("--editor-gutter-width")).toBe("0px");
     expect(view.getState()).toMatchObject({
       lineCount: 100_000,
       totalHeight: 2_000_000,
@@ -106,6 +108,14 @@ describe("VirtualizedTextView", () => {
   });
 
   it("renders gutter rows with CSS counter line numbers", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 2,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      gutterContributions: [createLineGutterContribution()],
+    });
     view.setText("alpha\nbeta\ngamma");
     view.setScrollMetrics(0, 80);
 
@@ -116,23 +126,44 @@ describe("VirtualizedTextView", () => {
     expect(firstLabel).not.toBeNull();
     expect(firstLabel.textContent).toBe("");
     expect(firstLabel.style.counterSet).toBe("editor-line 1");
+    expect(firstLabel.style.getPropertyValue("--editor-line-gutter-counter-style")).toBe("decimal");
+  });
+
+  it("passes raw CSS counter styles through the line gutter", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 0,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      gutterContributions: [createLineGutterContribution({ counterStyle: 'symbols("*" "+")' })],
+    });
+    view.setText("alpha");
+    view.setScrollMetrics(0, 20);
+
+    const firstLabel = container.querySelector(
+      '[data-editor-virtual-gutter-row="0"] .editor-virtualized-line-number',
+    ) as HTMLSpanElement;
+
+    expect(firstLabel.style.getPropertyValue("--editor-line-gutter-counter-style")).toBe(
+      'symbols("*" "+")',
+    );
   });
 
   it("sizes the gutter from deterministic CSS columns", () => {
     view.dispose();
     view = new VirtualizedTextView(container, {
-      gutterWidth: 24,
       rowHeight: 20,
       overscan: 0,
       highlightRegistry: mockRegistry,
       selectionHighlightName: "test-selection",
+      gutterContributions: [createLineGutterContribution(), createFoldGutterContribution()],
     });
     view.setText(createLines(1_500));
     view.setScrollMetrics(1_499 * 20, 20);
 
     const spacer = container.querySelector(".editor-virtualized-spacer") as HTMLElement;
-    expect(view.scrollElement.style.getPropertyValue("--editor-gutter-label-columns")).toBe("4");
-    expect(view.scrollElement.style.getPropertyValue("--editor-gutter-min-width")).toBe("24px");
+    expect(view.scrollElement.style.getPropertyValue("--editor-gutter-width")).toBe("50px");
     expect(spacer.style.width).toBe("122px");
   });
 
@@ -225,16 +256,20 @@ describe("VirtualizedTextView", () => {
       highlightRegistry: mockRegistry,
       selectionHighlightName: "test-selection",
       wrap: true,
+      gutterContributions: [createLineGutterContribution()],
     });
-    mockViewport(view.scrollElement, 76, 80);
+    mockViewport(view.scrollElement, 72, 80);
 
     view.setText("abcdefghij");
-    view.setScrollMetrics(0, 80, 76);
+    view.setScrollMetrics(0, 80, 72);
 
     expect(view.getState().wrapActive).toBe(true);
     expect(view.getState().totalHeight).toBe(40);
     expect(view.getState().mountedRows.map((row) => row.text)).toEqual(["abcde", "fghij"]);
-    expect(view.textOffsetFromViewportPoint(100, 25)).toBe(9);
+    const labels = container.querySelectorAll<HTMLSpanElement>(".editor-virtualized-line-number");
+    expect(labels[0]?.style.counterSet).toBe("editor-line 1");
+    expect(labels[1]?.hidden).toBe(true);
+    expect(view.textOffsetFromViewportPoint(64, 25)).toBe(9);
   });
 
   it("mounts internal block rows with row-unit height", () => {
@@ -343,6 +378,14 @@ describe("VirtualizedTextView", () => {
   });
 
   it("maps viewport fallback points in the gutter to the line start", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 2,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      gutterContributions: [createLineGutterContribution()],
+    });
     view.setText("abc\ndef");
     view.setScrollMetrics(0, 40);
     mockViewport(view.scrollElement, 120, 40);
@@ -397,7 +440,7 @@ describe("VirtualizedTextView", () => {
 
     const caret = container.querySelector(".editor-virtualized-caret") as HTMLElement;
     expect(caret.hidden).toBe(false);
-    expect(caret.style.transform).toBe("translate(58px, 0px)");
+    expect(caret.style.transform).toBe("translate(16px, 0px)");
   });
 
   it("paints selections only across mounted horizontal chunks", () => {
@@ -685,6 +728,14 @@ describe("VirtualizedTextView", () => {
   });
 
   it("uses FoldMap to mount folded virtual rows without changing buffer offsets", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 2,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      gutterContributions: [createLineGutterContribution()],
+    });
     const text = "a\nb\nc\nd";
     const snapshot = createPieceTableSnapshot(text);
     const map = createFoldMap(snapshot, [
@@ -701,6 +752,11 @@ describe("VirtualizedTextView", () => {
     expect(rows.map((row) => row.index)).toEqual([0, 1, 2]);
     expect(rows.map((row) => row.bufferRow)).toEqual([0, 1, 3]);
     expect(rows.map((row) => row.text)).toEqual(["a", "b", "d"]);
+    expect(
+      [...container.querySelectorAll<HTMLSpanElement>(".editor-virtualized-line-number")].map(
+        (label) => label.style.counterSet,
+      ),
+    ).toEqual(["editor-line 1", "editor-line 2", "editor-line 4"]);
 
     const hiddenOffsetRange = view.createRange(4, 4);
     expect(hiddenOffsetRange?.startContainer).toBe(rows[1]!.textNode);
@@ -709,6 +765,20 @@ describe("VirtualizedTextView", () => {
 
   it("renders fold controls from a large indexed marker set", () => {
     const lines = Array.from({ length: 2_000 }, (_, index) => `line ${index}`);
+    view.setText(lines.join("\n"));
+    view.setFoldMarkers(createEveryOtherFoldMarkers(lines, 1_000));
+    view.setScrollMetrics(400 * 20, 100);
+
+    expect(container.querySelector(".editor-virtualized-fold-toggle")).toBeNull();
+
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 2,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      gutterContributions: [createFoldGutterContribution()],
+    });
     view.setText(lines.join("\n"));
     view.setFoldMarkers(createEveryOtherFoldMarkers(lines, 1_000));
     view.setScrollMetrics(400 * 20, 100);

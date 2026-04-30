@@ -1,5 +1,6 @@
 import type { FoldMap } from "../foldMap";
 import type { BlockRow, DisplayRow } from "../displayTransforms";
+import type { EditorGutterContribution } from "../plugins";
 import type { EditorToken, EditorTokenStyle } from "../tokens";
 import type { BrowserTextMetrics } from "./browserMetrics";
 import type { FixedRowVirtualizer } from "./fixedRowVirtualizer";
@@ -29,7 +30,7 @@ export interface VirtualizedTextViewInternal {
   readonly inputElement: HTMLTextAreaElement;
   readonly spacer: HTMLDivElement;
   readonly gutterElement: HTMLDivElement;
-  readonly minimumGutterWidth: number;
+  readonly gutterContributions: readonly EditorGutterContribution[];
   readonly caretElement: HTMLDivElement;
   readonly styleEl: HTMLStyleElement;
   readonly virtualizer: FixedRowVirtualizer;
