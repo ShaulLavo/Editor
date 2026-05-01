@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import "../src/style.css";
 import {
   createFoldGutterContribution,
   createLineGutterContribution,
 } from "../../gutters/src/index.ts";
 
-import "../src/style.css";
 import { VirtualizedTextView } from "../src";
 
 describe.skipIf(typeof globalThis.Highlight === "undefined")(
@@ -63,6 +63,44 @@ describe.skipIf(typeof globalThis.Highlight === "undefined")(
 
       expect(view!.scrollElement.style.getPropertyValue("--editor-gutter-label-columns")).toBe("");
       expect(view!.scrollElement.style.getPropertyValue("--editor-gutter-width")).toMatch(/px$/);
+    });
+
+    it("keeps fold gutter cursor-line backgrounds above fold button base styles", () => {
+      view?.dispose();
+      view = new VirtualizedTextView(container, {
+        rowHeight: 20,
+        overscan: 0,
+        gutterContributions: [createLineGutterContribution(), createFoldGutterContribution()],
+        cursorLineHighlight: {
+          gutterBackground: ["fold-gutter"],
+          rowBackground: false,
+        },
+      });
+      view!.scrollElement.style.setProperty(
+        "--editor-cursor-line-gutter-background",
+        "rgb(12, 34, 56)",
+      );
+      view!.setText("alpha\nbeta\ngamma");
+      view!.setFoldMarkers([
+        {
+          key: "fold-0",
+          startOffset: 0,
+          endOffset: 10,
+          startRow: 0,
+          endRow: 1,
+          collapsed: false,
+        },
+      ]);
+      view!.setSelection(0, 0);
+      view!.setScrollMetrics(0, 80);
+
+      const foldButton = container.querySelector<HTMLButtonElement>(
+        '[data-editor-virtual-gutter-row="0"] [data-editor-gutter-contribution="fold-gutter"]',
+      );
+
+      expect(foldButton).toBeDefined();
+      expect(foldButton?.hidden).toBe(false);
+      expect(getComputedStyle(foldButton!).backgroundColor).toBe("rgb(12, 34, 56)");
     });
   },
 );
