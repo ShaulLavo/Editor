@@ -102,5 +102,45 @@ describe.skipIf(typeof globalThis.Highlight === "undefined")(
       expect(foldButton?.hidden).toBe(false);
       expect(getComputedStyle(foldButton!).backgroundColor).toBe("rgb(12, 34, 56)");
     });
+
+    it("keeps line numbers in the line gutter when hidden fold cells collapse", () => {
+      view?.dispose();
+      view = new VirtualizedTextView(container, {
+        rowHeight: 20,
+        overscan: 0,
+        gutterContributions: [createLineGutterContribution(), createFoldGutterContribution()],
+      });
+
+      const hiddenFoldStyle = document.createElement("style");
+      hiddenFoldStyle.textContent = ".editor-virtualized-fold-toggle[hidden] { display: none; }";
+      document.head.appendChild(hiddenFoldStyle);
+
+      view!.setText("alpha\nbeta\ngamma");
+      view!.setFoldMarkers([
+        {
+          key: "fold-0",
+          startOffset: 0,
+          endOffset: 10,
+          startRow: 0,
+          endRow: 1,
+          collapsed: false,
+        },
+      ]);
+      view!.setScrollMetrics(0, 80, 360);
+
+      const foldableLineNumber = container.querySelector<HTMLElement>(
+        '[data-editor-virtual-gutter-row="0"] [data-editor-gutter-contribution="line-gutter"]',
+      );
+      const plainLineNumber = container.querySelector<HTMLElement>(
+        '[data-editor-virtual-gutter-row="1"] [data-editor-gutter-contribution="line-gutter"]',
+      );
+
+      expect(foldableLineNumber).not.toBeNull();
+      expect(plainLineNumber).not.toBeNull();
+      expect(Math.round(plainLineNumber!.getBoundingClientRect().left)).toBe(
+        Math.round(foldableLineNumber!.getBoundingClientRect().left),
+      );
+      hiddenFoldStyle.remove();
+    });
   },
 );
