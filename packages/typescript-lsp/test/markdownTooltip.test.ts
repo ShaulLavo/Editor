@@ -1,0 +1,81 @@
+import { describe, expect, it } from "vitest";
+import { normalizeTooltipMarkdown, renderTooltipMarkdown } from "../src/markdownTooltip";
+
+describe("tooltip Markdown rendering", () => {
+  it("renders TypeScript fenced code blocks as pre/code", () => {
+    const element = renderTooltipMarkdown(document, "```ts\nconst value: string\n```");
+    const code = element.querySelector("pre > code");
+
+    expect(code?.textContent).toBe("const value: string");
+    expect(code?.getAttribute("data-language")).toBe("ts");
+    expect(code?.querySelector(".editor-typescript-lsp-hover-token-keyword")?.textContent).toBe(
+      "const",
+    );
+    expect(code?.querySelector(".editor-typescript-lsp-hover-token-punctuation")?.textContent).toBe(
+      ":",
+    );
+  });
+
+  it("keeps highlighted TypeScript code readable without forcing a tiny layout", () => {
+    const element = renderTooltipMarkdown(
+      document,
+      "```typescript\nconst veryLongValueName: Record<string, number>\n```",
+    );
+    const pre = element.querySelector("pre") as HTMLElement | null;
+    const code = element.querySelector("code") as HTMLElement | null;
+
+    expect(pre?.style.maxWidth).toBe("100%");
+    expect(code?.style.getPropertyValue("white-space")).toBe("pre-wrap");
+    expect(code?.style.overflowWrap).toBe("break-word");
+    expect(code?.textContent).toContain("veryLongValueName");
+  });
+
+  it("renders paragraphs, emphasis, strong text, and inline code", () => {
+    const element = renderTooltipMarkdown(
+      document,
+      "Use `value` with *care* and **strict** checks.",
+    );
+
+    expect(element.querySelector("p")?.textContent).toBe("Use value with care and strict checks.");
+    expect(element.querySelector("code")?.textContent).toBe("value");
+    expect(element.querySelector("em")?.textContent).toBe("care");
+    expect(element.querySelector("strong")?.textContent).toBe("strict");
+  });
+
+  it("renders GFM lists and tables", () => {
+    const element = renderTooltipMarkdown(
+      document,
+      ["- [x] done", "- [ ] todo", "", "| Name | Type |", "| --- | --- |", "| value | string |"].join(
+        "\n",
+      ),
+    );
+
+    expect(element.querySelectorAll("li")).toHaveLength(2);
+    expect(element.querySelectorAll("input[type='checkbox']")).toHaveLength(2);
+    expect(element.querySelector("table")?.textContent).toContain("valuestring");
+  });
+
+  it("renders safe links with noreferrer and a new tab target", () => {
+    const element = renderTooltipMarkdown(document, "[docs](https://example.com/path)");
+    const link = element.querySelector("a");
+
+    expect(link?.href).toBe("https://example.com/path");
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel).toBe("noreferrer");
+  });
+
+  it("does not create unsafe links or inject raw HTML", () => {
+    const element = renderTooltipMarkdown(
+      document,
+      '[bad](javascript:alert(1)) <img src=x onerror="alert(1)">',
+    );
+
+    expect(element.querySelector("a")).toBeNull();
+    expect(element.querySelector("img")).toBeNull();
+    expect(element.textContent).toContain('<img src=x onerror="alert(1)">');
+  });
+
+  it("normalizes Markdown with remark-stringify", () => {
+    expect(normalizeTooltipMarkdown("**value**").trim()).toBe("**value**");
+  });
+});

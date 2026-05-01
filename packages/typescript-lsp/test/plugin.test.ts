@@ -210,6 +210,7 @@ describe("createTypeScriptLspPlugin", () => {
 
     expect(document.body.textContent).toContain("const value: string");
     expect(document.body.textContent).toContain("bad assignment");
+    expect(tooltipElement().querySelector("pre > code")?.textContent).toBe("const value: string");
     expect(tooltipElement().style.getPropertyValue("position-anchor")).toMatch(
       /^--editor-typescript-lsp-hover-/,
     );

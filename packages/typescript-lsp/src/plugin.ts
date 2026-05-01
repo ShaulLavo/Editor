@@ -25,6 +25,7 @@ import {
   summarizeDiagnostics,
   type TypeScriptLspDiagnosticSeverity,
 } from "./diagnostics";
+import { renderTooltipMarkdown } from "./markdownTooltip";
 import { documentUriToFileName, isTypeScriptFileName, pathOrUriToDocumentUri } from "./paths";
 import type {
   TypeScriptLspDefinitionTarget,
@@ -75,6 +76,7 @@ const DEFAULT_DIAGNOSTIC_DELAY_MS = 150;
 const DEFAULT_TIMEOUT_MS = 15000;
 const HOVER_DELAY_MS = 250;
 const TOOLTIP_GAP_PX = 8;
+const TOOLTIP_VIEWPORT_MARGIN_PX = 12;
 let nextTooltipAnchorId = 0;
 const LINK_HIGHLIGHT_STYLE: VirtualizedTextHighlightStyle = {
   backgroundColor: "transparent",
@@ -757,17 +759,18 @@ function createTooltipElement(document: Document, names: TooltipAnchorNames): HT
   Object.assign(element.style, {
     position: "fixed",
     zIndex: "1000",
+    width: "max-content",
     maxWidth: "min(520px, calc(100vw - 24px))",
-    maxHeight: "min(360px, calc(100vh - 24px))",
-    overflow: "auto",
+    overflow: "visible",
     padding: "8px 10px",
     border: "1px solid rgba(82, 82, 91, 0.95)",
     borderRadius: "6px",
+    boxSizing: "border-box",
     background: "rgba(24, 24, 27, 0.98)",
     color: "#e4e4e7",
     boxShadow: "0 12px 34px rgba(0, 0, 0, 0.36)",
-    font: "12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-    whiteSpace: "pre-wrap",
+    font: "12px/1.45 system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+    whiteSpace: "normal",
     pointerEvents: "none",
   });
   applyCssAnchorPosition(element, names);
@@ -782,18 +785,14 @@ function renderTooltip(
   },
 ): void {
   element.replaceChildren();
-  if (content.hoverText) element.append(tooltipSection(element.ownerDocument, content.hoverText));
+  if (content.hoverText) {
+    element.append(renderTooltipMarkdown(element.ownerDocument, content.hoverText));
+  }
   if (content.diagnostics.length > 0) {
     element.append(diagnosticSection(element.ownerDocument, content.diagnostics));
   }
 
   element.hidden = false;
-}
-
-function tooltipSection(document: Document, text: string): HTMLElement {
-  const section = document.createElement("div");
-  section.textContent = text;
-  return section;
 }
 
 function diagnosticSection(
@@ -848,7 +847,8 @@ function applyCssAnchorPosition(element: HTMLDivElement, names: TooltipAnchorNam
 
 function placeTooltip(element: HTMLDivElement, anchor: DOMRect): void {
   const tooltipHeight = element.getBoundingClientRect().height;
-  const placement = anchor.top >= tooltipHeight + TOOLTIP_GAP_PX ? "top" : "bottom";
+  const topY = anchor.top - tooltipHeight - TOOLTIP_GAP_PX;
+  const placement = topY >= TOOLTIP_VIEWPORT_MARGIN_PX ? "top" : "bottom";
   applyTooltipPlacement(element, placement);
 }
 
@@ -863,7 +863,7 @@ function hoverText(hover: lsp.Hover | null): string | null {
 
   const text = hoverContentsText(hover.contents).trim();
   if (!text) return null;
-  return text.replace(/^```[a-z]*\n([\s\S]*?)\n```/i, "$1");
+  return text;
 }
 
 function hoverContentsText(contents: lsp.Hover["contents"]): string {
@@ -875,7 +875,7 @@ function hoverContentsText(contents: lsp.Hover["contents"]): string {
 
 function markedStringText(value: lsp.MarkedString): string {
   if (typeof value === "string") return value;
-  return value.value;
+  return ["```" + value.language, value.value, "```"].join("\n");
 }
 
 function hoverRangeOffsets(
