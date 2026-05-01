@@ -929,14 +929,25 @@ function scanVisualColumns(
 function applyContentWidth(view: VirtualizedTextViewInternal, visualColumns: number): void {
   const charWidth = characterWidth(view);
   const width = Math.ceil(Math.max(charWidth, visualColumns * charWidth));
-  if (width === view.contentWidth) return;
+  if (width !== view.contentWidth) view.contentWidth = width;
 
-  view.contentWidth = width;
   applySpacerWidth(view);
 }
 
 function applySpacerWidth(view: VirtualizedTextViewInternal): void {
-  view.spacer.style.width = `${view.contentWidth + gutterWidth(view)}px`;
+  const width = `${spacerWidth(view)}px`;
+  if (view.spacer.style.width === width) return;
+
+  view.spacer.style.width = width;
+}
+
+export function updateSpacerWidth(view: VirtualizedTextViewInternal): void {
+  applySpacerWidth(view);
+}
+
+function spacerWidth(view: VirtualizedTextViewInternal): number {
+  const viewportWidth = view.virtualizer.getSnapshot().viewportWidth;
+  return Math.max(viewportWidth, view.contentWidth + gutterWidth(view));
 }
 
 export function applyRowHeight(view: VirtualizedTextViewInternal, rowHeight: number): void {

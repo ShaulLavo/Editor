@@ -322,6 +322,16 @@ describe("VirtualizedTextView", () => {
     expect(spacer.style.width).toBe("122px");
   });
 
+  it("keeps the spacer at least as wide as the viewport", () => {
+    view.setText("short");
+    view.setScrollMetrics(0, 20, 320);
+
+    const spacer = container.querySelector(".editor-virtualized-spacer") as HTMLElement;
+
+    expect(view.getState().contentWidth).toBeLessThan(320);
+    expect(spacer.style.width).toBe("320px");
+  });
+
   it("uses custom tab size for width, caret, and hidden tab markers", () => {
     view.dispose();
     view = new VirtualizedTextView(container, {

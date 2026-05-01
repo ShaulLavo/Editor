@@ -83,6 +83,7 @@ import {
   updateContentWidth,
   updateGutterWidthIfNeeded,
   updateMountedRowsAfterSameLineEdit,
+  updateSpacerWidth,
   viewportPointMetrics,
 } from "./virtualizedTextViewRows";
 import type {
@@ -574,6 +575,7 @@ export class VirtualizedTextView {
   private renderSnapshot(snapshot: FixedRowVirtualizerSnapshot): void {
     const view = this.view;
     updateGutterWidthIfNeeded(view);
+    updateSpacerWidth(view);
     const key = rowsKey(view, snapshot);
     if (key === view.lastRenderedRowsKey) return;
 
