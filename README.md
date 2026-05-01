@@ -12,6 +12,7 @@ cached, or synchronized.
 The package surface is meant to be installed, embedded, and extended. The core editor exposes
 plugins for gutters, view contributions, syntax/language registration, highlighters, themes,
 commands, and editor features. The app in `examples/app` is a demo integration of those packages,
+not the product boundary.
 
 ## Status
 
