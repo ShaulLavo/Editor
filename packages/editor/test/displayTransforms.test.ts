@@ -28,6 +28,28 @@ describe("display transform core", () => {
     expect(tabPointToBufferPoint(text, tabPoint)).toEqual({ row: 2, column: 3 });
   });
 
+  it("uses custom tab sizes in visual column conversion and wrapping", () => {
+    const text = "\tab\tc";
+
+    expect(bufferColumnToVisualColumn(text, 1, 2)).toBe(2);
+    expect(bufferColumnToVisualColumn(text, 3, 2)).toBe(4);
+    expect(visualColumnToBufferColumn(text, 3, "nearest", 2)).toBe(2);
+
+    const rows = createDisplayRows({
+      text: "\tabcd",
+      lineStarts: [0],
+      visibleLineCount: 1,
+      bufferRowForVisibleRow: (row) => row,
+      wrapColumn: 3,
+      tabSize: 2,
+    });
+
+    expect(rows.filter((row) => row.kind === "text").map((row) => row.text)).toEqual([
+      "\ta",
+      "bcd",
+    ]);
+  });
+
   it("maps wrapped rows between tab and wrap coordinates", () => {
     const map = createWrapMap([{ row: 0, text: "abcdefghij" }], 4);
 

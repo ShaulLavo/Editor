@@ -32,7 +32,7 @@
   font-size: 13px;
   font-family: monospace;
   white-space: pre;
-  tab-size: 4;
+  tab-size: var(--editor-tab-size, 4);
   color: var(--editor-foreground);
   background: var(--editor-background);
   margin: 0;
@@ -80,7 +80,7 @@
   font-size: 13px;
   font-family: monospace;
   white-space: pre;
-  tab-size: 4;
+  tab-size: var(--editor-tab-size, 4);
   color: var(--editor-foreground);
   background: var(--editor-background);
 }

@@ -31,6 +31,7 @@ export type VirtualizedTextViewOptions = {
   readonly gutterContributions?: readonly EditorGutterContribution[];
   readonly cursorLineHighlight?: EditorCursorLineHighlightOptions;
   readonly hiddenCharacters?: HiddenCharactersMode;
+  readonly tabSize?: number;
 };
 
 export type HiddenCharactersMode = "hidden" | "show" | "show-on-selection";
@@ -100,6 +101,7 @@ export type VirtualizedTextViewState = {
   readonly mountedRows: readonly VirtualizedTextRow[];
   readonly wrapActive: boolean;
   readonly blockRowCount: number;
+  readonly tabSize: number;
 };
 
 export type NativeGeometryValidation = {

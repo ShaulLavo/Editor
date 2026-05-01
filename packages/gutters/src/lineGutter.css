@@ -7,7 +7,7 @@
   line-height: inherit;
   padding-left: 2px;
   padding-right: 4px;
-  tab-size: 4;
+  tab-size: var(--editor-tab-size, 4);
 }
 
 .editor-virtualized-line-number::before {

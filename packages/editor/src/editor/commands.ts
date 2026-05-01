@@ -19,6 +19,8 @@ export type EditorCommandId =
   | "clearSecondarySelections"
   | "deleteBackward"
   | "deleteForward"
+  | "indentSelection"
+  | "outdentSelection"
   | "cursorLeft"
   | "cursorRight"
   | "cursorUp"

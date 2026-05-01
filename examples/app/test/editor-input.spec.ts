@@ -164,6 +164,37 @@ test("routes native line break input at a placed caret", async ({ page }) => {
     .toContain("beforeinput:insertLineBreak:");
 });
 
+test("keeps focus and inserts a tab when Tab is pressed", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(async (entry) => {
+    const { Editor } = await import(entry);
+    const app = document.querySelector("#app");
+    if (!app) throw new Error("Missing app root");
+
+    app.innerHTML = [
+      '<button id="before">Before</button>',
+      '<div id="host" style="display:flex;height:300px;width:700px"></div>',
+      '<button id="after">After</button>',
+    ].join("");
+    const host = document.querySelector("#host");
+    if (!(host instanceof HTMLElement)) throw new Error("Missing editor host");
+
+    const editor = new Editor(host);
+    editor.openDocument({ documentId: "note.txt", text: "abc" });
+    (window as TestWindow).__editor = editor;
+  }, coreEntry);
+
+  await page.locator(".editor-virtualized").click({ position: { x: 80, y: 10 } });
+  await expect(page.locator(".editor-virtualized-input")).toBeFocused();
+
+  await page.keyboard.press("Tab");
+
+  await expect(page.locator(".editor-virtualized-input")).toBeFocused();
+  await expect
+    .poll(() => page.evaluate(() => (window as TestWindow).__editor?.getText()))
+    .toBe("abc\t");
+});
+
 test("focuses the editor for typing after loading a GitHub source file", async ({ page }) => {
   await mockGitHubSource(page, "README.md", "abc");
   await page.goto("/");

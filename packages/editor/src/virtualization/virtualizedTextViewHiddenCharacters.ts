@@ -1,4 +1,4 @@
-import { DEFAULT_TAB_SIZE, visualColumnLength } from "../displayTransforms";
+import { visualColumnLength } from "../displayTransforms";
 import { setStyleValue } from "./virtualizedTextViewHelpers";
 import type {
   VirtualizedStoredSelection,
@@ -79,11 +79,11 @@ function appendHiddenCharacterMarkersForChunk(
   chunk: VirtualizedTextChunk,
 ): void {
   const charWidth = hiddenCharacterCellWidth(view);
-  let visualColumn = visualColumnLength(row.text.slice(0, chunk.localStart), DEFAULT_TAB_SIZE);
+  let visualColumn = visualColumnLength(row.text.slice(0, chunk.localStart), view.tabSize);
 
   for (let index = chunk.localStart; index < chunk.localEnd; index += 1) {
     const char = row.text[index]!;
-    const widthColumns = hiddenCharacterVisualWidth(char, visualColumn);
+    const widthColumns = hiddenCharacterVisualWidth(char, visualColumn, view.tabSize);
     appendHiddenCharacterMarker(
       markers,
       view,
@@ -128,9 +128,9 @@ function hiddenCharacterKind(char: string): HiddenCharacterKind | null {
   return null;
 }
 
-function hiddenCharacterVisualWidth(char: string, visualColumn: number): number {
+function hiddenCharacterVisualWidth(char: string, visualColumn: number, tabSize: number): number {
   if (char !== "\t") return 1;
-  return DEFAULT_TAB_SIZE - (visualColumn % DEFAULT_TAB_SIZE);
+  return tabSize - (visualColumn % tabSize);
 }
 
 function hiddenCharacterCellWidth(view: VirtualizedTextViewInternal): number {

@@ -1,6 +1,5 @@
 import { bufferPointToFoldPoint, foldPointToBufferPoint, type FoldMap } from "../foldMap";
 import {
-  DEFAULT_TAB_SIZE,
   bufferColumnToVisualColumn,
   createDisplayRows,
   visualColumnToBufferColumn,
@@ -81,7 +80,7 @@ export function rebuildDisplayRows(
     bufferRowForVisibleRow: (row) => foldBufferRowForVisibleRow(view, row),
     wrapColumn: view.currentWrapColumn,
     blocks: view.blockRows,
-    tabSize: DEFAULT_TAB_SIZE,
+    tabSize: view.tabSize,
   });
 }
 
@@ -181,7 +180,7 @@ export function visualColumnForOffset(view: VirtualizedTextViewInternal, offset:
   if (!displayRow || displayRow.kind === "block") return 0;
 
   const localOffset = clamp(offset - displayRow.startOffset, 0, displayRow.text.length);
-  return bufferColumnToVisualColumn(displayRow.text, localOffset, DEFAULT_TAB_SIZE);
+  return bufferColumnToVisualColumn(displayRow.text, localOffset, view.tabSize);
 }
 
 export function offsetForViewportColumn(
@@ -197,7 +196,7 @@ export function offsetForViewportColumn(
     displayRow.text,
     visualColumn,
     "nearest",
-    DEFAULT_TAB_SIZE,
+    view.tabSize,
   );
   return displayRow.startOffset + clamp(bufferColumn, 0, displayRow.text.length);
 }

@@ -4,8 +4,10 @@ import {
   createAnchorSelection,
   createSelectionSet,
   deleteSelections,
+  indentSelections,
   markSelectionSetDirty,
   normalizeSelectionSet,
+  outdentSelections,
   type AnchorSelection,
   type SelectionGoal,
   type SelectionSet,
@@ -44,6 +46,8 @@ export type DocumentSessionChange = {
 
 export type DocumentSession = {
   applyText(text: string): DocumentSessionChange;
+  indentSelection(text: string): DocumentSessionChange;
+  outdentSelection(tabSize: number): DocumentSessionChange;
   applyEdits(
     edits: readonly TextEdit[],
     options?: DocumentSessionApplyEditsOptions,
@@ -126,6 +130,26 @@ class PieceTableDocumentSession implements DocumentSession {
     return appendTiming(
       this.commitEdit(result.snapshot, result.selections, result.edits),
       "session.applyText",
+      start,
+    );
+  }
+
+  public indentSelection(text: string): DocumentSessionChange {
+    const start = nowMs();
+    const result = indentSelections(this.history.current, this.history.selections, text);
+    return appendTiming(
+      this.commitEdit(result.snapshot, result.selections, result.edits),
+      "session.indentSelection",
+      start,
+    );
+  }
+
+  public outdentSelection(tabSize: number): DocumentSessionChange {
+    const start = nowMs();
+    const result = outdentSelections(this.history.current, this.history.selections, tabSize);
+    return appendTiming(
+      this.commitEdit(result.snapshot, result.selections, result.edits),
+      "session.outdentSelection",
       start,
     );
   }

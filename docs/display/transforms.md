@@ -85,7 +85,7 @@ second validation layer instead of collapsing immediately to a monolithic mapper
 
 ### Implemented after FoldMap
 
-- Tab expansion uses fixed `tab-size: 4` math shared with the renderer.
+- Tab expansion uses configurable `tabSize` math shared with the renderer.
 - Wrapping is represented as transform-produced display rows using monospace measured columns.
 - Block rows are internal transform primitives that occupy row units without creating buffer text.
 - The virtualizer consumes transform-produced rows and supports variable row sizes for block rows.

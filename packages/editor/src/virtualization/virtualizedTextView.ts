@@ -1,5 +1,5 @@
 import type { FoldMap } from "../foldMap";
-import type { BlockRow } from "../displayTransforms";
+import { normalizeTabSize, type BlockRow } from "../displayTransforms";
 import type { EditorTheme } from "../theme";
 import type { EditorToken, TextEdit } from "../tokens";
 import { applyEditorTheme } from "../theme";
@@ -145,6 +145,7 @@ export class VirtualizedTextView {
       options.longLineChunkThreshold,
       longLineChunkSize,
     );
+    const tabSize = normalizeTabSize(options.tabSize);
     const virtualizer = new FixedRowVirtualizer(createVirtualizerOptions(rowHeight, overscan));
 
     this.scrollElement = scrollElement;
@@ -189,6 +190,7 @@ export class VirtualizedTextView {
       blockRows: options.blockRows ?? [],
       wrapEnabled: options.wrap ?? false,
       currentWrapColumn: null,
+      tabSize,
       tokenGroups: new Map(),
       rowTokenSignatures: new Map(),
       rowTokenRanges: new Map(),
@@ -212,6 +214,7 @@ export class VirtualizedTextView {
     };
 
     scrollElement.style.setProperty("--editor-gutter-width", "0px");
+    scrollElement.style.setProperty("--editor-tab-size", String(tabSize));
     applyRowHeight(this.view, rowHeight);
     spacer.className = "editor-virtualized-spacer";
     gutterElement.className = "editor-virtualized-gutter";
@@ -474,6 +477,7 @@ export class VirtualizedTextView {
       mountedRows: getMountedRows(view),
       wrapActive: view.wrapEnabled,
       blockRowCount: view.blockRows.length,
+      tabSize: view.tabSize,
     };
   }
 

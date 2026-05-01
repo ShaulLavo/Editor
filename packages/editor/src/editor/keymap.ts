@@ -96,6 +96,8 @@ function editingBindings(platform: EditorPlatform): readonly EditorKeyBinding[] 
   return [
     { hotkey: key("Backspace"), command: "deleteBackward" },
     { hotkey: key("Delete"), command: "deleteForward" },
+    { hotkey: key("Tab"), command: "indentSelection" },
+    { hotkey: key("Tab", { shift: true }), command: "outdentSelection" },
     { hotkey: key("Escape"), command: "closeFind" },
     { hotkey: key("A", { mod: true }), command: "selectAll" },
     { hotkey: key("D", { mod: true }), command: "addNextOccurrence" },

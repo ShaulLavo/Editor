@@ -322,6 +322,55 @@ describe("VirtualizedTextView", () => {
     expect(spacer.style.width).toBe("122px");
   });
 
+  it("uses custom tab size for width, caret, and hidden tab markers", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 0,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      hiddenCharacters: "show",
+      tabSize: 2,
+    });
+    view.setText("\tX");
+    view.setScrollMetrics(0, 20);
+
+    const charWidth = view.getState().metrics.characterWidth;
+    const marker = container.querySelector('[data-editor-hidden-character="tab"]') as HTMLElement;
+
+    view.setSelection(1, 1);
+
+    expect(view.scrollElement.style.getPropertyValue("--editor-tab-size")).toBe("2");
+    expect(view.getState()).toMatchObject({ contentWidth: 3 * charWidth, tabSize: 2 });
+    expect(marker.style.width).toBe(`${2 * charWidth}px`);
+    expect(container.querySelector(".editor-virtualized-caret")?.getAttribute("style")).toContain(
+      `translate(${2 * charWidth}px, 0px)`,
+    );
+    expect(view.offsetByDisplayRows(1, 0, 1)).toBe(0);
+    expect(view.offsetByDisplayRows(1, 0, 2)).toBe(1);
+  });
+
+  it("positions long-line chunks with visual tab columns", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 0,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      horizontalOverscanColumns: 0,
+      longLineChunkSize: 2,
+      longLineChunkThreshold: 2,
+      tabSize: 4,
+    });
+    view.setText("ab\tcdef");
+    view.setScrollMetrics(0, 20, 16, 32);
+
+    const charWidth = view.getState().metrics.characterWidth;
+    const spacer = container.querySelector(".editor-virtualized-row-spacer") as HTMLElement;
+
+    expect(spacer.style.width).toBe(`${2 * charWidth}px`);
+  });
+
   it("updates mounted rows when scrolling", () => {
     view.setText(createLines(200));
     view.setScrollMetrics(2_000, 60);

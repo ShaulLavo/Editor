@@ -44,6 +44,7 @@ import type {
 } from "./types";
 import { EditorViewContributionController } from "./viewContributions";
 import type { FoldMap } from "../foldMap";
+import { normalizeTabSize } from "../displayTransforms";
 import { offsetToPoint } from "../pieceTable/positions";
 import { getPieceTableText } from "../pieceTable/reads";
 import {
@@ -145,9 +146,11 @@ export class Editor {
   private mouseSelectionAutoScrollFrame = 0;
   private useSessionSelectionForNextInput = false;
   private nativeInputGeneration = 0;
+  private readonly tabSize: number;
 
   constructor(container: HTMLElement, options: EditorOptions = {}) {
     this.options = options;
+    this.tabSize = normalizeTabSize(options.tabSize);
     this.configuredTheme = options.theme ?? null;
     this.pluginHost = new EditorPluginHost(options.plugins);
     this.highlightPrefix = nextEditorHighlightPrefix();
@@ -157,6 +160,7 @@ export class Editor {
       gutterContributions: [...this.pluginHost.getGutterContributions()],
       cursorLineHighlight: options.cursorLineHighlight,
       hiddenCharacters: options.hiddenCharacters,
+      tabSize: this.tabSize,
       onFoldToggle: this.handleFoldToggle,
       onViewportChange: this.handleViewportChange,
       selectionHighlightName: `${this.highlightPrefix}-selection`,
@@ -365,6 +369,8 @@ export class Editor {
     if (command === "clearSecondarySelections") return this.applyClearSecondarySelections(context);
     if (command === "deleteBackward") return this.applyDeleteCommand("backward", context);
     if (command === "deleteForward") return this.applyDeleteCommand("forward", context);
+    if (command === "indentSelection") return this.applyIndentCommand("indent", context);
+    if (command === "outdentSelection") return this.applyIndentCommand("outdent", context);
     return this.applyNavigationCommand(command, context);
   }
 
@@ -1046,6 +1052,39 @@ export class Editor {
     return true;
   }
 
+  private applyIndentCommand(
+    direction: "indent" | "outdent",
+    context: EditorCommandContext,
+  ): boolean {
+    if (!this.session) return false;
+
+    const start = context.event ? eventStartMs(context.event) : nowMs();
+    const selectionChange = this.selectionChangeBeforeEdit();
+    const change =
+      direction === "indent"
+        ? this.applyIndentToSession()
+        : this.session.outdentSelection(this.tabSize);
+    const merged = mergeChangeTimings(change, selectionChange);
+    this.applySessionChange(merged, indentTimingName(direction), start, {
+      revealOffset: this.primarySelectionHeadOffset(merged),
+    });
+    return true;
+  }
+
+  private applyIndentToSession(): DocumentSessionChange {
+    if (!this.session) throw new Error("missing editor session");
+    if (this.shouldInsertLiteralTab()) return this.session.applyText("\t");
+    return this.session.indentSelection("\t");
+  }
+
+  private shouldInsertLiteralTab(): boolean {
+    if (!this.session) return false;
+
+    const snapshot = this.session.getSnapshot();
+    const selections = this.session.getSelections().selections;
+    return selections.every((selection) => resolveSelection(snapshot, selection).collapsed);
+  }
+
   private applySelectAllCommand(context: EditorCommandContext): boolean {
     if (!this.session) return false;
 
@@ -1605,6 +1644,10 @@ function viewContributionKindForChange(
 ): EditorViewContributionUpdateKind {
   if (change.kind === "selection") return "selection";
   return "content";
+}
+
+function indentTimingName(direction: "indent" | "outdent"): string {
+  return direction === "indent" ? "input.indent" : "input.outdent";
 }
 
 type ExactOccurrenceRange = {

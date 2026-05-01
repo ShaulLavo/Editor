@@ -7,7 +7,9 @@ import type {
 } from "./pieceTable/pieceTableTypes";
 import { anchorAt, resolveAnchor } from "./pieceTable/anchors";
 import { applyBatchToPieceTable } from "./pieceTable/edits";
+import { offsetToPoint, pointToOffset } from "./pieceTable/positions";
 import { getPieceTableText } from "./pieceTable/reads";
+import { normalizeTabSize } from "./displayTransforms";
 
 export type SelectionGoal =
   | { readonly kind: "none" }
@@ -334,6 +336,56 @@ export const applyTextToSelections = (
   };
 };
 
+export const indentSelections = (
+  snapshot: PieceTableSnapshot,
+  set: SelectionSet<PieceTableAnchor>,
+  text: string,
+): SelectionEditResult => {
+  if (text.length === 0) return emptySelectionEdit(snapshot, set);
+
+  const selections = resolvedSelectionsToRanges(snapshot, set);
+  const rows = touchedRowsForSelections(snapshot, selections);
+  const edits = rows.map((row) =>
+    rangeToEdit({ start: lineStart(snapshot, row), end: lineStart(snapshot, row) }, text),
+  );
+  const nextSnapshot = applyBatchToPieceTable(snapshot, edits);
+
+  return {
+    snapshot: nextSnapshot,
+    selections: createSelectionSet(
+      selections.map((selection) => indentSelectionAfterEdits(nextSnapshot, selection, edits)),
+      true,
+      nextSnapshot,
+    ),
+    edits,
+  };
+};
+
+export const outdentSelections = (
+  snapshot: PieceTableSnapshot,
+  set: SelectionSet<PieceTableAnchor>,
+  tabSize: number,
+): SelectionEditResult => {
+  const normalizedTabSize = normalizeTabSize(tabSize);
+  const selections = resolvedSelectionsToRanges(snapshot, set);
+  const rows = touchedRowsForSelections(snapshot, selections);
+  const edits = rows
+    .map((row) => outdentEditForRow(snapshot, row, normalizedTabSize))
+    .filter((edit): edit is PieceTableEdit => edit !== null);
+  if (edits.length === 0) return emptySelectionEdit(snapshot, set);
+
+  const nextSnapshot = applyBatchToPieceTable(snapshot, edits);
+  return {
+    snapshot: nextSnapshot,
+    selections: createSelectionSet(
+      selections.map((selection) => outdentSelectionAfterEdits(nextSnapshot, selection, edits)),
+      true,
+      nextSnapshot,
+    ),
+    edits,
+  };
+};
+
 export const deleteSelections = (
   snapshot: PieceTableSnapshot,
   set: SelectionSet<PieceTableAnchor>,
@@ -377,6 +429,123 @@ const previousCodePointOffset = (snapshot: PieceTableSnapshot, offset: number): 
 
   return offset - 1;
 };
+
+const emptySelectionEdit = (
+  snapshot: PieceTableSnapshot,
+  set: SelectionSet<PieceTableAnchor>,
+): SelectionEditResult => ({
+  snapshot,
+  selections: normalizeSelectionSet(snapshot, set),
+  edits: [],
+});
+
+const touchedRowsForSelections = (
+  snapshot: PieceTableSnapshot,
+  selections: readonly ResolvedSelection[],
+): number[] => {
+  const rows = new Set<number>();
+  for (const selection of selections) {
+    for (
+      let row = firstTouchedRow(snapshot, selection);
+      row <= lastTouchedRow(snapshot, selection);
+      row += 1
+    ) {
+      rows.add(row);
+    }
+  }
+
+  return [...rows].toSorted((left, right) => left - right);
+};
+
+const firstTouchedRow = (snapshot: PieceTableSnapshot, selection: ResolvedSelection): number =>
+  offsetToPoint(snapshot, selection.startOffset).row;
+
+const lastTouchedRow = (snapshot: PieceTableSnapshot, selection: ResolvedSelection): number => {
+  const end = offsetToPoint(snapshot, selection.endOffset);
+  if (selection.collapsed) return end.row;
+  if (end.column !== 0) return end.row;
+  return Math.max(firstTouchedRow(snapshot, selection), end.row - 1);
+};
+
+const lineStart = (snapshot: PieceTableSnapshot, row: number): number =>
+  pointToOffset(snapshot, { row, column: 0 });
+
+const lineEnd = (snapshot: PieceTableSnapshot, row: number): number =>
+  pointToOffset(snapshot, { row, column: Number.MAX_SAFE_INTEGER });
+
+const outdentEditForRow = (
+  snapshot: PieceTableSnapshot,
+  row: number,
+  tabSize: number,
+): PieceTableEdit | null => {
+  const start = lineStart(snapshot, row);
+  const end = lineEnd(snapshot, row);
+  if (start >= end) return null;
+
+  const prefix = getPieceTableText(snapshot, start, Math.min(end, start + tabSize));
+  const length = outdentLength(prefix, tabSize);
+  if (length === 0) return null;
+  return rangeToEdit({ start, end: start + length }, "");
+};
+
+const outdentLength = (text: string, tabSize: number): number => {
+  if (text[0] === "\t") return 1;
+
+  let spaces = 0;
+  while (spaces < text.length && spaces < tabSize && text[spaces] === " ") spaces += 1;
+  return spaces;
+};
+
+const indentSelectionAfterEdits = (
+  snapshot: PieceTableSnapshot,
+  selection: ResolvedSelection,
+  edits: readonly PieceTableEdit[],
+): AnchorSelection =>
+  createAnchorSelection(
+    snapshot,
+    indentOffsetAfterEdits(selection.anchorOffset, edits),
+    indentOffsetAfterEdits(selection.headOffset, edits),
+    selectionOptions(selection),
+  );
+
+const indentOffsetAfterEdits = (offset: number, edits: readonly PieceTableEdit[]): number => {
+  let delta = 0;
+  for (const edit of edits) {
+    if (edit.from >= offset) continue;
+    delta += edit.text.length;
+  }
+
+  return offset + delta;
+};
+
+const outdentSelectionAfterEdits = (
+  snapshot: PieceTableSnapshot,
+  selection: ResolvedSelection,
+  edits: readonly PieceTableEdit[],
+): AnchorSelection =>
+  createAnchorSelection(
+    snapshot,
+    outdentOffsetAfterEdits(selection.anchorOffset, edits),
+    outdentOffsetAfterEdits(selection.headOffset, edits),
+    selectionOptions(selection),
+  );
+
+const outdentOffsetAfterEdits = (offset: number, edits: readonly PieceTableEdit[]): number => {
+  let delta = 0;
+  for (const edit of edits) {
+    if (offset <= edit.from) break;
+    if (offset < edit.to) return edit.from + delta;
+    delta -= edit.to - edit.from;
+  }
+
+  return offset + delta;
+};
+
+const selectionOptions = (selection: ResolvedSelection): CreateAnchorSelectionOptions => ({
+  id: selection.id,
+  goal: selection.goal,
+  reversed: selection.reversed,
+});
 
 const backspaceRangeForSelection = (
   snapshot: PieceTableSnapshot,

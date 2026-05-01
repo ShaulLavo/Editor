@@ -100,6 +100,12 @@ export type WrapMap = {
 
 export const DEFAULT_TAB_SIZE = 4;
 
+export function normalizeTabSize(tabSize: number | undefined): number {
+  if (tabSize === undefined) return DEFAULT_TAB_SIZE;
+  if (!Number.isFinite(tabSize) || tabSize <= 0) return DEFAULT_TAB_SIZE;
+  return Math.max(1, Math.floor(tabSize));
+}
+
 export function bufferColumnToVisualColumn(
   text: string,
   column: number,

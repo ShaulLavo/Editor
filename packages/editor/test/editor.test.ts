@@ -979,6 +979,44 @@ describe("Editor", () => {
       expect(editor.getText()).toBe("abc ");
     });
 
+    it("inserts a literal tab at collapsed selections", () => {
+      const session = createDocumentSession("abc");
+      editor.attachSession(session);
+
+      const event = dispatchEditorKey("Tab");
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(session.getText()).toBe("abc\t");
+      expect(editor.getText()).toBe("abc\t");
+    });
+
+    it("indents selected lines with Tab and keeps the edit undoable", () => {
+      const session = createDocumentSession("a\nb\nc");
+      session.setSelection(0, 3);
+      editor.attachSession(session);
+
+      dispatchEditorKey("Tab");
+
+      expect(session.getText()).toBe("\ta\n\tb\nc");
+
+      dispatchEditorKey("z", primaryModifier());
+
+      expect(session.getText()).toBe("a\nb\nc");
+    });
+
+    it("outdents selected lines with Shift+Tab using the configured tab size", () => {
+      editor.dispose();
+      editor = new Editor(container, { tabSize: 2 });
+      const session = createDocumentSession("  a\n\tb\nc");
+      session.setSelection(0, 6);
+      editor.attachSession(session);
+
+      const event = dispatchEditorKey("Tab", { shiftKey: true });
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(session.getText()).toBe("a\nb\nc");
+    });
+
     it("falls back to keydown line breaks when native beforeinput never arrives", async () => {
       const session = createDocumentSession("abc");
       editor.attachSession(session);

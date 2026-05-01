@@ -97,6 +97,7 @@ export interface VirtualizedTextViewInternal {
   blockRows: readonly BlockRow[];
   wrapEnabled: boolean;
   currentWrapColumn: number | null;
+  tabSize: number;
   tokenGroups: Map<string, TokenGroup>;
   rowTokenSignatures: Map<number, string>;
   rowTokenRanges: Map<number, Map<string, readonly AbstractRange[]>>;

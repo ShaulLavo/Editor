@@ -59,6 +59,7 @@ export type EditorOptions = {
   readonly keymap?: EditorKeymapOptions;
   readonly cursorLineHighlight?: EditorCursorLineHighlightOptions;
   readonly hiddenCharacters?: HiddenCharactersMode;
+  readonly tabSize?: number;
 };
 
 export type EditorSetTextOptions = {

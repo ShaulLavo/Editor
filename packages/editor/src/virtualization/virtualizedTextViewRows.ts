@@ -1,7 +1,7 @@
 import {
-  DEFAULT_TAB_SIZE,
   bufferColumnToVisualColumn,
   visualColumnLength,
+  visualColumnToBufferColumn,
 } from "../displayTransforms";
 import { clamp } from "../style-utils";
 import type {
@@ -413,12 +413,14 @@ function setChunkedRowText(
   startOffset: number,
   snapshot: FixedRowVirtualizerSnapshot,
 ): void {
-  const window = horizontalChunkWindow(view, text.length, snapshot);
+  const window = horizontalChunkWindow(view, text, snapshot);
   const chunks = createRowChunks(view, text, window, startOffset);
   const elements = chunks
     .map((chunk) => chunk.element)
     .filter((element): element is HTMLSpanElement => element !== null);
-  row.leftSpacerElement.style.width = `${Math.round(window.start * characterWidth(view))}px`;
+  row.leftSpacerElement.style.width = `${Math.round(
+    visualColumnLength(text.slice(0, window.start), view.tabSize) * characterWidth(view),
+  )}px`;
   row.element.replaceChildren(row.leftSpacerElement, ...elements);
   updateMutableRowChunks(row, chunks);
 }
@@ -482,13 +484,13 @@ function rowChunkKey(
 ): string {
   if (!shouldChunkLine(view, text)) return "direct";
 
-  const window = horizontalChunkWindow(view, text.length, snapshot);
+  const window = horizontalChunkWindow(view, text, snapshot);
   return `${window.start}:${window.end}:${snapshot.viewportWidth}:${snapshot.scrollLeft}`;
 }
 
 export function horizontalChunkWindow(
   view: VirtualizedTextViewInternal,
-  textLength: number,
+  text: string,
   snapshot = view.virtualizer.getSnapshot(),
 ): HorizontalChunkWindow {
   const viewportColumns = horizontalViewportColumns(view, snapshot.viewportWidth);
@@ -496,16 +498,14 @@ export function horizontalChunkWindow(
     0,
     Math.floor(horizontalTextScrollLeft(view, snapshot.scrollLeft) / characterWidth(view)),
   );
-  const start = alignChunkStart(
-    Math.max(0, leftColumn - view.horizontalOverscanColumns),
-    view.longLineChunkSize,
-  );
-  const end = alignChunkEnd(
-    Math.min(textLength, leftColumn + viewportColumns + view.horizontalOverscanColumns),
-    view.longLineChunkSize,
-  );
+  const startColumn = Math.max(0, leftColumn - view.horizontalOverscanColumns);
+  const endColumn = leftColumn + viewportColumns + view.horizontalOverscanColumns;
+  const startBufferColumn = visualColumnToBufferColumn(text, startColumn, "before", view.tabSize);
+  const endBufferColumn = visualColumnToBufferColumn(text, endColumn, "after", view.tabSize);
+  const start = alignChunkStart(startBufferColumn, view.longLineChunkSize);
+  const end = alignChunkEnd(Math.min(text.length, endBufferColumn), view.longLineChunkSize);
 
-  return { start, end: clamp(end, start, textLength) };
+  return { start, end: clamp(end, start, text.length) };
 }
 
 export function horizontalViewportColumns(
@@ -921,7 +921,7 @@ function scanVisualColumns(
   for (let row = startIndex; row <= endIndex; row += 1) {
     view.maxVisualColumnsSeen = Math.max(
       view.maxVisualColumnsSeen,
-      visualColumnLength(lineText(view, row), DEFAULT_TAB_SIZE),
+      visualColumnLength(lineText(view, row), view.tabSize),
     );
   }
 }
@@ -1023,7 +1023,9 @@ function scrollHorizontallyToOffset(
 
   const snapshot = view.virtualizer.getSnapshot();
   const localOffset = clamp(offset - lineStartOffset(view, row), 0, text.length);
-  const targetLeft = gutterWidth(view) + localOffset * characterWidth(view);
+  const targetLeft =
+    gutterWidth(view) +
+    bufferColumnToVisualColumn(text, localOffset, view.tabSize) * characterWidth(view);
   const viewportRight = snapshot.scrollLeft + snapshot.viewportWidth;
   if (targetLeft >= snapshot.scrollLeft && targetLeft <= viewportRight) return;
 
@@ -1122,7 +1124,7 @@ function scrollLeftForVisibleOffset(
   const localOffset = clamp(offset - lineStartOffset(view, row), 0, text.length);
   const caretLeft =
     gutterWidth(view) +
-    bufferColumnToVisualColumn(text, localOffset, DEFAULT_TAB_SIZE) * characterWidth(view);
+    bufferColumnToVisualColumn(text, localOffset, view.tabSize) * characterWidth(view);
   const viewportLeft = snapshot.scrollLeft + gutterWidth(view);
   const viewportRight = snapshot.scrollLeft + snapshot.viewportWidth;
   if (caretLeft < viewportLeft) return Math.max(0, caretLeft - gutterWidth(view));
@@ -1215,8 +1217,7 @@ export function caretPosition(
 
   const columnText = view.text.slice(row.startOffset, offset);
   return {
-    left:
-      gutterWidth(view) + visualColumnLength(columnText, DEFAULT_TAB_SIZE) * characterWidth(view),
+    left: gutterWidth(view) + visualColumnLength(columnText, view.tabSize) * characterWidth(view),
     top: row.top,
     height: row.height,
   };
