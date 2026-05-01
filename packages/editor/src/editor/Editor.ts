@@ -17,7 +17,7 @@ import { appendTiming, eventStartMs, mergeChangeTimings, nowMs } from "./timing"
 import { copyTokenProjectionMetadata, projectTokensThroughEdit } from "./tokenProjection";
 import type { EditorCommandContext, EditorCommandId } from "./commands";
 import { normalizeEditorEditInput } from "./editInput";
-import { navigationTargetForCommand, type NavigationTarget } from "./navigationTargets";
+import { navigationTargetForCommand } from "./navigationTargets";
 import {
   getEditorSyntaxSessionFactory,
   getHighlightRegistry,
@@ -48,10 +48,15 @@ import { offsetToPoint } from "../pieceTable/positions";
 import { getPieceTableText } from "../pieceTable/reads";
 import {
   EditorPluginHost,
+  type EditorCommandHandler,
+  type EditorDisposable,
+  type EditorFeatureContribution,
+  type EditorFeatureContributionContext,
   type EditorHighlightResult,
   type EditorHighlighterSession,
   type EditorOverlaySide,
   type EditorResolvedSelection,
+  type EditorSelectionRange,
   type EditorViewContributionContext,
   type EditorViewContributionUpdateKind,
   type EditorViewSnapshot,
@@ -92,12 +97,28 @@ type ResetOwnedDocumentOptions = {
   readonly scrollPosition?: EditorScrollPosition;
 };
 
+const EDITOR_FIND_FEATURE_ID = "editor.find";
+
+type EditorFindFeature = {
+  openFind(): boolean;
+  openFindReplace(): boolean;
+  closeFind(): boolean;
+  findNext(): boolean;
+  findPrevious(): boolean;
+  replaceOne(): boolean;
+  replaceAll(): boolean;
+  selectAllMatches(): boolean;
+};
+
 export class Editor {
   private readonly view: VirtualizedTextView;
   private readonly foldState: EditorFoldState;
   private readonly el: HTMLDivElement;
   private readonly options: EditorOptions;
   private readonly pluginHost: EditorPluginHost;
+  private readonly commandHandlers = new Map<EditorCommandId, EditorCommandHandler>();
+  private readonly editorFeatures = new Map<string, unknown>();
+  private readonly editorFeatureContributions: readonly EditorFeatureContribution[];
   private readonly keymap: EditorKeymapController;
   private readonly viewContributions: EditorViewContributionController;
   private readonly highlightPrefix: string;
@@ -142,6 +163,9 @@ export class Editor {
     this.el = this.view.scrollElement;
     this.applyResolvedTheme();
     this.refreshHighlighterTheme();
+    this.editorFeatureContributions = this.pluginHost.createEditorFeatureContributions(
+      this.createEditorFeatureContributionContext(container),
+    );
     this.keymap = new EditorKeymapController({
       target: this.el,
       keymap: options.keymap,
@@ -271,6 +295,38 @@ export class Editor {
     this.view.focusInput();
   }
 
+  openFind(): boolean {
+    return this.findFeature()?.openFind() ?? false;
+  }
+
+  openFindReplace(): boolean {
+    return this.findFeature()?.openFindReplace() ?? false;
+  }
+
+  closeFind(): boolean {
+    return this.findFeature()?.closeFind() ?? false;
+  }
+
+  findNext(): boolean {
+    return this.findFeature()?.findNext() ?? false;
+  }
+
+  findPrevious(): boolean {
+    return this.findFeature()?.findPrevious() ?? false;
+  }
+
+  replaceOne(): boolean {
+    return this.findFeature()?.replaceOne() ?? false;
+  }
+
+  replaceAll(): boolean {
+    return this.findFeature()?.replaceAll() ?? false;
+  }
+
+  selectAllMatches(): boolean {
+    return this.findFeature()?.selectAllMatches() ?? false;
+  }
+
   getScrollPosition(): Required<EditorScrollPosition> {
     const viewState = this.view.getState();
     return {
@@ -290,6 +346,12 @@ export class Editor {
   }
 
   dispatchCommand(command: EditorCommandId, context: EditorCommandContext = {}): boolean {
+    const registeredResult = this.runRegisteredCommand(command, context);
+    if (registeredResult !== null) {
+      if (command === "closeFind" && !registeredResult)
+        return this.applyClearSecondarySelections(context);
+      return registeredResult;
+    }
     if (command === "undo") return this.applyHistoryCommand("undo", context);
     if (command === "redo") return this.applyHistoryCommand("redo", context);
     if (command === "selectAll") return this.applySelectAllCommand(context);
@@ -471,6 +533,30 @@ export class Editor {
     };
   }
 
+  private createEditorFeatureContributionContext(
+    container: HTMLElement,
+  ): EditorFeatureContributionContext {
+    return {
+      container,
+      scrollElement: this.el,
+      highlightPrefix: this.highlightPrefix,
+      hasDocument: () => this.session !== null,
+      getText: () => this.getText(),
+      getSelections: () => this.resolveViewSelections(),
+      focusEditor: () => this.focus(),
+      setSelection: (anchor, head, timingName, revealOffset) =>
+        this.applyFindSelection(anchor, head, timingName, revealOffset),
+      setSelections: (selections, timingName, revealOffset) =>
+        this.applyFindSelections(selections, timingName, revealOffset),
+      applyEdits: (edits, timingName, selection) =>
+        this.applyFindEdits(edits, timingName, selection),
+      setRangeHighlight: (name, ranges, style) => this.view.setRangeHighlight(name, ranges, style),
+      clearRangeHighlight: (name) => this.view.clearRangeHighlight(name),
+      registerCommand: (command, handler) => this.registerCommandHandler(command, handler),
+      registerFeature: (id, feature) => this.registerFeature(id, feature),
+    };
+  }
+
   private createViewSnapshot(): EditorViewSnapshot {
     const viewState = this.view.getState();
     const viewport = {
@@ -522,6 +608,56 @@ export class Editor {
     change?: DocumentSessionChange | null,
   ): void {
     this.viewContributions.notify(kind, change ?? null);
+  }
+
+  private notifyEditorFeatureContributions(change: DocumentSessionChange | null): void {
+    for (const contribution of this.editorFeatureContributions) {
+      contribution.handleEditorChange?.(change);
+    }
+  }
+
+  private registerCommandHandler(
+    command: EditorCommandId,
+    handler: EditorCommandHandler,
+  ): EditorDisposable {
+    this.commandHandlers.set(command, handler);
+
+    return {
+      dispose: () => this.unregisterCommandHandler(command, handler),
+    };
+  }
+
+  private unregisterCommandHandler(command: EditorCommandId, handler: EditorCommandHandler): void {
+    if (this.commandHandlers.get(command) !== handler) return;
+
+    this.commandHandlers.delete(command);
+  }
+
+  private runRegisteredCommand(
+    command: EditorCommandId,
+    context: EditorCommandContext,
+  ): boolean | null {
+    return this.commandHandlers.get(command)?.(context) ?? null;
+  }
+
+  private registerFeature<T>(id: string, feature: T): EditorDisposable {
+    this.editorFeatures.set(id, feature);
+
+    return {
+      dispose: () => this.unregisterFeature(id, feature),
+    };
+  }
+
+  private unregisterFeature<T>(id: string, feature: T): void {
+    if (this.editorFeatures.get(id) !== feature) return;
+
+    this.editorFeatures.delete(id);
+  }
+
+  private findFeature(): EditorFindFeature | null {
+    return (
+      (this.editorFeatures.get(EDITOR_FIND_FEATURE_ID) as EditorFindFeature | undefined) ?? null
+    );
   }
 
   private reserveOverlayWidth(side: EditorOverlaySide, width: number): void {
@@ -994,29 +1130,43 @@ export class Editor {
   }
 
   private applyNavigationCommand(command: EditorCommandId, context: EditorCommandContext): boolean {
-    const resolved = this.currentResolvedSelection();
-    if (!resolved) return false;
+    if (!this.session) return false;
 
-    const target = navigationTargetForCommand({
-      command,
+    const snapshot = this.session.getSnapshot();
+    const text = this.session.getText();
+    const resolvedSelections = this.session
+      .getSelections()
+      .selections.map((selection) => resolveSelection(snapshot, selection));
+    if (resolvedSelections.length === 0) return false;
+
+    const navigation = resolvedSelections.map((resolved) => ({
       resolved,
-      text: this.session?.getText() ?? this.text,
-      documentLength: this.session?.getSnapshot().length ?? this.text.length,
-      view: this.view,
-    });
-    if (!target) return false;
+      target: navigationTargetForCommand({
+        command,
+        resolved,
+        text,
+        documentLength: snapshot.length,
+        view: this.view,
+      }),
+    }));
+    const primary = navigation[0];
+    if (!primary?.target) return false;
 
-    this.applyNavigationTarget(target, resolved, context);
+    const start = context.event ? eventStartMs(context.event) : nowMs();
+    const selections = [];
+    for (const { resolved, target } of navigation) {
+      if (!target) return false;
+      selections.push({
+        anchor: target.extend ? resolved.anchorOffset : target.offset,
+        head: target.offset,
+        goal: target.goal ?? SelectionGoal.none(),
+      });
+    }
+    const change = this.session.setSelections(selections);
+    this.useSessionSelectionForNextInput = true;
+    this.view.revealOffset(primary.target.offset);
+    this.applySessionChange(change, primary.target.timingName, start);
     return true;
-  }
-
-  private currentResolvedSelection(): ResolvedSelection | null {
-    if (!this.session) return null;
-
-    const selection = this.session.getSelections().selections[0];
-    if (!selection) return null;
-
-    return resolveSelection(this.session.getSnapshot(), selection);
   }
 
   private selectedTextForClipboard(): string | null {
@@ -1040,21 +1190,58 @@ export class Editor {
     return resolveSelection(change.snapshot, selection).headOffset;
   }
 
-  private applyNavigationTarget(
-    target: NavigationTarget,
-    resolved: ResolvedSelection,
-    context: EditorCommandContext,
+  private applyFindSelection(
+    anchorOffset: number,
+    headOffset: number,
+    timingName: string,
+    revealOffset?: number,
   ): void {
     if (!this.session) return;
 
-    const start = context.event ? eventStartMs(context.event) : nowMs();
-    const anchorOffset = target.extend ? resolved.anchorOffset : target.offset;
-    const change = this.session.setSelection(anchorOffset, target.offset, {
-      goal: target.goal ?? SelectionGoal.none(),
-    });
+    const start = nowMs();
+    const change = this.session.setSelection(anchorOffset, headOffset);
+    this.syncSessionSelectionHighlight();
     this.useSessionSelectionForNextInput = true;
-    this.view.revealOffset(target.offset);
-    this.applySessionChange(change, target.timingName, start);
+    this.applySessionChange(change, timingName, start, {
+      revealOffset,
+      syncDomSelection: false,
+    });
+  }
+
+  private applyFindSelections(
+    selections: readonly EditorSelectionRange[],
+    timingName: string,
+    revealOffset?: number,
+  ): void {
+    if (!this.session) return;
+    if (selections.length === 0) return;
+
+    const start = nowMs();
+    const change = this.session.setSelections(selections);
+    this.syncSessionSelectionHighlight();
+    this.useSessionSelectionForNextInput = true;
+    this.applySessionChange(change, timingName, start, {
+      revealOffset,
+      syncDomSelection: false,
+    });
+  }
+
+  private applyFindEdits(
+    edits: readonly TextEdit[],
+    timingName: string,
+    selection?: EditorSelectionRange,
+  ): void {
+    if (!this.session) return;
+    if (edits.length === 0) return;
+
+    const start = nowMs();
+    const change = this.session.applyEdits(edits, { selection });
+    this.syncSessionSelectionHighlight();
+    this.useSessionSelectionForNextInput = true;
+    this.applySessionChange(change, timingName, start, {
+      revealOffset: this.primarySelectionHeadOffset(change),
+      syncDomSelection: false,
+    });
   }
 
   private syncSessionSelectionFromDom = (_event: Event): void => {
@@ -1125,6 +1312,7 @@ export class Editor {
     const finalChange = appendTiming(timedChange, totalName, totalStart);
     this.sessionOptions.onChange?.(finalChange);
     this.refreshSyntax(this.documentVersion, finalChange);
+    this.notifyEditorFeatureContributions(finalChange);
     this.notifyViewContributions(viewContributionKindForChange(finalChange), finalChange);
     this.notifyChangeWithTiming(finalChange);
   }
@@ -1149,6 +1337,7 @@ export class Editor {
   }
 
   private notifyChange(change: DocumentSessionChange | null): void {
+    this.notifyEditorFeatureContributions(change);
     this.options.onChange?.(this.getState(), change);
   }
 
@@ -1422,10 +1611,7 @@ type OccurrenceSelectionChange = {
   readonly revealOffset: number;
 };
 
-function getOccurrenceQuery(
-  text: string,
-  selections: readonly ResolvedSelection[],
-): string | null {
+function getOccurrenceQuery(text: string, selections: readonly ResolvedSelection[]): string | null {
   const selection = selections.find((candidate) => !candidate.collapsed);
   if (!selection) return null;
 

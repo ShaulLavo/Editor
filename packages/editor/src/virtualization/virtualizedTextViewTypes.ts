@@ -32,6 +32,16 @@ export type VirtualizedTextViewOptions = {
   readonly cursorLineHighlight?: EditorCursorLineHighlightOptions;
 };
 
+export type VirtualizedTextHighlightRange = {
+  readonly start: number;
+  readonly end: number;
+};
+
+export type VirtualizedTextHighlightStyle = {
+  readonly backgroundColor: string;
+  readonly color?: string;
+};
+
 export type EditorCursorLineHighlightOptions = {
   readonly gutterNumber?: boolean;
   readonly gutterBackground?: boolean | readonly string[];

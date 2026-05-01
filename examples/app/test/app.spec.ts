@@ -28,9 +28,7 @@ test("loads Shiki token highlights for a source file", async ({ page }) => {
 async function tokenHighlightRangeCount(page: import("@playwright/test").Page): Promise<number> {
   return page.evaluate(() => {
     const registry = (
-      globalThis.CSS as
-        | { highlights?: Iterable<[string, { readonly size: number }]> }
-        | undefined
+      globalThis.CSS as { highlights?: Iterable<[string, { readonly size: number }]> } | undefined
     )?.highlights;
     if (!registry) return 0;
 

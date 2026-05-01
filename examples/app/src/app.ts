@@ -1,6 +1,8 @@
 import { Editor } from "@editor/core/editor";
 import "@editor/core/style.css";
+import "@editor/find/style.css";
 import "@editor/minimap/style.css";
+import { createEditorFindPlugin } from "@editor/find";
 import { createFoldGutterPlugin, createLineGutterPlugin } from "@editor/gutters";
 import { createMinimapPlugin } from "@editor/minimap";
 import { css, html, javaScript, json, typeScript } from "@editor/tree-sitter-languages";
@@ -44,6 +46,7 @@ export function mountApp(): void {
         iconClassName: "app-fold-gutter-icon",
       }),
       createShikiHighlighterPlugin({ theme: "github-dark" }),
+      createEditorFindPlugin(),
       createMinimapPlugin(),
     ],
     onChange: (state) => {

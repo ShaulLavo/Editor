@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { detectPlatform } from "@tanstack/hotkeys";
+import { createEditorFindPlugin } from "../../find/src/index.ts";
 import { createFoldGutterPlugin, createLineGutterPlugin } from "../../gutters/src/index.ts";
 import {
   createDocumentSession,
@@ -149,7 +150,7 @@ function createTestLanguagePlugin(): EditorPlugin {
 }
 
 function withTestLanguagePlugins(...plugins: readonly EditorPlugin[]): readonly EditorPlugin[] {
-  return [createTestLanguagePlugin(), ...plugins];
+  return [createTestLanguagePlugin(), createEditorFindPlugin(), ...plugins];
 }
 
 function withTestGutterPlugins(...plugins: readonly EditorPlugin[]): readonly EditorPlugin[] {
@@ -263,6 +264,27 @@ function createCopyEvent(): {
 
 function primaryModifier(): KeyboardEventInit {
   return detectPlatform() === "mac" ? { metaKey: true } : { ctrlKey: true };
+}
+
+function wordNavigationModifier(): KeyboardEventInit {
+  return detectPlatform() === "mac" ? { altKey: true } : { ctrlKey: true };
+}
+
+function resolvedSelectionRanges(session: ReturnType<typeof createDocumentSession>): readonly {
+  readonly anchor: number;
+  readonly head: number;
+  readonly start: number;
+  readonly end: number;
+}[] {
+  return session.getSelections().selections.map((selection) => {
+    const resolved = resolveSelection(session.getSnapshot(), selection);
+    return {
+      anchor: resolved.anchorOffset,
+      head: resolved.headOffset,
+      start: resolved.startOffset,
+      end: resolved.endOffset,
+    };
+  });
 }
 
 function tokenHighlights(): Highlight[] {
@@ -728,6 +750,37 @@ describe("Editor", () => {
     });
   });
 
+  describe("editor feature plugins", () => {
+    it("registers editor commands and receives document changes", () => {
+      let commandCalls = 0;
+      const changes: (DocumentSessionChange["kind"] | null)[] = [];
+      const plugin: EditorPlugin = {
+        activate: (context) =>
+          context.registerEditorFeatureContribution({
+            createContribution: (context) => {
+              const command = context.registerCommand("findNext", () => {
+                commandCalls += 1;
+                return true;
+              });
+              return {
+                handleEditorChange: (change) => changes.push(change?.kind ?? null),
+                dispose: () => command.dispose(),
+              };
+            },
+          }),
+      };
+
+      editor.dispose();
+      editor = new Editor(container, { plugins: [plugin] });
+
+      expect(editor.dispatchCommand("findNext")).toBe(true);
+      editor.setText("abc");
+
+      expect(commandCalls).toBe(1);
+      expect(changes).toContain(null);
+    });
+  });
+
   describe("applyEdit", () => {
     it("shifts tokens after the edit region", () => {
       editor.setContent("abcdef");
@@ -1065,6 +1118,22 @@ describe("Editor", () => {
       expect(resolved.headOffset).toBe(2);
     });
 
+    it("moves all collapsed cursors with arrow keys", () => {
+      const session = createDocumentSession("abc\ndef");
+      session.setSelections([{ anchor: 3 }, { anchor: 7 }]);
+      editor.attachSession(session);
+
+      dispatchEditorKey("ArrowLeft");
+
+      expect(resolvedSelectionRanges(session)).toEqual([
+        { anchor: 2, head: 2, start: 2, end: 2 },
+        { anchor: 6, head: 6, start: 6, end: 6 },
+      ]);
+      expect(container.querySelectorAll(".editor-virtualized-caret:not([hidden])")).toHaveLength(
+        2,
+      );
+    });
+
     it("extends selections with shift arrow keys", () => {
       const session = createDocumentSession("abc");
       editor.attachSession(session);
@@ -1082,6 +1151,22 @@ describe("Editor", () => {
       expect(highlightsMap.get("editor-token-0-selection")?.size).toBe(1);
     });
 
+    it("extends all cursors with shift arrow keys", () => {
+      const session = createDocumentSession("abcdef");
+      session.setSelections([{ anchor: 2 }, { anchor: 5 }]);
+      editor.attachSession(session);
+
+      dispatchEditorKey("ArrowRight", { shiftKey: true });
+
+      expect(resolvedSelectionRanges(session)).toEqual([
+        { anchor: 2, head: 3, start: 2, end: 3 },
+        { anchor: 5, head: 6, start: 5, end: 6 },
+      ]);
+      expect(container.querySelectorAll(".editor-virtualized-caret:not([hidden])")).toHaveLength(
+        2,
+      );
+    });
+
     it("keeps vertical navigation on the preferred visual column", () => {
       const session = createDocumentSession("abcdef\nx\n12345");
       editor.attachSession(session);
@@ -1090,6 +1175,65 @@ describe("Editor", () => {
       dispatchEditorKey("ArrowUp");
 
       expect(editor.getState().cursor).toEqual({ row: 0, column: 5 });
+    });
+
+    it("keeps independent visual columns while vertically moving all cursors", () => {
+      const session = createDocumentSession("abcde\nx\n123456789\nABCDE\ny\n987654321");
+      session.setSelections([{ anchor: 13 }, { anchor: 34 }]);
+      editor.attachSession(session);
+
+      dispatchEditorKey("ArrowUp");
+      expect(resolvedSelectionRanges(session)).toEqual([
+        { anchor: 7, head: 7, start: 7, end: 7 },
+        { anchor: 25, head: 25, start: 25, end: 25 },
+      ]);
+
+      dispatchEditorKey("ArrowDown");
+      expect(resolvedSelectionRanges(session)).toEqual([
+        { anchor: 13, head: 13, start: 13, end: 13 },
+        { anchor: 34, head: 34, start: 34, end: 34 },
+      ]);
+    });
+
+    it("keeps multi-cursor navigation for word, line, page, and document commands", () => {
+      const wordSession = createDocumentSession("one two three four five six");
+      wordSession.setSelections([{ anchor: 4 }, { anchor: 19 }]);
+      editor.attachSession(wordSession);
+
+      dispatchEditorKey("ArrowRight", wordNavigationModifier());
+      expect(wordSession.getSelections().selections).toHaveLength(2);
+
+      const lineSession = createDocumentSession("abc\ndef");
+      lineSession.setSelections([{ anchor: 1 }, { anchor: 5 }]);
+      editor.attachSession(lineSession);
+
+      dispatchEditorKey("End");
+      expect(resolvedSelectionRanges(lineSession)).toEqual([
+        { anchor: 3, head: 3, start: 3, end: 3 },
+        { anchor: 7, head: 7, start: 7, end: 7 },
+      ]);
+
+      const pageSession = createDocumentSession(
+        Array.from({ length: 12 }, (_value, index) => `line ${index}`).join("\n"),
+      );
+      pageSession.setSelections([{ anchor: 0 }, { anchor: 7 }]);
+      mockEditorViewport(editorRoot(), 80, 40);
+      editor.attachSession(pageSession);
+
+      dispatchEditorKey("PageDown");
+      expect(pageSession.getSelections().selections).toHaveLength(2);
+
+      const documentSession = createDocumentSession("abc\ndef");
+      documentSession.setSelections([{ anchor: 1 }, { anchor: 5 }]);
+      editor.attachSession(documentSession);
+
+      const documentEndKey = detectPlatform() === "mac" ? "ArrowDown" : "End";
+      const documentEndModifier =
+        detectPlatform() === "mac" ? { metaKey: true } : { ctrlKey: true };
+      dispatchEditorKey(documentEndKey, documentEndModifier);
+      expect(resolvedSelectionRanges(documentSession)).toEqual([
+        { anchor: 7, head: 7, start: 7, end: 7 },
+      ]);
     });
 
     it("scrolls the caret into view while navigating by keyboard", () => {
@@ -1289,6 +1433,131 @@ describe("Editor", () => {
 
       expect(addOccurrence.defaultPrevented).toBe(true);
       expect(clearSecondary.defaultPrevented).toBe(true);
+    });
+
+    it("opens find, navigates matches, and paints find highlights", () => {
+      const session = createDocumentSession("foo bar foo");
+      editor.attachSession(session);
+
+      dispatchEditorKey("f", primaryModifier());
+      expect(container.querySelector(".editor-find-widget")).not.toBeNull();
+
+      const findInput = container.querySelector(".editor-find-input") as HTMLInputElement;
+      findInput.value = "foo";
+      findInput.dispatchEvent(new Event("input", { bubbles: true }));
+
+      expect([...highlightsMap.keys()].filter((name) => name.includes("find-match"))).toHaveLength(
+        1,
+      );
+      let selection = resolveSelection(
+        session.getSnapshot(),
+        session.getSelections().selections[0]!,
+      );
+      expect({ start: selection.startOffset, end: selection.endOffset }).toEqual({
+        start: 0,
+        end: 3,
+      });
+
+      expect(editor.findNext()).toBe(true);
+      selection = resolveSelection(session.getSnapshot(), session.getSelections().selections[0]!);
+      expect({ start: selection.startOffset, end: selection.endOffset }).toEqual({
+        start: 8,
+        end: 11,
+      });
+    });
+
+    it("toggles find closed from the editor and find input", () => {
+      const session = createDocumentSession("foo");
+      editor.attachSession(session);
+
+      dispatchEditorKey("f", primaryModifier());
+      const widget = container.querySelector(".editor-find-widget") as HTMLDivElement;
+      const findInput = container.querySelector(".editor-find-input") as HTMLInputElement;
+
+      expect(widget.hidden).toBe(false);
+
+      const inputEvent = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "f",
+        ...primaryModifier(),
+      });
+      findInput.dispatchEvent(inputEvent);
+
+      expect(inputEvent.defaultPrevented).toBe(true);
+      expect(widget.hidden).toBe(true);
+
+      dispatchEditorKey("f", primaryModifier());
+      expect(widget.hidden).toBe(false);
+
+      dispatchEditorKey("f", primaryModifier());
+      expect(widget.hidden).toBe(true);
+    });
+
+    it("replaces one and replace-all is one undoable edit", () => {
+      const session = createDocumentSession("foo foo foo");
+      editor.attachSession(session);
+
+      editor.openFindReplace();
+      const inputs = container.querySelectorAll(".editor-find-input");
+      const findInput = inputs[0] as HTMLInputElement;
+      const replaceInput = inputs[1] as HTMLInputElement;
+      findInput.value = "foo";
+      findInput.dispatchEvent(new Event("input", { bubbles: true }));
+      replaceInput.value = "bar";
+      replaceInput.dispatchEvent(new Event("input", { bubbles: true }));
+
+      expect(editor.replaceOne()).toBe(true);
+      expect(editor.getText()).toBe("bar foo foo");
+
+      expect(editor.replaceAll()).toBe(true);
+      expect(editor.getText()).toBe("bar bar bar");
+
+      editor.dispatchCommand("undo");
+      expect(editor.getText()).toBe("bar foo foo");
+    });
+
+    it("toggles the replace row from the find widget", () => {
+      const session = createDocumentSession("foo");
+      editor.attachSession(session);
+
+      expect(editor.openFind()).toBe(true);
+      const replaceRow = container.querySelector(".editor-find-replace-row") as HTMLDivElement;
+      const toggle = container.querySelector(".editor-find-replace-toggle") as HTMLButtonElement;
+      const matchCase = container.querySelector('button[title="Match Case (Off)"]');
+
+      expect(replaceRow.hidden).toBe(true);
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(toggle.title).toBe("Show Replace");
+      expect(matchCase).not.toBeNull();
+
+      toggle.click();
+
+      expect(replaceRow.hidden).toBe(false);
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(toggle.title).toBe("Hide Replace");
+    });
+
+    it("find-in-selection and select-all matches create multi-selections", () => {
+      const session = createDocumentSession("foo outside foo inside foo");
+      session.setSelection(12, 26);
+      editor.attachSession(session);
+
+      editor.openFind();
+      expect(editor.dispatchCommand("toggleFindInSelection")).toBe(true);
+      const findInput = container.querySelector(".editor-find-input") as HTMLInputElement;
+      findInput.value = "foo";
+      findInput.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(editor.selectAllMatches()).toBe(true);
+
+      const ranges = session.getSelections().selections.map((selection) => {
+        const resolved = resolveSelection(session.getSnapshot(), selection);
+        return { start: resolved.startOffset, end: resolved.endOffset };
+      });
+      expect(ranges).toEqual([
+        { start: 12, end: 15 },
+        { start: 23, end: 26 },
+      ]);
     });
 
     it("updates custom selection immediately while dragging", () => {

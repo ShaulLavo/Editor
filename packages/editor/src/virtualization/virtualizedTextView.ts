@@ -24,14 +24,17 @@ import {
 import {
   adoptTokens as adoptViewTokens,
   clampStoredSelection,
+  clearRangeHighlight,
   clearRowTokenState,
   clearSelection,
   clearSelectionHighlight,
   clearTokenHighlights,
   deleteTokenRangesForRow,
   rebuildStyleRules,
+  renderRangeHighlight,
   renderSelectionHighlight,
   renderTokenHighlights,
+  setRangeHighlight,
   setSelection,
   setSelections,
   setTokens as setViewTokens,
@@ -81,6 +84,8 @@ import {
 import type {
   CreateRangeOptions,
   RevealBlock,
+  VirtualizedTextHighlightRange,
+  VirtualizedTextHighlightStyle,
   VirtualizedTextSelection,
   VirtualizedTextViewInternal,
 } from "./virtualizedTextViewInternals";
@@ -160,6 +165,7 @@ export class VirtualizedTextView {
       highlightRegistry: options.highlightRegistry ?? getDefaultHighlightRegistry(),
       selectionHighlightName: options.selectionHighlightName ?? DEFAULT_SELECTION_HIGHLIGHT,
       selectionHighlight: new Highlight(),
+      rangeHighlightGroups: new Map(),
       selectionHighlightRegistered: false,
       text: "",
       textRevision: 0,
@@ -221,6 +227,7 @@ export class VirtualizedTextView {
   public dispose(): void {
     const view = this.view;
     clearSelectionHighlight(view);
+    for (const name of view.rangeHighlightGroups.keys()) clearRangeHighlight(view, name);
     clearTokenHighlights(view);
     view.virtualizer.dispose();
     disposeGutterCells(view);
@@ -509,6 +516,18 @@ export class VirtualizedTextView {
     clearSelection(this.view);
   }
 
+  public setRangeHighlight(
+    name: string,
+    ranges: readonly VirtualizedTextHighlightRange[],
+    style: VirtualizedTextHighlightStyle,
+  ): void {
+    setRangeHighlight(this.view, name, ranges, style);
+  }
+
+  public clearRangeHighlight(name: string): void {
+    clearRangeHighlight(this.view, name);
+  }
+
   private renderSnapshot(snapshot: FixedRowVirtualizerSnapshot): void {
     const view = this.view;
     updateGutterWidthIfNeeded(view);
@@ -518,6 +537,7 @@ export class VirtualizedTextView {
     view.lastRenderedRowsKey = key;
     renderRows(view, snapshot, (rowSlotId) => deleteTokenRangesForRow(view, rowSlotId));
     renderTokenHighlights(view);
+    for (const name of view.rangeHighlightGroups.keys()) renderRangeHighlight(view, name);
     renderSelectionHighlight(view);
     view.onViewportChange?.();
   }

@@ -37,6 +37,9 @@ import type {
 } from "./virtualizedTextViewTypes";
 import type {
   TokenRenderEntry,
+  VirtualizedTextHighlightGroup,
+  VirtualizedTextHighlightRange,
+  VirtualizedTextHighlightStyle,
   VirtualizedStoredSelection,
   VirtualizedTextSelection,
   VirtualizedTextViewInternal,
@@ -180,6 +183,48 @@ export function clearSelectionHighlight(view: VirtualizedTextViewInternal): void
 
   view.highlightRegistry.delete(view.selectionHighlightName);
   view.selectionHighlightRegistered = false;
+}
+
+export function setRangeHighlight(
+  view: VirtualizedTextViewInternal,
+  name: string,
+  ranges: readonly VirtualizedTextHighlightRange[],
+  style: VirtualizedTextHighlightStyle,
+): void {
+  const group = getOrCreateRangeHighlightGroup(view, name, style);
+  group.ranges = ranges.map((range) => ({
+    start: clamp(range.start, 0, view.text.length),
+    end: clamp(range.end, 0, view.text.length),
+  }));
+  group.style = style;
+  group.signature = "";
+  renderRangeHighlight(view, name);
+  rebuildStyleRules(view);
+}
+
+export function renderRangeHighlight(view: VirtualizedTextViewInternal, name: string): void {
+  const group = view.rangeHighlightGroups.get(name);
+  if (!group || !view.highlightRegistry) return;
+
+  const signature = rangeHighlightSignature(view, group);
+  if (signature === group.signature) return;
+
+  group.signature = signature;
+  group.highlight.clear();
+  addMountedRangeHighlightRanges(view, group);
+  if (group.highlight.size === 0) return;
+
+  ensureRangeHighlightRegistered(view, group);
+}
+
+export function clearRangeHighlight(view: VirtualizedTextViewInternal, name: string): void {
+  const group = view.rangeHighlightGroups.get(name);
+  if (!group) return;
+
+  group.highlight.clear();
+  if (group.registered) view.highlightRegistry?.delete(name);
+  view.rangeHighlightGroups.delete(name);
+  rebuildStyleRules(view);
 }
 
 function selectionHighlightSignature(
@@ -705,6 +750,120 @@ function ensureSelectionHighlightRegistered(view: VirtualizedTextViewInternal): 
   view.selectionHighlightRegistered = true;
 }
 
+function getOrCreateRangeHighlightGroup(
+  view: VirtualizedTextViewInternal,
+  name: string,
+  style: VirtualizedTextHighlightStyle,
+): VirtualizedTextHighlightGroup {
+  const existing = view.rangeHighlightGroups.get(name);
+  if (existing) return existing;
+
+  const group: VirtualizedTextHighlightGroup = {
+    name,
+    highlight: new Highlight(),
+    ranges: [],
+    style,
+    registered: false,
+    signature: "",
+  };
+  view.rangeHighlightGroups.set(name, group);
+  return group;
+}
+
+function addMountedRangeHighlightRanges(
+  view: VirtualizedTextViewInternal,
+  group: VirtualizedTextHighlightGroup,
+): void {
+  for (const row of getMountedRows(view)) {
+    addMountedRangeHighlightRangesForRow(view, group, row);
+  }
+}
+
+function addMountedRangeHighlightRangesForRow(
+  view: VirtualizedTextViewInternal,
+  group: VirtualizedTextHighlightGroup,
+  row: VirtualizedTextRow,
+): void {
+  for (const range of group.ranges) {
+    addMountedRangeHighlightRange(view, group, row, range);
+  }
+}
+
+function addMountedRangeHighlightRange(
+  view: VirtualizedTextViewInternal,
+  group: VirtualizedTextHighlightGroup,
+  row: VirtualizedTextRow,
+  range: VirtualizedTextHighlightRange,
+): void {
+  if (range.start === range.end) return;
+  if (range.end <= row.startOffset || range.start >= row.endOffset) return;
+
+  for (const chunk of row.chunks) {
+    addRangeHighlightToChunk(view, group, chunk, range);
+  }
+}
+
+function addRangeHighlightToChunk(
+  view: VirtualizedTextViewInternal,
+  group: VirtualizedTextHighlightGroup,
+  chunk: VirtualizedTextChunk,
+  range: VirtualizedTextHighlightRange,
+): void {
+  if (range.end <= chunk.startOffset || range.start >= chunk.endOffset) return;
+
+  const domRange = view.scrollElement.ownerDocument.createRange();
+  domRange.setStart(
+    chunk.textNode,
+    clamp(range.start - chunk.startOffset, 0, chunk.textNode.length),
+  );
+  domRange.setEnd(chunk.textNode, clamp(range.end - chunk.startOffset, 0, chunk.textNode.length));
+  group.highlight.add(domRange);
+}
+
+function ensureRangeHighlightRegistered(
+  view: VirtualizedTextViewInternal,
+  group: VirtualizedTextHighlightGroup,
+): void {
+  if (group.registered) return;
+  if (!view.highlightRegistry) return;
+
+  view.highlightRegistry.set(group.name, group.highlight);
+  group.registered = true;
+}
+
+function rangeHighlightSignature(
+  view: VirtualizedTextViewInternal,
+  group: VirtualizedTextHighlightGroup,
+): string {
+  const parts = group.ranges.map((range) => `${range.start}:${range.end}`);
+  for (const row of getMountedRows(view)) appendRangeHighlightRowSignature(parts, row, group);
+  return parts.join("|");
+}
+
+function appendRangeHighlightRowSignature(
+  parts: string[],
+  row: VirtualizedTextRow,
+  group: VirtualizedTextHighlightGroup,
+): void {
+  for (const range of group.ranges) {
+    appendRangeHighlightRangeSignature(parts, row, range);
+  }
+}
+
+function appendRangeHighlightRangeSignature(
+  parts: string[],
+  row: VirtualizedTextRow,
+  range: VirtualizedTextHighlightRange,
+): void {
+  if (range.start === range.end) return;
+  if (range.end <= row.startOffset || range.start >= row.endOffset) return;
+
+  for (const chunk of row.chunks) {
+    const signature = selectionChunkSignature(row, chunk, range.start, range.end);
+    if (signature) parts.push(signature);
+  }
+}
+
 function clampSelection(
   view: VirtualizedTextViewInternal,
   selection: VirtualizedTextSelection,
@@ -772,6 +931,9 @@ export function rebuildStyleRules(view: VirtualizedTextViewInternal): void {
   const rules = [
     `::highlight(${view.selectionHighlightName}) { background-color: rgba(56, 189, 248, 0.35); }`,
   ];
+  for (const group of view.rangeHighlightGroups.values()) {
+    rules.push(rangeHighlightRule(group.name, group.style));
+  }
   for (const group of view.tokenGroups.values()) {
     rules.push(buildHighlightRule(group.name, group.style));
   }
@@ -780,6 +942,12 @@ export function rebuildStyleRules(view: VirtualizedTextViewInternal): void {
   if (view.styleEl.textContent === nextRules) return;
 
   view.styleEl.textContent = nextRules;
+}
+
+function rangeHighlightRule(name: string, style: VirtualizedTextHighlightStyle): string {
+  const declarations = [`background-color: ${style.backgroundColor};`];
+  if (style.color) declarations.push(`color: ${style.color};`);
+  return `::highlight(${name}) { ${declarations.join(" ")} }`;
 }
 
 function selectionChunkSignature(

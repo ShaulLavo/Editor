@@ -29,6 +29,25 @@ export type VirtualizedTextSelection = {
   readonly headOffset: number;
 };
 
+export type VirtualizedTextHighlightRange = {
+  readonly start: number;
+  readonly end: number;
+};
+
+export type VirtualizedTextHighlightStyle = {
+  readonly backgroundColor: string;
+  readonly color?: string;
+};
+
+export type VirtualizedTextHighlightGroup = {
+  readonly name: string;
+  readonly highlight: Highlight;
+  ranges: readonly VirtualizedTextHighlightRange[];
+  style: VirtualizedTextHighlightStyle;
+  registered: boolean;
+  signature: string;
+};
+
 export type TokenRenderEntry = {
   readonly start: number;
   readonly end: number;
@@ -59,6 +78,7 @@ export interface VirtualizedTextViewInternal {
   readonly highlightRegistry: HighlightRegistry | null;
   readonly selectionHighlightName: string;
   readonly selectionHighlight: Highlight | null;
+  readonly rangeHighlightGroups: Map<string, VirtualizedTextHighlightGroup>;
   selectionHighlightRegistered: boolean;
   text: string;
   textRevision: number;

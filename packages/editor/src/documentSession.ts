@@ -84,6 +84,7 @@ export type DocumentSessionSelectionOptions = {
 export type DocumentSessionSelectionRange = {
   readonly anchor: number;
   readonly head?: number;
+  readonly goal?: SelectionGoal;
 };
 
 export type DocumentSessionEditHistoryMode = "record" | "skip";
@@ -329,7 +330,9 @@ class PieceTableDocumentSession implements DocumentSession {
   ): SelectionSet<PieceTableAnchor> {
     const anchorSelections = selections.map((selection) => {
       const head = selection.head ?? selection.anchor;
-      return this.createSelection(selection.anchor, head, options);
+      return this.createSelection(selection.anchor, head, {
+        goal: selection.goal ?? options.goal,
+      });
     });
     const set = createSelectionSet(anchorSelections);
     return normalizeSelectionSet(this.history.current, set);

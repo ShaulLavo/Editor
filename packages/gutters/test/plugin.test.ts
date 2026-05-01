@@ -118,6 +118,7 @@ function createContext(
     registerHighlighter: vi.fn(() => ({ dispose: vi.fn() })),
     registerTreeSitterLanguage: vi.fn(() => ({ dispose: vi.fn() })),
     registerViewContribution: vi.fn(() => ({ dispose: vi.fn() })),
+    registerEditorFeatureContribution: vi.fn(() => ({ dispose: vi.fn() })),
     registerGutterContribution,
   };
 }

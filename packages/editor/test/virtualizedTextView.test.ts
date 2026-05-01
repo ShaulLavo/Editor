@@ -132,6 +132,25 @@ describe("VirtualizedTextView", () => {
     expect(firstLabel.style.getPropertyValue("--editor-line-gutter-counter-style")).toBe("decimal");
   });
 
+  it("renders custom mounted range highlights and refreshes them on scroll", () => {
+    view.setText("alpha\nbeta\ngamma");
+    view.setScrollMetrics(0, 20);
+
+    view.setRangeHighlight("test-find", [{ start: 0, end: 5 }], {
+      backgroundColor: "rgba(234, 179, 8, 0.34)",
+    });
+
+    expect(highlightsMap.get("test-find")?.size).toBe(1);
+    expect(view.scrollElement.textContent).toContain("alpha");
+
+    view.setRangeHighlight("test-find", [{ start: 6, end: 10 }], {
+      backgroundColor: "rgba(234, 179, 8, 0.34)",
+    });
+    view.setScrollMetrics(20, 20);
+
+    expect(highlightsMap.get("test-find")?.size).toBe(1);
+  });
+
   it("passes raw CSS counter styles through the line gutter", () => {
     view.dispose();
     view = new VirtualizedTextView(container, {

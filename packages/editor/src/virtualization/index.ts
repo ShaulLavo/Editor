@@ -22,6 +22,8 @@ export type {
   NativeGeometryValidation,
   VirtualizedFoldMarker,
   VirtualizedTextChunk,
+  VirtualizedTextHighlightRange,
+  VirtualizedTextHighlightStyle,
   VirtualizedTextRow,
   VirtualizedTextViewOptions,
   VirtualizedTextViewState,

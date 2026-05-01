@@ -1,7 +1,8 @@
 import type { DocumentSessionChange } from "./documentSession";
+import type { EditorCommandContext, EditorCommandId } from "./editor/commands";
 import type { PieceTableSnapshot } from "./pieceTable/pieceTableTypes";
 import type { EditorTheme } from "./theme";
-import type { EditorToken } from "./tokens";
+import type { EditorToken, TextEdit } from "./tokens";
 import type { EditorSyntaxLanguageId } from "./syntax/session";
 import {
   TreeSitterLanguageRegistry,
@@ -14,6 +15,7 @@ import type { FixedRowVisibleRange } from "./virtualization/fixedRowVirtualizer"
 import type {
   EditorCursorLineHighlightOptions,
   VirtualizedFoldMarker,
+  VirtualizedTextHighlightStyle,
 } from "./virtualization/virtualizedTextViewTypes";
 
 export type EditorDisposable = {
@@ -108,6 +110,50 @@ export type EditorViewContributionProvider = {
   createContribution(context: EditorViewContributionContext): EditorViewContribution | null;
 };
 
+export type EditorCommandHandler = (context: EditorCommandContext) => boolean;
+
+export type EditorSelectionRange = {
+  readonly anchor: number;
+  readonly head: number;
+};
+
+export type EditorFeatureContributionContext = {
+  readonly container: HTMLElement;
+  readonly scrollElement: HTMLDivElement;
+  readonly highlightPrefix: string;
+  hasDocument(): boolean;
+  getText(): string;
+  getSelections(): readonly EditorResolvedSelection[];
+  focusEditor(): void;
+  setSelection(anchor: number, head: number, timingName: string, revealOffset?: number): void;
+  setSelections(
+    selections: readonly EditorSelectionRange[],
+    timingName: string,
+    revealOffset?: number,
+  ): void;
+  applyEdits(
+    edits: readonly TextEdit[],
+    timingName: string,
+    selection?: EditorSelectionRange,
+  ): void;
+  setRangeHighlight(
+    name: string,
+    ranges: readonly { readonly start: number; readonly end: number }[],
+    style: VirtualizedTextHighlightStyle,
+  ): void;
+  clearRangeHighlight(name: string): void;
+  registerCommand(command: EditorCommandId, handler: EditorCommandHandler): EditorDisposable;
+  registerFeature<T>(id: string, feature: T): EditorDisposable;
+};
+
+export type EditorFeatureContribution = EditorDisposable & {
+  handleEditorChange?(change: DocumentSessionChange | null): void;
+};
+
+export type EditorFeatureContributionProvider = {
+  createContribution(context: EditorFeatureContributionContext): EditorFeatureContribution | null;
+};
+
 export type EditorGutterWidthContext = {
   readonly lineCount: number;
   readonly metrics: BrowserTextMetrics;
@@ -144,6 +190,7 @@ export type EditorPluginContext = {
     options?: TreeSitterLanguageRegistrationOptions,
   ): EditorDisposable;
   registerViewContribution(provider: EditorViewContributionProvider): EditorDisposable;
+  registerEditorFeatureContribution(provider: EditorFeatureContributionProvider): EditorDisposable;
   registerGutterContribution(contribution: EditorGutterContribution): EditorDisposable;
 };
 
@@ -160,6 +207,7 @@ export class EditorPluginHost implements EditorDisposable {
   private readonly highlighters: EditorHighlighterProvider[] = [];
   private readonly treeSitterLanguages = new TreeSitterLanguageRegistry();
   private readonly viewContributions: EditorViewContributionProvider[] = [];
+  private readonly editorFeatureContributions: EditorFeatureContributionProvider[] = [];
   private readonly gutterContributions: EditorGutterContribution[] = [];
   private readonly disposables: EditorDisposable[] = [];
 
@@ -214,6 +262,19 @@ export class EditorPluginHost implements EditorDisposable {
     return contributions;
   }
 
+  public createEditorFeatureContributions(
+    context: EditorFeatureContributionContext,
+  ): EditorFeatureContribution[] {
+    const contributions: EditorFeatureContribution[] = [];
+    for (const provider of this.editorFeatureContributions) {
+      const contribution = provider.createContribution(context);
+      if (contribution) contributions.push(contribution);
+    }
+
+    this.disposables.push(...contributions);
+    return contributions;
+  }
+
   public getGutterContributions(): readonly EditorGutterContribution[] {
     return this.gutterContributions;
   }
@@ -223,6 +284,7 @@ export class EditorPluginHost implements EditorDisposable {
     this.highlighters.length = 0;
     this.treeSitterLanguages.clear();
     this.viewContributions.length = 0;
+    this.editorFeatureContributions.length = 0;
     this.gutterContributions.length = 0;
   }
 
@@ -232,6 +294,8 @@ export class EditorPluginHost implements EditorDisposable {
       registerTreeSitterLanguage: (contribution, options) =>
         this.registerTreeSitterLanguage(contribution, options),
       registerViewContribution: (provider) => this.registerViewContribution(provider),
+      registerEditorFeatureContribution: (provider) =>
+        this.registerEditorFeatureContribution(provider),
       registerGutterContribution: (contribution) => this.registerGutterContribution(contribution),
     };
   }
@@ -271,6 +335,23 @@ export class EditorPluginHost implements EditorDisposable {
     if (index === -1) return;
 
     this.viewContributions.splice(index, 1);
+  }
+
+  private registerEditorFeatureContribution(
+    provider: EditorFeatureContributionProvider,
+  ): EditorDisposable {
+    this.editorFeatureContributions.push(provider);
+
+    return {
+      dispose: () => this.unregisterEditorFeatureContribution(provider),
+    };
+  }
+
+  private unregisterEditorFeatureContribution(provider: EditorFeatureContributionProvider): void {
+    const index = this.editorFeatureContributions.indexOf(provider);
+    if (index === -1) return;
+
+    this.editorFeatureContributions.splice(index, 1);
   }
 
   private registerGutterContribution(contribution: EditorGutterContribution): EditorDisposable {
