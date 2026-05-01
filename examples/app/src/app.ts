@@ -2,9 +2,11 @@ import { Editor } from "@editor/core/editor";
 import "@editor/core/style.css";
 import "@editor/find/style.css";
 import "@editor/minimap/style.css";
+import "@editor/scope-lines/style.css";
 import { createEditorFindPlugin } from "@editor/find";
 import { createFoldGutterPlugin, createLineGutterPlugin } from "@editor/gutters";
 import { createMinimapPlugin } from "@editor/minimap";
+import { createScopeLinesPlugin } from "@editor/scope-lines";
 import { css, html, javaScript, json, typeScript } from "@editor/tree-sitter-languages";
 import {
   createTypeScriptLspPlugin,
@@ -71,6 +73,7 @@ export function mountApp(): void {
       }),
       createShikiHighlighterPlugin({ theme: "github-dark" }),
       createEditorFindPlugin(),
+      createScopeLinesPlugin(),
       createMinimapPlugin(),
       typeScriptLsp,
     ],

@@ -63,6 +63,18 @@ export type EditorViewportSnapshot = {
   readonly visibleRange: FixedRowVisibleRange;
 };
 
+export type EditorVisibleRowSnapshot = {
+  readonly index: number;
+  readonly bufferRow: number;
+  readonly startOffset: number;
+  readonly endOffset: number;
+  readonly text: string;
+  readonly kind: "text" | "block";
+  readonly primaryText: boolean;
+  readonly top: number;
+  readonly height: number;
+};
+
 export type EditorViewSnapshot = {
   readonly documentId: string | null;
   readonly languageId: EditorSyntaxLanguageId | null;
@@ -75,6 +87,9 @@ export type EditorViewSnapshot = {
   readonly lineCount: number;
   readonly contentWidth: number;
   readonly totalHeight: number;
+  readonly tabSize: number;
+  readonly foldMarkers: readonly VirtualizedFoldMarker[];
+  readonly visibleRows: readonly EditorVisibleRowSnapshot[];
   readonly viewport: EditorViewportSnapshot;
 };
 

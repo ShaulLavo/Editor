@@ -1,0 +1,83 @@
+.editor-scope-lines {
+  --editor-scope-line-color: rgba(161, 161, 170, 0.26);
+  --editor-scope-line-active-color: rgba(212, 212, 216, 0.52);
+  --editor-scope-line-color-0: color-mix(in srgb, var(--editor-syntax-type) 34%, transparent);
+  --editor-scope-line-color-1: color-mix(in srgb, var(--editor-syntax-keyword) 30%, transparent);
+  --editor-scope-line-color-2: color-mix(in srgb, var(--editor-syntax-string) 28%, transparent);
+  --editor-scope-line-color-3: color-mix(in srgb, var(--editor-syntax-number) 32%, transparent);
+  --editor-scope-line-color-4: color-mix(in srgb, var(--editor-syntax-function) 30%, transparent);
+  --editor-scope-line-color-5: color-mix(in srgb, var(--editor-syntax-variable-builtin) 30%, transparent);
+  --editor-scope-line-active-color-0: color-mix(in srgb, var(--editor-syntax-type) 58%, transparent);
+  --editor-scope-line-active-color-1: color-mix(in srgb, var(--editor-syntax-keyword) 54%, transparent);
+  --editor-scope-line-active-color-2: color-mix(in srgb, var(--editor-syntax-string) 50%, transparent);
+  --editor-scope-line-active-color-3: color-mix(in srgb, var(--editor-syntax-number) 56%, transparent);
+  --editor-scope-line-active-color-4: color-mix(in srgb, var(--editor-syntax-function) 54%, transparent);
+  --editor-scope-line-active-color-5: color-mix(in srgb, var(--editor-syntax-variable-builtin) 54%, transparent);
+  --editor-scope-line-width: 1px;
+
+  height: 0;
+  left: var(--editor-gutter-width, 0px);
+  min-width: max(100%, var(--editor-scope-lines-content-width, 0px));
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  z-index: 1;
+}
+
+.editor-scope-line {
+  background: var(--editor-scope-line-color);
+  position: absolute;
+  width: var(--editor-scope-line-width);
+}
+
+.editor-scope-line[data-editor-scope-line-level="0"] {
+  background: var(--editor-scope-line-color-0);
+}
+
+.editor-scope-line[data-editor-scope-line-level="1"] {
+  background: var(--editor-scope-line-color-1);
+}
+
+.editor-scope-line[data-editor-scope-line-level="2"] {
+  background: var(--editor-scope-line-color-2);
+}
+
+.editor-scope-line[data-editor-scope-line-level="3"] {
+  background: var(--editor-scope-line-color-3);
+}
+
+.editor-scope-line[data-editor-scope-line-level="4"] {
+  background: var(--editor-scope-line-color-4);
+}
+
+.editor-scope-line[data-editor-scope-line-level="5"] {
+  background: var(--editor-scope-line-color-5);
+}
+
+.editor-scope-line-active {
+  background: var(--editor-scope-line-active-color);
+}
+
+.editor-scope-line-active[data-editor-scope-line-level="0"] {
+  background: var(--editor-scope-line-active-color-0);
+}
+
+.editor-scope-line-active[data-editor-scope-line-level="1"] {
+  background: var(--editor-scope-line-active-color-1);
+}
+
+.editor-scope-line-active[data-editor-scope-line-level="2"] {
+  background: var(--editor-scope-line-active-color-2);
+}
+
+.editor-scope-line-active[data-editor-scope-line-level="3"] {
+  background: var(--editor-scope-line-active-color-3);
+}
+
+.editor-scope-line-active[data-editor-scope-line-level="4"] {
+  background: var(--editor-scope-line-active-color-4);
+}
+
+.editor-scope-line-active[data-editor-scope-line-level="5"] {
+  background: var(--editor-scope-line-active-color-5);
+}

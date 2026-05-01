@@ -99,7 +99,8 @@ export type VirtualizedTextViewState = {
   readonly viewportHeight: number;
   readonly viewportWidth: number;
   readonly visibleRange: FixedRowVisibleRange;
-  readonly mountedRows: readonly VirtualizedTextRow[];
+  readonly mountedRows: readonly MountedVirtualizedTextRow[];
+  readonly foldMarkers: readonly VirtualizedFoldMarker[];
   readonly wrapActive: boolean;
   readonly blockRowCount: number;
   readonly tabSize: number;

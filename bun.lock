@@ -19,6 +19,7 @@
         "@editor/find": "workspace:*",
         "@editor/gutters": "workspace:*",
         "@editor/minimap": "workspace:*",
+        "@editor/scope-lines": "workspace:*",
         "@editor/shiki": "workspace:*",
         "@editor/tree-sitter-languages": "workspace:*",
         "@editor/typescript-lsp": "workspace:*",
@@ -124,6 +125,21 @@
         "vitest": "^3.1.1",
       },
     },
+    "packages/scope-lines": {
+      "name": "@editor/scope-lines",
+      "version": "0.0.0",
+      "dependencies": {
+        "@editor/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@typescript/native-preview": "latest",
+        "happy-dom": "^20.8.9",
+        "oxfmt": "latest",
+        "oxlint": "latest",
+        "typescript": "~5.9.3",
+        "vitest": "^3.1.1",
+      },
+    },
     "packages/shiki": {
       "name": "@editor/shiki",
       "version": "0.1.0",
@@ -211,6 +227,8 @@
     "@editor/lsp": ["@editor/lsp@workspace:packages/lsp"],
 
     "@editor/minimap": ["@editor/minimap@workspace:packages/minimap"],
+
+    "@editor/scope-lines": ["@editor/scope-lines@workspace:packages/scope-lines"],
 
     "@editor/shiki": ["@editor/shiki@workspace:packages/shiki"],
 

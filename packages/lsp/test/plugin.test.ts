@@ -179,6 +179,9 @@ function editorSnapshot(options: Partial<EditorViewSnapshot> = {}): EditorViewSn
     lineCount: 1,
     contentWidth: 0,
     totalHeight: 0,
+    tabSize: 4,
+    foldMarkers: [],
+    visibleRows: [],
     viewport: {
       scrollTop: 0,
       scrollLeft: 0,

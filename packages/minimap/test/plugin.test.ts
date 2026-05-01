@@ -143,6 +143,9 @@ function snapshot(viewport: Partial<EditorViewSnapshot["viewport"]> = {}): Edito
     lineCount: 1,
     contentWidth: 0,
     totalHeight: 20,
+    tabSize: 4,
+    foldMarkers: [],
+    visibleRows: [],
     viewport: {
       scrollTop: 0,
       scrollLeft: 0,

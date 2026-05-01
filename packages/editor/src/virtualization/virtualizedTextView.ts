@@ -475,6 +475,7 @@ export class VirtualizedTextView {
       viewportWidth: snapshot.viewportWidth,
       visibleRange: snapshot.visibleRange,
       mountedRows: getMountedRows(view),
+      foldMarkers: view.foldMarkers,
       wrapActive: view.wrapEnabled,
       blockRowCount: view.blockRows.length,
       tabSize: view.tabSize,

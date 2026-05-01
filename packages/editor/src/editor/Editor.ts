@@ -607,6 +607,19 @@ export class Editor {
       lineCount: viewState.lineCount,
       contentWidth: viewState.contentWidth,
       totalHeight: viewState.totalHeight,
+      tabSize: viewState.tabSize,
+      foldMarkers: viewState.foldMarkers,
+      visibleRows: viewState.mountedRows.map((row) => ({
+        index: row.index,
+        bufferRow: row.bufferRow,
+        startOffset: row.startOffset,
+        endOffset: row.endOffset,
+        text: row.text,
+        kind: row.kind,
+        primaryText: row.displayKind === "text",
+        top: row.top,
+        height: row.height,
+      })),
       viewport,
     };
   }

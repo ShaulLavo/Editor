@@ -60,6 +60,9 @@ function snapshot(text: string): EditorViewSnapshot {
     lineCount: 2,
     contentWidth: 160,
     totalHeight: 40,
+    tabSize: 4,
+    foldMarkers: [],
+    visibleRows: [],
     viewport: {
       scrollTop: 0,
       scrollLeft: 0,
