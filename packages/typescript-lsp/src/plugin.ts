@@ -443,12 +443,11 @@ class TypeScriptLspContribution implements EditorViewContribution {
 
     this.lastPointerOffset = offset;
     if (isNavigationModifier(event)) {
-      this.hideHover();
       this.requestDefinitionLink(offset);
-      return;
+    } else {
+      this.clearDefinitionLink();
     }
 
-    this.clearDefinitionLink();
     this.scheduleHover(offset);
   };
 
@@ -474,8 +473,8 @@ class TypeScriptLspContribution implements EditorViewContribution {
     if (!isNavigationModifier(event)) return;
     if (this.lastPointerOffset === null) return;
 
-    this.hideHover();
     this.requestDefinitionLink(this.lastPointerOffset);
+    this.scheduleHover(this.lastPointerOffset);
   };
 
   private readonly handleKeyUp = (event: KeyboardEvent): void => {
@@ -594,7 +593,7 @@ class TypeScriptLspContribution implements EditorViewContribution {
   ): void {
     if (requestId !== this.definitionHoverRequestId) return;
     if (active !== this.activeDocument) return;
-    if (!preferredDefinitionTarget(active.uri, result)) return this.clearDefinitionLink();
+    if (!preferredJumpableDefinitionTarget(active, range, result)) return this.clearDefinitionLink();
 
     this.linkRange = range;
     this.context.setRangeHighlight?.(this.linkHighlightName, [range], LINK_HIGHLIGHT_STYLE);
@@ -950,13 +949,46 @@ function preferredDefinitionTarget(
   activeUri: lsp.DocumentUri,
   result: lsp.Location[] | lsp.Location | lsp.LocationLink[] | null,
 ): TypeScriptLspDefinitionTarget | null {
-  const targets = definitionTargets(result);
+  return preferredTarget(activeUri, definitionTargets(result));
+}
+
+function preferredJumpableDefinitionTarget(
+  active: ActiveDocument,
+  sourceRange: OffsetRange,
+  result: lsp.Location[] | lsp.Location | lsp.LocationLink[] | null,
+): TypeScriptLspDefinitionTarget | null {
+  const targets = definitionTargets(result).filter(
+    (target) => !targetIsSourceRange(active, sourceRange, target),
+  );
+  return preferredTarget(active.uri, targets);
+}
+
+function preferredTarget(
+  activeUri: lsp.DocumentUri,
+  targets: readonly TypeScriptLspDefinitionTarget[],
+): TypeScriptLspDefinitionTarget | null {
   return (
     targets.find((target) => target.uri === activeUri) ??
     targets.find((target) => !target.path.includes("/node_modules/")) ??
     targets[0] ??
     null
   );
+}
+
+function targetIsSourceRange(
+  active: ActiveDocument,
+  sourceRange: OffsetRange,
+  target: TypeScriptLspDefinitionTarget,
+): boolean {
+  if (target.uri !== active.uri) return false;
+
+  const targetStart = lspPositionToOffset(active.text, target.range.start);
+  const targetEnd = lspPositionToOffset(active.text, target.range.end);
+  return rangesOverlap(sourceRange, { start: targetStart, end: targetEnd });
+}
+
+function rangesOverlap(left: OffsetRange, right: OffsetRange): boolean {
+  return left.start < right.end && right.start < left.end;
 }
 
 function definitionTargets(

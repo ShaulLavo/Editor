@@ -265,6 +265,114 @@ describe("createTypeScriptLspPlugin", () => {
   });
 
   it("underlines jumpable symbols while hovering with a navigation modifier", async () => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker();
+    const context = viewContributionContext(
+      editorSnapshot({ text: "const source = value; const value = 1;" }),
+    );
+    vi.mocked(context.textOffsetFromPoint).mockReturnValue(15);
+    const plugin = createTypeScriptLspPlugin({ workerFactory: () => worker });
+    const provider = activatePlugin(plugin);
+    provider.createContribution(context);
+
+    worker.receive(initializeResponse(message(worker.sent[0])));
+    await flushPromises();
+    context.scrollElement.dispatchEvent(
+      new PointerEvent("pointermove", {
+        clientX: 12,
+        clientY: 16,
+        ctrlKey: true,
+      }),
+    );
+
+    const definitionRequest = message(
+      worker.sent.toReversed().find(hasMethod("textDocument/definition")),
+    );
+    expect(definitionRequest.params).toMatchObject({
+      textDocument: { uri: "file:///src/index.ts" },
+      position: { line: 0, character: 15 },
+    });
+
+    worker.receive({
+      jsonrpc: "2.0",
+      id: definitionRequest.id,
+      result: [
+        {
+          uri: "file:///src/index.ts",
+          range: {
+            start: { line: 0, character: 28 },
+            end: { line: 0, character: 33 },
+          },
+        },
+      ],
+    });
+    await flushPromises();
+
+    expect(context.setRangeHighlight).toHaveBeenCalledWith(
+      "editor-test-typescript-lsp-definition-link",
+      [{ start: 15, end: 20 }],
+      expect.objectContaining({
+        color: "#60a5fa",
+        textDecoration: expect.stringContaining("underline"),
+      }),
+    );
+    expect(context.scrollElement.style.cursor).toBe("pointer");
+
+    context.scrollElement.dispatchEvent(new PointerEvent("pointerleave"));
+    expect(context.clearRangeHighlight).toHaveBeenCalledWith(
+      "editor-test-typescript-lsp-definition-link",
+    );
+    expect(context.scrollElement.style.cursor).toBe("");
+  });
+
+  it("keeps hover tooltip working while hovering with a navigation modifier", async () => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker();
+    const context = viewContributionContext(
+      editorSnapshot({ text: "const source = value; const value = 1;" }),
+    );
+    vi.mocked(context.textOffsetFromPoint).mockReturnValue(15);
+    const plugin = createTypeScriptLspPlugin({ workerFactory: () => worker });
+    const provider = activatePlugin(plugin);
+    provider.createContribution(context);
+
+    worker.receive(initializeResponse(message(worker.sent[0])));
+    await flushPromises();
+    context.scrollElement.dispatchEvent(
+      new PointerEvent("pointermove", {
+        clientX: 12,
+        clientY: 16,
+        ctrlKey: true,
+      }),
+    );
+
+    expect(worker.sent.some(hasMethod("textDocument/definition"))).toBe(true);
+    await vi.advanceTimersByTimeAsync(260);
+    const hoverRequest = message(worker.sent.toReversed().find(hasMethod("textDocument/hover")));
+    expect(hoverRequest.params).toMatchObject({
+      textDocument: { uri: "file:///src/index.ts" },
+      position: { line: 0, character: 15 },
+    });
+
+    worker.receive({
+      jsonrpc: "2.0",
+      id: hoverRequest.id,
+      result: {
+        contents: { kind: "markdown", value: "```ts\nconst value: number\n```" },
+        range: {
+          start: { line: 0, character: 15 },
+          end: { line: 0, character: 20 },
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(tooltipElement().hidden).toBe(false);
+    expect(tooltipElement().querySelector("pre > code")?.textContent).toBe("const value: number");
+  });
+
+  it("does not underline a symbol when its definition is the same range", async () => {
+    vi.useFakeTimers();
     const worker = new FakeWorker();
     const context = viewContributionContext(editorSnapshot());
     vi.mocked(context.textOffsetFromPoint).mockReturnValue(6);
@@ -285,11 +393,6 @@ describe("createTypeScriptLspPlugin", () => {
     const definitionRequest = message(
       worker.sent.toReversed().find(hasMethod("textDocument/definition")),
     );
-    expect(definitionRequest.params).toMatchObject({
-      textDocument: { uri: "file:///src/index.ts" },
-      position: { line: 0, character: 6 },
-    });
-
     worker.receive({
       jsonrpc: "2.0",
       id: definitionRequest.id,
@@ -305,17 +408,11 @@ describe("createTypeScriptLspPlugin", () => {
     });
     await flushPromises();
 
-    expect(context.setRangeHighlight).toHaveBeenCalledWith(
+    expect(context.setRangeHighlight).not.toHaveBeenCalledWith(
       "editor-test-typescript-lsp-definition-link",
-      [{ start: 6, end: 11 }],
-      expect.objectContaining({
-        color: "#60a5fa",
-        textDecoration: expect.stringContaining("underline"),
-      }),
+      expect.anything(),
+      expect.anything(),
     );
-    expect(context.scrollElement.style.cursor).toBe("pointer");
-
-    context.scrollElement.dispatchEvent(new PointerEvent("pointerleave"));
     expect(context.clearRangeHighlight).toHaveBeenCalledWith(
       "editor-test-typescript-lsp-definition-link",
     );
