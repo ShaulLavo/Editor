@@ -76,6 +76,7 @@ describe("gutter plugins", () => {
     });
     const cell = contribution.createCell(document);
     const toggleFold = vi.fn();
+    const button = cell.querySelector<HTMLButtonElement>(".editor-virtualized-fold-toggle");
 
     contribution.updateCell(cell, {
       index: 0,
@@ -103,10 +104,11 @@ describe("gutter plugins", () => {
       toggleFold,
     });
 
-    expect(cell.hidden).toBe(false);
-    expect(cell.dataset.editorFoldKey).toBe("fold-0");
+    expect(button).not.toBeNull();
+    expect(button?.hidden).toBe(false);
+    expect(button?.dataset.editorFoldKey).toBe("fold-0");
     expect(cell.querySelector("[data-test-fold-icon='custom']")).not.toBeNull();
-    cell.click();
+    button?.click();
     expect(toggleFold).toHaveBeenCalledOnce();
   });
 });

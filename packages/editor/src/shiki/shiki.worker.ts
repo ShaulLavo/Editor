@@ -1,7 +1,7 @@
 import { createHighlighter, type HighlighterGeneric } from "shiki";
 import { createIncrementalTokenizer, type IncrementalTokenizer } from "./tokenizer";
 import { snapshotToEditorTokens } from "./editor-tokens";
-import type { EditorTheme } from "@editor/core";
+import type { EditorTheme } from "../theme";
 import type {
   ShikiWorkerDocumentOptions,
   ShikiWorkerEditRequest,
@@ -71,7 +71,11 @@ const SYNTAX_SCOPE_MAPPINGS: readonly SyntaxScopeMapping[] = [
   },
   {
     key: "keywordImport",
-    scopes: ["keyword.control.import", "keyword.control.from", "keyword.operator.expression.import"],
+    scopes: [
+      "keyword.control.import",
+      "keyword.control.from",
+      "keyword.operator.expression.import",
+    ],
   },
   {
     key: "namespace",

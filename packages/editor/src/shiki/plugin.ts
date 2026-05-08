@@ -1,8 +1,5 @@
-import type {
-  EditorHighlighterSessionOptions,
-  EditorPlugin,
-  EditorSyntaxLanguageId,
-} from "@editor/core";
+import type { EditorHighlighterSessionOptions, EditorPlugin } from "../plugins";
+import type { EditorSyntaxLanguageId } from "../syntax/session";
 import {
   canUseShikiWorker,
   createShikiHighlighterSession,
@@ -24,9 +21,11 @@ const DEFAULT_THEME = "github-dark";
 const DEFAULT_LANGUAGE_MAP: ShikiLanguageMap = {
   css: "css",
   html: "html",
+  javascriptreact: "jsx",
   javascript: "javascript",
   json: "json",
   tsx: "tsx",
+  typescriptreact: "tsx",
   typescript: "typescript",
 };
 
@@ -75,10 +74,31 @@ const shikiLanguageForSession = (
   if (!options.languageId) return null;
 
   const configured = languages?.[options.languageId];
-  return configured ?? DEFAULT_LANGUAGE_MAP[options.languageId] ?? null;
+  if (configured) return configured;
+
+  const extensionLang = shikiLanguageForDocumentExtension(options.documentId, options.languageId);
+  return extensionLang ?? DEFAULT_LANGUAGE_MAP[options.languageId] ?? null;
 };
 
 const preloadLanguages = (
   lang: string,
   options: ShikiHighlighterPluginOptions,
 ): readonly string[] => [lang, ...Array.from(options.preloadLanguages ?? [])];
+
+const shikiLanguageForDocumentExtension = (
+  documentId: string,
+  languageId: EditorSyntaxLanguageId,
+): string | null => {
+  const extension = extensionForDocumentId(documentId);
+  if (languageId === "typescript" && extension === ".tsx") return "tsx";
+  if (languageId === "javascript" && extension === ".jsx") return "jsx";
+  return null;
+};
+
+const extensionForDocumentId = (documentId: string): string | null => {
+  const path = documentId.split(/[?#]/, 1)[0] ?? documentId;
+  const slashIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  const dotIndex = path.lastIndexOf(".");
+  if (dotIndex <= slashIndex) return null;
+  return path.slice(dotIndex).toLowerCase();
+};

@@ -71,6 +71,7 @@ export function mountApp(): void {
         icon: createFoldChevronIcon,
         iconClassName: "app-fold-gutter-icon",
       }),
+      // Shiki highlighter: import createShikiHighlighterPlugin from "@editor/core/shiki".
       // createShikiHighlighterPlugin({ theme: "github-dark" }),
       createEditorFindPlugin(),
       createScopeLinesPlugin(),

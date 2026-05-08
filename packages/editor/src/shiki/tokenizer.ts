@@ -1,4 +1,4 @@
-import type { TextEdit } from "@editor/core";
+import type { TextEdit } from "../tokens";
 import { createHighlighter } from "shiki";
 import type { GrammarState, HighlighterGeneric, ThemedToken } from "shiki";
 

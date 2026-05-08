@@ -201,7 +201,8 @@ function hiddenCharacterKinds(): string[] {
 
 function rowTextNode(row = 0): Text {
   const element = document.querySelector(`[data-editor-virtual-row="${row}"]`);
-  return element?.firstChild as Text;
+  const walker = document.createTreeWalker(element!, NodeFilter.SHOW_TEXT);
+  return walker.nextNode() as Text;
 }
 
 function setCollapsedDomSelection(offset: number): void {
@@ -296,6 +297,10 @@ function tokenHighlights(): Highlight[] {
 
 function tokenHighlightRanges(): AbstractRange[] {
   return tokenHighlights().flatMap((highlight) => [...highlight]);
+}
+
+function selectionRanges(): HTMLElement[] {
+  return [...document.querySelectorAll<HTMLElement>(".editor-virtualized-selection-range")];
 }
 
 function foldToggle(): HTMLButtonElement {
@@ -1235,7 +1240,7 @@ describe("Editor", () => {
       expect(resolved.headOffset).toBe(2);
       expect(resolved.startOffset).toBe(2);
       expect(resolved.endOffset).toBe(3);
-      expect(highlightsMap.get("editor-token-0-selection")?.size).toBe(1);
+      expect(selectionRanges()).toHaveLength(1);
     });
 
     it("extends all cursors with shift arrow keys", () => {
@@ -1376,7 +1381,7 @@ describe("Editor", () => {
       expect(editorRoot().textContent).toBe("aXd");
     });
 
-    it("renders range selections with a custom highlight", () => {
+    it("renders range selections with custom selection geometry", () => {
       const session = createDocumentSession("abcd");
       editor.attachSession(session);
       const textNode = rowTextNode();
@@ -1389,7 +1394,7 @@ describe("Editor", () => {
       selection.addRange(range);
       editorRoot().dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
 
-      expect(highlightsMap.get("editor-token-0-selection")?.size).toBe(1);
+      expect(selectionRanges()).toHaveLength(1);
 
       editorRoot().dispatchEvent(
         new InputEvent("beforeinput", {
@@ -1400,7 +1405,7 @@ describe("Editor", () => {
         }),
       );
 
-      expect(highlightsMap.has("editor-token-0-selection")).toBe(false);
+      expect(selectionRanges()).toHaveLength(0);
     });
 
     it("adds an Option-click cursor and edits all cursors together", () => {
@@ -1673,7 +1678,7 @@ describe("Editor", () => {
       document.dispatchEvent(new MouseEvent("mousemove", { cancelable: true, clientX: 30 }));
 
       expect(mouseDown.defaultPrevented).toBe(true);
-      expect(highlightsMap.get("editor-token-0-selection")?.size).toBe(1);
+      expect(selectionRanges()).toHaveLength(1);
 
       let resolved = resolveSelection(
         session.getSnapshot(),
@@ -2106,7 +2111,7 @@ describe("Editor", () => {
       );
       expect(resolved.startOffset).toBe(6);
       expect(resolved.endOffset).toBe(10);
-      expect(highlightsMap.get("editor-token-0-selection")?.size).toBe(1);
+      expect(selectionRanges()).toHaveLength(1);
 
       editorRoot().dispatchEvent(
         new InputEvent("beforeinput", {
@@ -2584,7 +2589,9 @@ describe("Editor", () => {
           ?.getAttribute("data-editor-virtual-gutter-row"),
       ).toBe("0");
       expect(
-        visible[0]?.previousElementSibling?.classList.contains("editor-virtualized-line-number"),
+        visible[0]
+          ?.closest("[data-editor-gutter-contribution='fold-gutter']")
+          ?.previousElementSibling?.classList.contains("editor-virtualized-line-number"),
       ).toBe(true);
     });
 

@@ -29,6 +29,7 @@ import {
   refreshCursorLineRows,
 } from "./virtualizedTextViewRows";
 import { renderHiddenCharacters } from "./virtualizedTextViewHiddenCharacters";
+import { clearSelectionLayer, renderSelectionLayer } from "./virtualizedTextViewSelectionLayer";
 import type {
   MountedVirtualizedTextRow,
   TokenGroup,
@@ -117,70 +118,11 @@ export function renderSelectionHighlight(view: VirtualizedTextViewInternal): voi
     clearSelectionHighlight(view);
     return;
   }
-  if (!view.selectionHighlight || !view.highlightRegistry) return;
-
-  const signature = selectionHighlightSignature(view, view.selections);
-  if (signature === view.lastSelectionHighlightSignature) return;
-
-  view.lastSelectionHighlightSignature = signature;
-  clearSelectionHighlightRanges(view);
-  addMountedSelectionRanges(view, view.selections);
-  if (view.selectionHighlight.size === 0) return;
-
-  ensureSelectionHighlightRegistered(view);
-}
-
-function addMountedSelectionRanges(
-  view: VirtualizedTextViewInternal,
-  selections: readonly VirtualizedStoredSelection[],
-): void {
-  for (const row of getMountedRows(view)) {
-    addMountedSelectionRangesForRow(view, row, selections);
-  }
-}
-
-function addMountedSelectionRangesForRow(
-  view: VirtualizedTextViewInternal,
-  row: VirtualizedTextRow,
-  selections: readonly VirtualizedStoredSelection[],
-): void {
-  for (const selection of selections) {
-    addMountedSelectionRange(view, row, selection.start, selection.end);
-  }
-}
-
-function addMountedSelectionRange(
-  view: VirtualizedTextViewInternal,
-  row: VirtualizedTextRow,
-  start: number,
-  end: number,
-): void {
-  if (!view.selectionHighlight) return;
-  if (start === end) return;
-  if (end <= row.startOffset || start >= row.endOffset) return;
-
-  for (const chunk of row.chunks) {
-    addSelectionRangeToChunk(view, chunk, start, end);
-  }
-}
-
-function addSelectionRangeToChunk(
-  view: VirtualizedTextViewInternal,
-  chunk: VirtualizedTextChunk,
-  start: number,
-  end: number,
-): void {
-  if (!view.selectionHighlight) return;
-  if (end <= chunk.startOffset || start >= chunk.endOffset) return;
-
-  const range = view.scrollElement.ownerDocument.createRange();
-  range.setStart(chunk.textNode, clamp(start - chunk.startOffset, 0, chunk.textNode.length));
-  range.setEnd(chunk.textNode, clamp(end - chunk.startOffset, 0, chunk.textNode.length));
-  view.selectionHighlight.add(range);
+  renderSelectionLayer(view);
 }
 
 export function clearSelectionHighlight(view: VirtualizedTextViewInternal): void {
-  clearSelectionHighlightRanges(view);
+  clearSelectionLayer(view);
   view.lastSelectionHighlightSignature = "";
   if (!view.selectionHighlightRegistered || !view.highlightRegistry) return;
 
@@ -228,45 +170,6 @@ export function clearRangeHighlight(view: VirtualizedTextViewInternal, name: str
   if (group.registered) view.highlightRegistry?.delete(name);
   view.rangeHighlightGroups.delete(name);
   rebuildStyleRules(view);
-}
-
-function selectionHighlightSignature(
-  view: VirtualizedTextViewInternal,
-  selections: readonly VirtualizedStoredSelection[],
-): string {
-  const parts = selections.map((selection) => {
-    return `${selection.start}:${selection.end}:${selection.head}`;
-  });
-  for (const row of getMountedRows(view)) {
-    appendSelectionRowSignature(parts, row, selections);
-  }
-
-  return parts.join("|");
-}
-
-function appendSelectionRowSignature(
-  parts: string[],
-  row: VirtualizedTextRow,
-  selections: readonly VirtualizedStoredSelection[],
-): void {
-  for (const selection of selections) {
-    appendSelectionRangeRowSignature(parts, row, selection.start, selection.end);
-  }
-}
-
-function appendSelectionRangeRowSignature(
-  parts: string[],
-  row: VirtualizedTextRow,
-  start: number,
-  end: number,
-): void {
-  if (start === end) return;
-  if (end <= row.startOffset || start >= row.endOffset) return;
-
-  for (const chunk of row.chunks) {
-    const signature = selectionChunkSignature(row, chunk, start, end);
-    if (signature) parts.push(signature);
-  }
 }
 
 function renderCaret(view: VirtualizedTextViewInternal): void {
@@ -742,20 +645,6 @@ export function clearRowTokenState(view: VirtualizedTextViewInternal): void {
   view.rowTokenRanges.clear();
 }
 
-function clearSelectionHighlightRanges(view: VirtualizedTextViewInternal): void {
-  if (!view.selectionHighlight || view.selectionHighlight.size === 0) return;
-
-  view.selectionHighlight?.clear();
-}
-
-function ensureSelectionHighlightRegistered(view: VirtualizedTextViewInternal): void {
-  if (view.selectionHighlightRegistered) return;
-  if (!view.selectionHighlight || !view.highlightRegistry) return;
-
-  view.highlightRegistry.set(view.selectionHighlightName, view.selectionHighlight);
-  view.selectionHighlightRegistered = true;
-}
-
 function getOrCreateRangeHighlightGroup(
   view: VirtualizedTextViewInternal,
   name: string,
@@ -934,9 +823,7 @@ function hideSecondaryCaretElements(view: VirtualizedTextViewInternal, startInde
 }
 
 export function rebuildStyleRules(view: VirtualizedTextViewInternal): void {
-  const rules = [
-    `::highlight(${view.selectionHighlightName}) { background-color: rgba(56, 189, 248, 0.35); }`,
-  ];
+  const rules: string[] = [];
   for (const group of view.rangeHighlightGroups.values()) {
     rules.push(rangeHighlightRule(group.name, group.style));
   }

@@ -140,6 +140,7 @@ export type MountedVirtualizedTextRow = VirtualizedTextRow & {
   readonly gutterElement: HTMLDivElement;
   readonly gutterCells: Map<string, HTMLElement>;
   readonly leftSpacerElement: HTMLSpanElement;
+  readonly selectionLayerElement: HTMLDivElement;
   readonly foldPlaceholderElement: HTMLSpanElement;
   readonly hiddenCharactersLayerElement: HTMLDivElement;
   readonly top: number;
@@ -147,6 +148,7 @@ export type MountedVirtualizedTextRow = VirtualizedTextRow & {
   readonly textRevision: number;
   readonly tokenHighlightSlotId: number;
   readonly chunkKey: string;
+  readonly selectionLayerKey: string;
   readonly hiddenCharactersKey: string;
   readonly foldMarkerKey: string;
   readonly foldCollapsed: boolean;

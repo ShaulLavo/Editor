@@ -1,5 +1,5 @@
 import type { EditorPlugin } from "@editor/core";
-import type { LspWorkerLike } from "@editor/lsp";
+import type { LspWebSocketTransportOptions, LspWorkerLike } from "@editor/lsp";
 import type ts from "typescript";
 import type * as lsp from "vscode-languageserver-protocol";
 
@@ -37,6 +37,8 @@ export type TypeScriptLspPluginOptions = {
   readonly diagnosticDelayMs?: number;
   readonly timeoutMs?: number;
   readonly workerFactory?: () => LspWorkerLike;
+  readonly webSocketRoute?: string | URL;
+  readonly webSocketTransportOptions?: LspWebSocketTransportOptions;
   readonly onStatusChange?: (status: TypeScriptLspStatus) => void;
   readonly onDiagnostics?: (summary: TypeScriptLspDiagnosticSummary) => void;
   readonly onOpenDefinition?: (target: TypeScriptLspDefinitionTarget) => void | boolean;

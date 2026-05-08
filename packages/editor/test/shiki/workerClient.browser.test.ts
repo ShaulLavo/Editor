@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createPieceTableSnapshot, type DocumentSessionChange } from "@editor/core";
+import { createPieceTableSnapshot, type DocumentSessionChange } from "../../src";
 
-import { createShikiHighlighterSession, disposeShikiWorker, loadShikiTheme } from "../src";
+import { createShikiHighlighterSession, disposeShikiWorker, loadShikiTheme } from "../../src/shiki";
 
 const createChange = (text: string, edit: { from: number; to: number; text: string }) =>
   ({

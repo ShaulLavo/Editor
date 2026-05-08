@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createTextDiffEdit } from "../src/workerClient";
+import { createTextDiffEdit } from "../../src/shiki/workerClient";
 
 describe("ShikiHighlighterSession edit diffing", () => {
   it("builds a cumulative edit from cached text to latest text", () => {

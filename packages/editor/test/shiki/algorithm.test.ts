@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { IncrementalShikiTokenizer } from "../src/tokenizer";
-import type { StatesEqualFn, TokenizeLineFn } from "../src";
+import { IncrementalShikiTokenizer } from "../../src/shiki/tokenizer";
+import type { StatesEqualFn, TokenizeLineFn } from "../../src/shiki";
 import type { ThemedToken } from "shiki";
 
 // ── Mock tokenizer ─────────────────────────────────────────────

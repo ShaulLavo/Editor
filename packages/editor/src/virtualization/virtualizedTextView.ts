@@ -173,7 +173,7 @@ export class VirtualizedTextView {
       rowPool: [],
       highlightRegistry: options.highlightRegistry ?? getDefaultHighlightRegistry(),
       selectionHighlightName: options.selectionHighlightName ?? DEFAULT_SELECTION_HIGHLIGHT,
-      selectionHighlight: new Highlight(),
+      selectionHighlight: null,
       rangeHighlightGroups: new Map(),
       selectionHighlightRegistered: false,
       text: "",

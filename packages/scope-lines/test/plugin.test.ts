@@ -10,9 +10,9 @@ import { createScopeLinesPlugin } from "../src/index";
 
 describe("createScopeLinesPlugin", () => {
   it("registers a view contribution factory", () => {
-    const registerViewContribution = vi.fn<EditorPluginContext["registerViewContribution"]>(
-      () => ({ dispose: vi.fn() }),
-    );
+    const registerViewContribution = vi.fn<EditorPluginContext["registerViewContribution"]>(() => ({
+      dispose: vi.fn(),
+    }));
     const plugin = createScopeLinesPlugin();
 
     const disposable = plugin.activate(createContext(registerViewContribution));
@@ -37,7 +37,9 @@ describe("createScopeLinesPlugin", () => {
     );
 
     const contribution = registration?.createContribution(testContext);
-    const lines = [...testContext.scrollElement.querySelectorAll<HTMLElement>(".editor-scope-line")];
+    const lines = [
+      ...testContext.scrollElement.querySelectorAll<HTMLElement>(".editor-scope-line"),
+    ];
 
     expect(contribution).not.toBeNull();
     expect(lines).toHaveLength(2);
@@ -54,6 +56,30 @@ describe("createScopeLinesPlugin", () => {
 
     contribution?.dispose();
     expect(testContext.scrollElement.querySelector(".editor-scope-lines")).toBeNull();
+  });
+
+  it("aligns scope guides to the configured indent step", () => {
+    const registration = registeredProvider(createScopeLinesPlugin());
+    const text = "function f() {\n    if (x) {\n        y()\n    }\n}\n";
+    const testContext = context(
+      snapshot({
+        text,
+        lineStarts: lineStarts(text),
+        lineCount: 6,
+        tabSize: 4,
+        foldMarkers: fourSpaceFoldMarkers(text),
+        visibleRows: visibleRows(text),
+      }),
+    );
+
+    registration?.createContribution(testContext);
+
+    const lines = [
+      ...testContext.scrollElement.querySelectorAll<HTMLElement>(".editor-scope-line"),
+    ];
+    expect(lines).toHaveLength(2);
+    expect(lines[0]?.style.left).toBe("0px");
+    expect(lines[1]?.style.left).toBe("32px");
   });
 
   it("skips collapsed scopes", () => {
@@ -178,6 +204,28 @@ function foldMarkers(): readonly VirtualizedFoldMarker[] {
       key: "if:15:38",
       startOffset: 15,
       endOffset: 38,
+      startRow: 1,
+      endRow: 3,
+      collapsed: false,
+    },
+  ];
+}
+
+function fourSpaceFoldMarkers(text: string): readonly VirtualizedFoldMarker[] {
+  const starts = lineStarts(text);
+  return [
+    {
+      key: "function:0:52",
+      startOffset: starts[0]!,
+      endOffset: text.length,
+      startRow: 0,
+      endRow: 4,
+      collapsed: false,
+    },
+    {
+      key: "if:18:50",
+      startOffset: starts[1]!,
+      endOffset: starts[4]!,
       startRow: 1,
       endRow: 3,
       collapsed: false,

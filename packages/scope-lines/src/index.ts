@@ -98,9 +98,7 @@ class ScopeLinesContribution implements EditorViewContribution {
   }
 }
 
-function resolveScopeLinesOptions(
-  options: ScopeLinesPluginOptions,
-): ResolvedScopeLinesOptions {
+function resolveScopeLinesOptions(options: ScopeLinesPluginOptions): ResolvedScopeLinesOptions {
   return {
     enabled: options.enabled ?? true,
     className: options.className,
@@ -212,14 +210,14 @@ function scopeGuidePlacement(
     return placementFromIndent(startIndent, startIndent, snapshot.tabSize);
   }
 
-  return placementFromIndent(Math.max(startIndent, bodyIndent - 2), bodyIndent, snapshot.tabSize);
+  return placementFromIndent(
+    Math.max(startIndent, bodyIndent - snapshot.tabSize),
+    bodyIndent,
+    snapshot.tabSize,
+  );
 }
 
-function placementFromIndent(
-  column: number,
-  indent: number,
-  tabSize: number,
-): ScopeGuidePlacement {
+function placementFromIndent(column: number, indent: number, tabSize: number): ScopeGuidePlacement {
   return {
     column,
     indentLevel: indentLevelForColumn(indent, tabSize),

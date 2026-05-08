@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./editor": "./src/editor.ts",
+    "./shiki": "./src/shiki/index.ts",
     "./style.css": "./src/style.css"
   },
   "scripts": {
@@ -25,7 +26,8 @@
     "format:check": "oxfmt ."
   },
   "dependencies": {
-    "@tanstack/hotkeys": "0.8.0"
+    "@tanstack/hotkeys": "0.8.0",
+    "shiki": "^1.29.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",

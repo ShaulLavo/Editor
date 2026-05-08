@@ -1,10 +1,10 @@
+import type { DocumentSessionChange } from "../documentSession";
 import type {
-  DocumentSessionChange,
   EditorHighlightResult,
   EditorHighlighterSession,
   EditorHighlighterSessionOptions,
-  EditorTheme,
-} from "@editor/core";
+} from "../plugins";
+import type { EditorTheme } from "../theme";
 import type {
   ShikiWorkerDocumentOptions,
   ShikiWorkerRequest,

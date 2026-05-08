@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createIncrementalTokenizer } from "../src";
+import { createIncrementalTokenizer } from "../../src/shiki";
 
 function flattenTokens(line: readonly { content: string }[]): string {
   return line.map((token) => token.content).join("");

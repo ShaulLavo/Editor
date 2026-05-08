@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ShikiWorkerRequest, ShikiWorkerResponse } from "../src/workerTypes";
+import type { ShikiWorkerRequest, ShikiWorkerResponse } from "../../src/shiki/workerTypes";
 
 describe("Shiki worker message types", () => {
   it("accepts request and response payload shapes used by the worker client", () => {

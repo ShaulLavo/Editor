@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ShikiWorkerRequest, ShikiWorkerResponse } from "../src/workerTypes";
+import type { ShikiWorkerRequest, ShikiWorkerResponse } from "../../src/shiki/workerTypes";
 
 const createHighlighter = vi.hoisted(() => vi.fn());
 const createIncrementalTokenizer = vi.hoisted(() => vi.fn());
 
 vi.mock("shiki", () => ({ createHighlighter }));
-vi.mock("../src/tokenizer", () => ({ createIncrementalTokenizer }));
+vi.mock("../../src/shiki/tokenizer", () => ({ createIncrementalTokenizer }));
 
 describe("shiki worker", () => {
   afterEach(() => {
@@ -20,7 +20,7 @@ describe("shiki worker", () => {
     const postMessage = vi.fn();
     (globalThis as { self?: unknown }).self = { postMessage };
     createHighlighter.mockRejectedValue(new Error("load failed"));
-    await import("../src/shiki.worker");
+    await import("../../src/shiki/shiki.worker");
 
     const onmessage = (globalThis as { self: { onmessage: (event: MessageEvent) => void } }).self
       .onmessage;
@@ -53,7 +53,7 @@ describe("shiki worker", () => {
     createIncrementalTokenizer.mockResolvedValue({
       tokenizer: { getSnapshot: () => ({ lines: [] }) },
     });
-    await import("../src/shiki.worker");
+    await import("../../src/shiki/shiki.worker");
 
     const onmessage = (globalThis as { self: { onmessage: (event: MessageEvent) => void } }).self
       .onmessage;
@@ -93,7 +93,7 @@ describe("shiki worker", () => {
     createIncrementalTokenizer.mockResolvedValue({
       tokenizer: { getSnapshot: () => ({ lines: [] }) },
     });
-    await import("../src/shiki.worker");
+    await import("../../src/shiki/shiki.worker");
 
     const onmessage = (globalThis as { self: { onmessage: (event: MessageEvent) => void } }).self
       .onmessage;
@@ -137,7 +137,7 @@ describe("shiki worker", () => {
     }));
     (globalThis as { self?: unknown }).self = { postMessage };
     createHighlighter.mockResolvedValue({ getTheme });
-    await import("../src/shiki.worker");
+    await import("../../src/shiki/shiki.worker");
 
     const onmessage = (globalThis as { self: { onmessage: (event: MessageEvent) => void } }).self
       .onmessage;
@@ -184,7 +184,7 @@ describe("shiki worker", () => {
     }));
     (globalThis as { self?: unknown }).self = { postMessage };
     createHighlighter.mockResolvedValue({ getTheme });
-    await import("../src/shiki.worker");
+    await import("../../src/shiki/shiki.worker");
 
     const onmessage = (globalThis as { self: { onmessage: (event: MessageEvent) => void } }).self
       .onmessage;

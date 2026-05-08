@@ -1,4 +1,5 @@
-import type { EditorTheme, EditorToken, TextEdit } from "@editor/core";
+import type { EditorTheme } from "../theme";
+import type { EditorToken, TextEdit } from "../tokens";
 
 export type ShikiWorkerDocumentOptions = {
   readonly documentId: string;

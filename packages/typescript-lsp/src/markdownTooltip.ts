@@ -15,14 +15,7 @@ type MarkdownNode = {
   readonly align?: readonly (string | null | undefined)[];
 };
 
-const TYPESCRIPT_LIKE_LANGUAGES = new Set([
-  "javascript",
-  "js",
-  "jsx",
-  "ts",
-  "tsx",
-  "typescript",
-]);
+const TYPESCRIPT_LIKE_LANGUAGES = new Set(["javascript", "js", "jsx", "ts", "tsx", "typescript"]);
 
 const TYPESCRIPT_KEYWORDS = new Set([
   "abstract",
@@ -119,11 +112,7 @@ export function renderTooltipMarkdown(document: Document, markdown: string): HTM
   return root;
 }
 
-function appendChildren(
-  parent: Node,
-  document: Document,
-  children: readonly MarkdownNode[],
-): void {
+function appendChildren(parent: Node, document: Document, children: readonly MarkdownNode[]): void {
   for (const child of children) appendNode(parent, document, child);
 }
 

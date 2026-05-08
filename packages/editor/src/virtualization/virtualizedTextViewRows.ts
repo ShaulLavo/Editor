@@ -113,6 +113,7 @@ function createRow(view: VirtualizedTextViewInternal): MountedVirtualizedTextRow
   const element = document.createElement("div");
   const gutterElement = document.createElement("div");
   const leftSpacerElement = document.createElement("span");
+  const selectionLayerElement = document.createElement("div");
   const foldPlaceholderElement = document.createElement("span");
   const hiddenCharactersLayerElement = document.createElement("div");
   const textNode = document.createTextNode("");
@@ -121,6 +122,8 @@ function createRow(view: VirtualizedTextViewInternal): MountedVirtualizedTextRow
   element.className = "editor-virtualized-row";
   gutterElement.className = "editor-virtualized-gutter-row";
   leftSpacerElement.className = "editor-virtualized-row-spacer";
+  selectionLayerElement.className = "editor-virtualized-selection-layer";
+  selectionLayerElement.setAttribute("aria-hidden", "true");
   foldPlaceholderElement.className = "editor-virtualized-fold-placeholder";
   hiddenCharactersLayerElement.className = "editor-virtualized-hidden-character-layer";
   hiddenCharactersLayerElement.setAttribute("aria-hidden", "true");
@@ -151,9 +154,11 @@ function createRow(view: VirtualizedTextViewInternal): MountedVirtualizedTextRow
     gutterElement,
     gutterCells,
     leftSpacerElement,
+    selectionLayerElement,
     foldPlaceholderElement,
     hiddenCharactersLayerElement,
     textNode,
+    selectionLayerKey: "",
     hiddenCharactersKey: "",
   };
 }

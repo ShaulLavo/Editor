@@ -41,7 +41,7 @@ architecture questions, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 | Package | Purpose |
 | --- | --- |
-| `@editor/core` | Core editor runtime, document model, anchors, selections, syntax sessions, folds, transforms, virtualization, renderer, themes, and plugin contracts. |
+| `@editor/core` | Core editor runtime, document model, anchors, selections, syntax sessions, folds, transforms, virtualization, renderer, themes, Shiki highlighter, and plugin contracts. |
 | `@editor/gutters` | Line-number and fold-gutter plugins for the core editor. |
 | `@editor/find` | Find and replace plugin for the core editor. |
 | `@editor/minimap` | Minimap plugin with worker-backed document rendering. |
@@ -50,7 +50,6 @@ architecture questions, see [ARCHITECTURE.md](ARCHITECTURE.md).
 | `@editor/tree-sitter-languages` | Tree-sitter language contributions and queries for JavaScript, TypeScript, HTML, CSS, and JSON. |
 | `@editor/typescript-lsp` | TypeScript language-service plugin built on the generic LSP layer. |
 | `@editor/lsp` | Generic LSP transport and plugin primitives. |
-| `@editor/shiki` | Optional Shiki highlighter plugin for hosts that prefer Shiki tokenization. |
 | `@editor/example-app` | Demo application using the editor, language plugins, gutters, minimap, and File System Access/GitHub-backed source browsing. |
 
 ## Requirements
@@ -118,7 +117,6 @@ Run package-specific browser tests:
 ```sh
 bun --cwd packages/editor run test:browser
 bun --cwd packages/minimap run test:browser
-bun --cwd packages/shiki run test:browser
 ```
 
 Run the example app e2e tests:
@@ -160,7 +158,6 @@ packages/gutters/                 Line and fold gutter plugins
 packages/minimap/                 Minimap plugin and worker renderer
 packages/tree-sitter/             Optional Tree-sitter runtime and worker client
 packages/tree-sitter-languages/   Tree-sitter grammar/query plugin package
-packages/shiki/                   Optional Shiki highlighter plugin
 examples/app/                     Demo app
 docs/                             Design documents
 opensrc/                          Local source references for selected dependencies

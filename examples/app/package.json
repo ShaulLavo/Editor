@@ -20,7 +20,6 @@
     "@editor/gutters": "workspace:*",
     "@editor/minimap": "workspace:*",
     "@editor/scope-lines": "workspace:*",
-    "@editor/shiki": "workspace:*",
     "@editor/tree-sitter-languages": "workspace:*",
     "@editor/typescript-lsp": "workspace:*"
   },

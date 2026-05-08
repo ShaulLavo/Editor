@@ -11,12 +11,14 @@ import type {
   VirtualizedTextHighlightStyle,
 } from "@editor/core";
 import {
+  createWebSocketLspTransport,
   createWorkerLspTransport,
   lspPositionToOffset,
   LspClient,
   LspWorkspace,
   offsetToLspPosition,
   type LspManagedTransport,
+  type LspWebSocketTransportOptions,
   type LspWorkerLike,
 } from "@editor/lsp";
 import type * as lsp from "vscode-languageserver-protocol";
@@ -42,6 +44,8 @@ export type TypeScriptLspResolvedOptions = {
   readonly diagnosticDelayMs: number;
   readonly timeoutMs: number;
   readonly workerFactory: () => LspWorkerLike;
+  readonly webSocketRoute?: string | URL;
+  readonly webSocketTransportOptions?: LspWebSocketTransportOptions;
   readonly onStatusChange?: (status: TypeScriptLspStatus) => void;
   readonly onDiagnostics?: (summary: TypeScriptLspDiagnosticSummary) => void;
   readonly onOpenDefinition?: (target: TypeScriptLspDefinitionTarget) => void | boolean;
@@ -79,6 +83,9 @@ const HOVER_HIDE_DELAY_MS = 180;
 const COPY_BUTTON_RESET_DELAY_MS = 1200;
 const TOOLTIP_GAP_PX = 8;
 const TOOLTIP_VIEWPORT_MARGIN_PX = 12;
+const TOOLTIP_MAX_HEIGHT_PX = 420;
+const TOOLTIP_MIN_MAX_HEIGHT_PX = 80;
+const TOOLTIP_BODY_CHROME_PX = 46;
 const SVG_NS = "http://www.w3.org/2000/svg";
 let nextTooltipAnchorId = 0;
 const LINK_HIGHLIGHT_STYLE: VirtualizedTextHighlightStyle = {
@@ -185,8 +192,7 @@ class TypeScriptLspCommandContribution implements EditorFeatureContribution {
 
 class TypeScriptLspContribution implements EditorViewContribution {
   private readonly workspace = new LspWorkspace();
-  private readonly worker: LspWorkerLike;
-  private readonly transport: LspManagedTransport;
+  private transport: LspManagedTransport | null = null;
   private readonly client: LspClient;
   private readonly highlightNames: Record<TypeScriptLspDiagnosticSeverity, string>;
   private readonly linkHighlightName: string;
@@ -215,11 +221,6 @@ class TypeScriptLspContribution implements EditorViewContribution {
     this.highlightNames = createHighlightNames(prefix);
     this.linkHighlightName = `${prefix}-typescript-lsp-definition-link`;
     const tooltipNames = nextTooltipAnchorNames();
-    this.worker = options.workerFactory();
-    this.transport = createWorkerLspTransport(this.worker, {
-      messageFormat: "json",
-      terminateOnClose: true,
-    });
     this.client = this.createClient();
     this.tooltipAnchor = createTooltipAnchorElement(
       context.container.ownerDocument,
@@ -261,13 +262,14 @@ class TypeScriptLspContribution implements EditorViewContribution {
     this.clearDiagnosticHighlights();
     this.closeActiveDocument();
     this.client.disconnect();
-    this.transport.close();
+    this.transport?.close();
+    this.transport = null;
     this.setStatus("idle");
   }
 
   public syncWorkspaceFiles(): void {
     if (this.disposed) return;
-    if (!this.client.connected) return;
+    if (!this.client.initialized) return;
 
     void this.client
       .notify("editor/typescript/setWorkspaceFiles", { files: this.state.workspaceFiles })
@@ -304,10 +306,45 @@ class TypeScriptLspContribution implements EditorViewContribution {
 
   private connect(): void {
     this.setStatus("loading");
+    if (this.options.webSocketRoute) {
+      void this.connectWebSocket();
+      return;
+    }
+
+    this.connectWorker();
+  }
+
+  private connectWorker(): void {
+    const transport = createWorkerLspTransport(this.options.workerFactory(), {
+      messageFormat: "json",
+      terminateOnClose: true,
+    });
+    this.transport = transport;
     void this.client
-      .connect(this.transport)
+      .connect(transport)
       .then(() => this.handleConnected())
       .catch((error: unknown) => this.handleConnectError(error));
+  }
+
+  private async connectWebSocket(): Promise<void> {
+    if (!this.options.webSocketRoute) return;
+
+    try {
+      const transport = await createWebSocketLspTransport(this.options.webSocketRoute, {
+        protocols: this.options.webSocketTransportOptions?.protocols,
+        WebSocketCtor: this.options.webSocketTransportOptions?.WebSocketCtor,
+      });
+      if (this.disposed) {
+        transport.close();
+        return;
+      }
+
+      this.transport = transport;
+      await this.client.connect(transport);
+      this.handleConnected();
+    } catch (error) {
+      this.handleConnectError(error);
+    }
   }
 
   private handleConnected(): void {
@@ -318,8 +355,16 @@ class TypeScriptLspContribution implements EditorViewContribution {
 
   private handleConnectError(error: unknown): void {
     if (this.disposed) return;
+    this.closeFailedConnection();
     this.setStatus("error");
     this.handleError(error);
+  }
+
+  private closeFailedConnection(): void {
+    this.client.disconnect();
+    this.transport?.close();
+    this.transport = null;
+    this.clearPointerUi();
   }
 
   private syncDocument(snapshot: EditorViewSnapshot, change: DocumentSessionChange | null): void {
@@ -475,7 +520,8 @@ class TypeScriptLspContribution implements EditorViewContribution {
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
     if (event.buttons !== 0) return this.clearPointerUi();
-    if (this.pointInTooltipHoverZone(event.clientX, event.clientY)) {
+    const inTooltipHoverZone = this.pointInTooltipHoverZone(event.clientX, event.clientY);
+    if (inTooltipHoverZone && !isNavigationModifier(event)) {
       this.lastPointerOffset = null;
       this.clearDefinitionLink();
       this.cancelHoverHide();
@@ -484,7 +530,10 @@ class TypeScriptLspContribution implements EditorViewContribution {
     if (!this.activeDocument) return this.clearPointerUi();
 
     const offset = this.context.textOffsetFromPoint(event.clientX, event.clientY);
-    if (offset === null) return this.clearPointerUi();
+    if (offset === null) {
+      if (inTooltipHoverZone) return this.cancelHoverHide();
+      return this.clearPointerUi();
+    }
 
     this.lastPointerOffset = offset;
     if (isNavigationModifier(event)) {
@@ -576,7 +625,7 @@ class TypeScriptLspContribution implements EditorViewContribution {
   private async requestHover(offset: number): Promise<void> {
     const active = this.activeDocument;
     if (!active) return;
-    if (!this.client.connected) return;
+    if (!this.client.initialized) return;
 
     this.hoverAbort?.abort();
     const requestId = this.hoverRequestId + 1;
@@ -585,10 +634,14 @@ class TypeScriptLspContribution implements EditorViewContribution {
     this.hoverAbort = abort;
 
     try {
-      const hover = await this.client.request<lsp.Hover | null>("textDocument/hover", {
-        textDocument: { uri: active.uri },
-        position: offsetToLspPosition(active.text, offset),
-      } satisfies lsp.TextDocumentPositionParams, { signal: abort.signal });
+      const hover = await this.client.request<lsp.Hover | null>(
+        "textDocument/hover",
+        {
+          textDocument: { uri: active.uri },
+          position: offsetToLspPosition(active.text, offset),
+        } satisfies lsp.TextDocumentPositionParams,
+        { signal: abort.signal },
+      );
       this.renderHoverResult(requestId, active, offset, hover);
     } catch (error) {
       this.handleRequestError(error);
@@ -610,7 +663,8 @@ class TypeScriptLspContribution implements EditorViewContribution {
       return;
     }
 
-    const range = hoverRangeOffsets(active.text, hover) ?? visibleRangeAtOffset(active.text, offset);
+    const range =
+      hoverRangeOffsets(active.text, hover) ?? visibleRangeAtOffset(active.text, offset);
     const rect = this.context.getRangeClientRect(range.start, range.end);
     if (!rect) return this.hideHover();
 
@@ -619,13 +673,13 @@ class TypeScriptLspContribution implements EditorViewContribution {
       hoverText: hoverText(hover),
       diagnostics,
     });
-    placeTooltip(this.tooltip, rect);
+    placeTooltip(this.tooltip, rect, diagnostics.length > 0 ? "bottom" : "top");
   }
 
   private goToDefinitionAtOffset(offset: number): boolean {
     const active = this.activeDocument;
     if (!active) return false;
-    if (!this.client.connected) return false;
+    if (!this.client.initialized) return false;
 
     this.hideHover();
     this.clearDefinitionLink();
@@ -647,7 +701,7 @@ class TypeScriptLspContribution implements EditorViewContribution {
   private requestDefinitionLink(offset: number): void {
     const active = this.activeDocument;
     if (!active) return this.clearDefinitionLink();
-    if (!this.client.connected) return this.clearDefinitionLink();
+    if (!this.client.initialized) return this.clearDefinitionLink();
 
     const range = identifierRangeAtOffset(active.text, offset);
     if (!range) return this.clearDefinitionLink();
@@ -675,7 +729,8 @@ class TypeScriptLspContribution implements EditorViewContribution {
   ): void {
     if (requestId !== this.definitionHoverRequestId) return;
     if (active !== this.activeDocument) return;
-    if (!preferredJumpableDefinitionTarget(active, range, result)) return this.clearDefinitionLink();
+    if (!preferredJumpableDefinitionTarget(active, range, result))
+      return this.clearDefinitionLink();
 
     this.linkRange = range;
     this.context.setRangeHighlight?.(this.linkHighlightName, [range], LINK_HIGHLIGHT_STYLE);
@@ -772,6 +827,8 @@ function resolveOptions(options: TypeScriptLspPluginOptions): TypeScriptLspResol
     diagnosticDelayMs: options.diagnosticDelayMs ?? DEFAULT_DIAGNOSTIC_DELAY_MS,
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     workerFactory: options.workerFactory ?? defaultWorkerFactory,
+    webSocketRoute: options.webSocketRoute,
+    webSocketTransportOptions: options.webSocketTransportOptions,
     onStatusChange: options.onStatusChange,
     onDiagnostics: options.onDiagnostics,
     onOpenDefinition: options.onOpenDefinition,
@@ -871,7 +928,8 @@ function createTooltipElement(document: Document, names: TooltipAnchorNames): HT
     zIndex: "1000",
     width: "max-content",
     maxWidth: "min(520px, calc(100vw - 24px))",
-    overflow: "visible",
+    maxHeight: defaultTooltipMaxHeight(),
+    overflow: "hidden",
     padding: "8px 10px",
     border: "1px solid rgba(82, 82, 91, 0.95)",
     borderRadius: "6px",
@@ -880,6 +938,7 @@ function createTooltipElement(document: Document, names: TooltipAnchorNames): HT
     color: "#e4e4e7",
     boxShadow: "0 12px 34px rgba(0, 0, 0, 0.36)",
     display: "grid",
+    gridTemplateRows: "auto auto",
     gap: "6px",
     font: "12px/1.45 system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
     whiteSpace: "normal",
@@ -899,8 +958,19 @@ function renderTooltip(
   },
 ): void {
   element.replaceChildren();
+  element.style.maxHeight = defaultTooltipMaxHeight();
+
   const body = element.ownerDocument.createElement("div");
-  body.style.minWidth = "0";
+  body.className = "editor-typescript-lsp-hover-body";
+  Object.assign(body.style, {
+    minWidth: "0",
+    minHeight: "0",
+    maxHeight: defaultTooltipBodyMaxHeight(),
+    overflowX: "hidden",
+    overflowY: "auto",
+    paddingRight: "2px",
+    scrollbarGutter: "stable",
+  });
   if (content.hoverText) {
     body.append(renderTooltipMarkdown(element.ownerDocument, content.hoverText));
   }
@@ -1119,11 +1189,72 @@ function applyCssAnchorPosition(element: HTMLDivElement, names: TooltipAnchorNam
   applyTooltipPlacement(element, "top");
 }
 
-function placeTooltip(element: HTMLDivElement, anchor: DOMRect): void {
-  const tooltipHeight = element.getBoundingClientRect().height;
-  const topY = anchor.top - tooltipHeight - TOOLTIP_GAP_PX;
-  const placement = topY >= TOOLTIP_VIEWPORT_MARGIN_PX ? "top" : "bottom";
+function placeTooltip(
+  element: HTMLDivElement,
+  anchor: DOMRect,
+  preferredPlacement: "top" | "bottom" = "top",
+): void {
+  const viewportHeight = tooltipViewportHeight(element.ownerDocument);
+  const tooltipHeight = Math.min(element.getBoundingClientRect().height, TOOLTIP_MAX_HEIGHT_PX);
+  const placement = tooltipPlacement(anchor, tooltipHeight, viewportHeight, preferredPlacement);
+  const availableHeight = tooltipAvailableHeight(anchor, placement, viewportHeight);
+  const maxHeight = tooltipMaxHeight(availableHeight);
+  element.style.maxHeight = `${maxHeight}px`;
+  setTooltipBodyMaxHeight(element, maxHeight);
   applyTooltipPlacement(element, placement);
+}
+
+function defaultTooltipMaxHeight(): string {
+  return `min(${TOOLTIP_MAX_HEIGHT_PX}px, calc(100vh - ${TOOLTIP_VIEWPORT_MARGIN_PX * 2}px))`;
+}
+
+function defaultTooltipBodyMaxHeight(): string {
+  return `min(${TOOLTIP_MAX_HEIGHT_PX - TOOLTIP_BODY_CHROME_PX}px, calc(100vh - ${
+    TOOLTIP_VIEWPORT_MARGIN_PX * 2 + TOOLTIP_BODY_CHROME_PX
+  }px))`;
+}
+
+function setTooltipBodyMaxHeight(element: HTMLDivElement, maxHeight: number): void {
+  const body = element.querySelector<HTMLElement>(".editor-typescript-lsp-hover-body");
+  if (!body) return;
+
+  body.style.maxHeight = `${Math.max(1, maxHeight - TOOLTIP_BODY_CHROME_PX)}px`;
+}
+
+function tooltipViewportHeight(document: Document): number {
+  return document.defaultView?.innerHeight ?? TOOLTIP_MAX_HEIGHT_PX;
+}
+
+function tooltipPlacement(
+  anchor: DOMRect,
+  tooltipHeight: number,
+  viewportHeight: number,
+  preferredPlacement: "top" | "bottom",
+): "top" | "bottom" {
+  const preferredHeight = tooltipAvailableHeight(anchor, preferredPlacement, viewportHeight);
+  if (preferredHeight >= tooltipHeight) return preferredPlacement;
+
+  const fallbackPlacement = preferredPlacement === "top" ? "bottom" : "top";
+  const fallbackHeight = tooltipAvailableHeight(anchor, fallbackPlacement, viewportHeight);
+  if (fallbackHeight >= tooltipHeight) return fallbackPlacement;
+
+  const availableTop = tooltipAvailableHeight(anchor, "top", viewportHeight);
+  const availableBottom = tooltipAvailableHeight(anchor, "bottom", viewportHeight);
+  return availableTop >= availableBottom ? "top" : "bottom";
+}
+
+function tooltipAvailableHeight(
+  anchor: DOMRect,
+  placement: "top" | "bottom",
+  viewportHeight: number,
+): number {
+  if (placement === "top") return anchor.top - TOOLTIP_GAP_PX - TOOLTIP_VIEWPORT_MARGIN_PX;
+  return viewportHeight - anchor.bottom - TOOLTIP_GAP_PX - TOOLTIP_VIEWPORT_MARGIN_PX;
+}
+
+function tooltipMaxHeight(availableHeight: number): number {
+  const maxHeight = Math.min(TOOLTIP_MAX_HEIGHT_PX, Math.floor(availableHeight));
+  return Math.max(TOOLTIP_MIN_MAX_HEIGHT_PX, maxHeight);
 }
 
 function applyTooltipPlacement(element: HTMLDivElement, placement: "top" | "bottom"): void {
@@ -1164,10 +1295,7 @@ function hoverRangeOffsets(
   return null;
 }
 
-function visibleRangeAtOffset(
-  text: string,
-  offset: number,
-): OffsetRange {
+function visibleRangeAtOffset(text: string, offset: number): OffsetRange {
   const start = Math.max(0, Math.min(offset, Math.max(0, text.length - 1)));
   return { start, end: Math.min(text.length, start + 1) };
 }
@@ -1305,7 +1433,10 @@ function diagnosticColor(diagnostic: lsp.Diagnostic): string {
   return "#f87171";
 }
 
-function isNavigationModifier(event: { readonly metaKey: boolean; readonly ctrlKey: boolean }): boolean {
+function isNavigationModifier(event: {
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+}): boolean {
   return event.metaKey || event.ctrlKey;
 }
 

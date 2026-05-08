@@ -296,12 +296,19 @@ describe("VirtualizedTextView", () => {
     const firstFoldGutter = container.querySelector(
       '[data-editor-virtual-gutter-row="0"] [data-editor-gutter-contribution="fold-gutter"]',
     ) as HTMLElement;
+    const firstFoldButton = firstFoldGutter.querySelector<HTMLButtonElement>(
+      ".editor-virtualized-fold-toggle",
+    );
     const firstRow = container.querySelector('[data-editor-virtual-row="0"]') as HTMLDivElement;
 
     view.setSelection(0, 0);
 
     expect(firstLineGutter.classList.contains("editor-virtualized-cursor-line-gutter")).toBe(false);
     expect(firstFoldGutter.classList.contains("editor-virtualized-cursor-line-gutter")).toBe(true);
+    expect(firstFoldButton?.classList.contains("editor-virtualized-cursor-line-gutter")).toBe(
+      false,
+    );
+    expect(firstFoldButton?.hidden).toBe(true);
     expect(firstRow.classList.contains("editor-virtualized-cursor-line-row")).toBe(false);
   });
 
@@ -619,7 +626,8 @@ describe("VirtualizedTextView", () => {
     view.setScrollMetrics(0, 80);
     view.setSelection(1, 7);
 
-    expect(highlightsMap.get("test-selection")?.size).toBe(2);
+    expect(selectionRanges(container)).toHaveLength(2);
+    expect(highlightsMap.has("test-selection")).toBe(false);
   });
 
   it("shows hidden characters only for selected whitespace by default", () => {
@@ -725,7 +733,7 @@ describe("VirtualizedTextView", () => {
 
     const carets = container.querySelectorAll(".editor-virtualized-caret");
 
-    expect(highlightsMap.get("test-selection")?.size).toBe(2);
+    expect(selectionRanges(container)).toHaveLength(2);
     expect(carets).toHaveLength(2);
     expect((carets[0] as HTMLElement).hidden).toBe(false);
     expect((carets[1] as HTMLElement).hidden).toBe(false);
@@ -819,7 +827,9 @@ describe("VirtualizedTextView", () => {
     view.setScrollMetrics(0, 20, 80);
     view.setSelection(0, 5_000);
 
-    expect(highlightsMap.get("test-selection")?.size).toBe(1);
+    expect(selectionRanges(container)).toHaveLength(1);
+    expect(selectionRanges(container)[0]?.getAttribute("data-editor-selection-start")).toBe("0");
+    expect(selectionRanges(container)[0]?.getAttribute("data-editor-selection-end")).toBe("1000");
   });
 
   it("repaints stored selections when new rows mount", () => {
@@ -827,11 +837,11 @@ describe("VirtualizedTextView", () => {
     view.setScrollMetrics(0, 40);
     view.setSelection(900, 930);
 
-    expect(highlightsMap.has("test-selection")).toBe(false);
+    expect(selectionRanges(container)).toHaveLength(0);
 
     view.setScrollMetrics(2_200, 80);
 
-    expect(highlightsMap.get("test-selection")?.size).toBeGreaterThan(0);
+    expect(selectionRanges(container).length).toBeGreaterThan(0);
   });
 
   it("creates token highlights for mounted token intersections", () => {
@@ -1063,29 +1073,42 @@ describe("VirtualizedTextView", () => {
     expect(document.head.querySelector("style")?.textContent).toBe(styleText);
   });
 
-  it("keeps a registered selection highlight stable while scrolling offscreen and back", () => {
+  it("keeps custom selection ranges stable while scrolling offscreen and back", () => {
     view.setText(createLines(40));
     view.setScrollMetrics(0, 100);
     view.setSelection(0, 4);
 
-    const selectionHighlight = highlightsMap.get("test-selection");
     const setCount = registrySets;
     const deleteCount = registryDeletes;
-    expect(selectionHighlight?.size).toBe(1);
+    expect(selectionRanges(container)).toHaveLength(1);
 
     view.setScrollMetrics(400, 100);
 
-    expect(highlightsMap.get("test-selection")).toBe(selectionHighlight);
-    expect(selectionHighlight?.size).toBe(0);
+    expect(selectionRanges(container)).toHaveLength(0);
     expect(registrySets).toBe(setCount);
     expect(registryDeletes).toBe(deleteCount);
 
     view.setScrollMetrics(0, 100);
 
-    expect(highlightsMap.get("test-selection")).toBe(selectionHighlight);
-    expect(selectionHighlight?.size).toBe(1);
+    expect(selectionRanges(container)).toHaveLength(1);
     expect(registrySets).toBe(setCount);
     expect(registryDeletes).toBe(deleteCount);
+  });
+
+  it("fills selected spaces and tabs with custom selection geometry", () => {
+    view.setText("a \t b");
+    view.setScrollMetrics(0, 20);
+    view.setSelection(1, 4);
+
+    const ranges = selectionRanges(container);
+    expect(ranges).toHaveLength(1);
+    expect(ranges[0]?.getAttribute("data-editor-selection-start")).toBe("1");
+    expect(ranges[0]?.getAttribute("data-editor-selection-end")).toBe("4");
+    expect(highlightsMap.has("test-selection")).toBe(false);
+
+    view.setSelection(0, 0);
+
+    expect(selectionRanges(container)).toHaveLength(0);
   });
 
   it("uses FoldMap to mount folded virtual rows without changing buffer offsets", () => {
@@ -1426,6 +1449,10 @@ function hiddenCharacterMarkers(container: HTMLElement): HTMLElement[] {
   return [
     ...container.querySelectorAll<HTMLElement>(".editor-virtualized-hidden-character-marker"),
   ];
+}
+
+function selectionRanges(container: HTMLElement): HTMLElement[] {
+  return [...container.querySelectorAll<HTMLElement>(".editor-virtualized-selection-range")];
 }
 
 function hiddenCharacterMarkerKinds(container: HTMLElement): string[] {

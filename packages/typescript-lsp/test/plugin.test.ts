@@ -6,7 +6,7 @@ import type {
   EditorViewSnapshot,
   TextEdit,
 } from "@editor/core";
-import type { LspWorkerLike } from "@editor/lsp";
+import type { LspWebSocketLike, LspWorkerLike } from "@editor/lsp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTypeScriptLspPlugin, type TypeScriptLspDiagnosticSummary } from "../src";
 
@@ -37,6 +37,63 @@ class FakeWorker implements LspWorkerLike {
   public receive(message: unknown): void {
     const event = new MessageEvent("message", { data: message });
     for (const listener of this.listenersFor("message")) listener(event);
+  }
+
+  private listenersFor(type: string): Set<Listener> {
+    let listeners = this.listeners.get(type);
+    if (listeners) return listeners;
+
+    listeners = new Set();
+    this.listeners.set(type, listeners);
+    return listeners;
+  }
+}
+
+class FakeWebSocket implements LspWebSocketLike {
+  public static readonly instances: FakeWebSocket[] = [];
+  public readonly sent: string[] = [];
+  public readyState = 0;
+  private readonly listeners = new Map<string, Set<Listener>>();
+
+  public constructor(
+    public readonly url: string | URL,
+    public readonly protocols?: string | readonly string[],
+  ) {
+    FakeWebSocket.instances.push(this);
+  }
+
+  public send(message: string): void {
+    this.sent.push(message);
+  }
+
+  public close(): void {
+    this.readyState = 3;
+    this.emit("close");
+  }
+
+  public addEventListener(type: "open" | "message" | "error" | "close", handler: Listener): void {
+    this.listenersFor(type).add(handler);
+  }
+
+  public removeEventListener(
+    type: "open" | "message" | "error" | "close",
+    handler: Listener,
+  ): void {
+    this.listenersFor(type).delete(handler);
+  }
+
+  public open(): void {
+    this.readyState = 1;
+    this.emit("open");
+  }
+
+  public receive(message: unknown): void {
+    this.emit("message", JSON.stringify(message));
+  }
+
+  private emit(type: string, data?: unknown): void {
+    const event = data === undefined ? new Event(type) : new MessageEvent(type, { data });
+    for (const listener of this.listenersFor(type)) listener(event);
   }
 
   private listenersFor(type: string): Set<Listener> {
@@ -135,6 +192,86 @@ describe("createTypeScriptLspPlugin", () => {
     });
   });
 
+  it("stops feature requests after initialization fails", async () => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker();
+    const errors: unknown[] = [];
+    const context = viewContributionContext(editorSnapshot());
+    const plugin = createTypeScriptLspPlugin({
+      timeoutMs: 5,
+      workerFactory: () => worker,
+      onError: (error) => errors.push(error),
+    });
+    const provider = activatePlugin(plugin);
+    provider.createContribution(context);
+
+    await vi.advanceTimersByTimeAsync(6);
+    await flushPromises();
+
+    expect(errors).toHaveLength(1);
+    expect(worker.terminated).toBe(true);
+
+    context.scrollElement.dispatchEvent(
+      new PointerEvent("pointermove", { clientX: 12, clientY: 16, buttons: 0 }),
+    );
+    await vi.advanceTimersByTimeAsync(260);
+    plugin.setWorkspaceFiles([{ path: "src/other.ts", text: "export const other = 1;" }]);
+    await flushPromises();
+
+    expect(errors).toHaveLength(1);
+    expect(worker.sent.filter(hasMethod("textDocument/hover"))).toHaveLength(0);
+    expect(worker.sent.filter(hasMethod("editor/typescript/setWorkspaceFiles"))).toHaveLength(0);
+  });
+
+  it("can connect through a WebSocket route and keep diagnostics and hover working", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances.length = 0;
+    const diagnostics: TypeScriptLspDiagnosticSummary[] = [];
+    const context = viewContributionContext(editorSnapshot());
+    const plugin = createTypeScriptLspPlugin({
+      webSocketRoute: "ws://localhost/lsp/typescript",
+      webSocketTransportOptions: { WebSocketCtor: FakeWebSocket },
+      onDiagnostics: (summary) => diagnostics.push(summary),
+    });
+    const provider = activatePlugin(plugin);
+    provider.createContribution(context);
+
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) throw new Error("missing socket");
+
+    socket.open();
+    await flushPromises();
+    const initialize = jsonMessage(socket.sent[0]);
+    socket.receive(initializeResponse(initialize));
+    await flushPromises();
+
+    expect(sentSocketMethods(socket)).toContain("textDocument/didOpen");
+    socket.receive(publishDiagnosticsMessage());
+    expect(diagnostics.at(-1)?.counts).toMatchObject({ error: 1, total: 1 });
+
+    context.scrollElement.dispatchEvent(
+      new PointerEvent("pointermove", { clientX: 12, clientY: 16, buttons: 0 }),
+    );
+    await vi.advanceTimersByTimeAsync(260);
+    const hoverRequest = jsonMessage(
+      socket.sent.toReversed().find(hasSocketMethod("textDocument/hover")),
+    );
+    socket.receive({
+      jsonrpc: "2.0",
+      id: hoverRequest.id,
+      result: {
+        contents: { kind: "markdown", value: "```ts\nconst value: string\n```" },
+        range: {
+          start: { line: 0, character: 6 },
+          end: { line: 0, character: 11 },
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(tooltipElement().querySelector("pre > code")?.textContent).toBe("const value: string");
+  });
+
   it("ignores stale diagnostics for older document versions", async () => {
     const worker = new FakeWorker();
     const context = viewContributionContext(editorSnapshot());
@@ -219,9 +356,11 @@ describe("createTypeScriptLspPlugin", () => {
     expect(tooltipElement().style.getPropertyValue("position-anchor")).toMatch(
       /^--editor-typescript-lsp-hover-/,
     );
-    expect(tooltipElement().style.getPropertyValue("position-area")).toBe("top center");
+    expect(tooltipElement().style.getPropertyValue("position-area")).toBe("bottom center");
+    expect(tooltipElement().style.overflow).toBe("hidden");
     expect(tooltipElement().style.pointerEvents).toBe("auto");
     expect(tooltipElement().style.userSelect).toBe("text");
+    expect(tooltipBody()?.style.overflowY).toBe("auto");
     expect(tooltipAnchorElement().style.display).toBe("block");
     expect(copyButton().textContent).toBe("");
     expect(copyButton().querySelector("svg")).not.toBeNull();
@@ -251,6 +390,42 @@ describe("createTypeScriptLspPlugin", () => {
     tooltipElement().dispatchEvent(new PointerEvent("pointerleave"));
     await vi.advanceTimersByTimeAsync(190);
     expect(tooltipElement().hidden).toBe(true);
+  });
+
+  it("caps long hover tooltip content and keeps the body scrollable", async () => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker();
+    const context = viewContributionContext(editorSnapshot());
+    const plugin = createTypeScriptLspPlugin({ workerFactory: () => worker });
+    const provider = activatePlugin(plugin);
+    provider.createContribution(context);
+    mockElementRect(tooltipElement(), new DOMRect(0, 0, 180, 900));
+
+    worker.receive(initializeResponse(message(worker.sent[0])));
+    await flushPromises();
+    context.scrollElement.dispatchEvent(
+      new PointerEvent("pointermove", { clientX: 12, clientY: 16, buttons: 0 }),
+    );
+    await vi.advanceTimersByTimeAsync(260);
+
+    const hoverRequest = message(worker.sent.toReversed().find(hasMethod("textDocument/hover")));
+    worker.receive({
+      jsonrpc: "2.0",
+      id: hoverRequest.id,
+      result: {
+        contents: {
+          kind: "markdown",
+          value: Array.from({ length: 80 }, (_, index) => `Line ${index + 1}`).join("\n\n"),
+        },
+      },
+    });
+    await flushPromises();
+
+    expect(tooltipElement().hidden).toBe(false);
+    expect(tooltipElement().style.maxHeight).toBe("420px");
+    expect(tooltipElement().style.overflow).toBe("hidden");
+    expect(tooltipBody()?.style.overflowY).toBe("auto");
+    expect(tooltipBody()?.style.minHeight).toBe("0");
   });
 
   it("jumps to same-file definitions from the current selection", async () => {
@@ -291,12 +466,7 @@ describe("createTypeScriptLspPlugin", () => {
     });
     await flushPromises();
 
-    expect(context.setSelection).toHaveBeenCalledWith(
-      6,
-      11,
-      "typescriptLsp.goToDefinition",
-      6,
-    );
+    expect(context.setSelection).toHaveBeenCalledWith(6, 11, "typescriptLsp.goToDefinition", 6);
   });
 
   it("underlines jumpable symbols while hovering with a navigation modifier", async () => {
@@ -629,6 +799,10 @@ function sentMethods(worker: FakeWorker): readonly unknown[] {
   return worker.sent.map((item) => message(item).method);
 }
 
+function sentSocketMethods(socket: FakeWebSocket): readonly unknown[] {
+  return socket.sent.map((item) => jsonMessage(item).method);
+}
+
 function textDocumentFor(item: unknown): unknown {
   const params = message(item).params as { readonly textDocument: unknown };
   return params.textDocument;
@@ -644,6 +818,10 @@ function tooltipAnchorElement(): HTMLElement {
   const element = document.querySelector<HTMLElement>(".editor-typescript-lsp-hover-anchor");
   if (!element) throw new Error("missing tooltip anchor");
   return element;
+}
+
+function tooltipBody(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(".editor-typescript-lsp-hover-body");
 }
 
 function copyButton(): HTMLButtonElement {
@@ -664,8 +842,17 @@ function message(item: unknown): JsonMessage {
   return item;
 }
 
+function jsonMessage(item: unknown): JsonMessage {
+  if (typeof item !== "string") throw new Error("missing JSON message");
+  return JSON.parse(item) as JsonMessage;
+}
+
 function hasMethod(method: string): (item: unknown) => boolean {
   return (item) => message(item).method === method;
+}
+
+function hasSocketMethod(method: string): (item: unknown) => boolean {
+  return (item) => typeof item === "string" && jsonMessage(item).method === method;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

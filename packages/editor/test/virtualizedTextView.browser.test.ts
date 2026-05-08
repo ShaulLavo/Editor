@@ -94,13 +94,18 @@ describe.skipIf(typeof globalThis.Highlight === "undefined")(
       view!.setSelection(0, 0);
       view!.setScrollMetrics(0, 80);
 
-      const foldButton = container.querySelector<HTMLButtonElement>(
+      const foldCell = container.querySelector<HTMLElement>(
         '[data-editor-virtual-gutter-row="0"] [data-editor-gutter-contribution="fold-gutter"]',
       );
+      const foldButton = foldCell?.querySelector<HTMLButtonElement>(
+        ".editor-virtualized-fold-toggle",
+      );
 
-      expect(foldButton).toBeDefined();
+      expect(foldCell).not.toBeNull();
+      expect(foldButton).not.toBeNull();
       expect(foldButton?.hidden).toBe(false);
-      expect(getComputedStyle(foldButton!).backgroundColor).toBe("rgb(12, 34, 56)");
+      expect(getComputedStyle(foldCell!).backgroundColor).toBe("rgb(12, 34, 56)");
+      expect(getComputedStyle(foldButton!).backgroundColor).toBe("rgba(0, 0, 0, 0)");
     });
 
     it("keeps line numbers in the line gutter when hidden fold cells collapse", () => {

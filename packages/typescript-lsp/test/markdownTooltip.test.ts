@@ -45,9 +45,14 @@ describe("tooltip Markdown rendering", () => {
   it("renders GFM lists and tables", () => {
     const element = renderTooltipMarkdown(
       document,
-      ["- [x] done", "- [ ] todo", "", "| Name | Type |", "| --- | --- |", "| value | string |"].join(
-        "\n",
-      ),
+      [
+        "- [x] done",
+        "- [ ] todo",
+        "",
+        "| Name | Type |",
+        "| --- | --- |",
+        "| value | string |",
+      ].join("\n"),
     );
 
     expect(element.querySelectorAll("li")).toHaveLength(2);

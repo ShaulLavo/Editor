@@ -482,11 +482,7 @@ function hoverFromQuickInfo(text: string, quickInfo: ts.QuickInfo): lsp.Hover {
   };
 }
 
-function hoverMarkdown(
-  display: string,
-  documentation: string,
-  tags: readonly string[],
-): string {
+function hoverMarkdown(display: string, documentation: string, tags: readonly string[]): string {
   const sections: string[] = [];
   if (display) sections.push(["```ts", display, "```"].join("\n"));
   if (documentation) sections.push(documentation);

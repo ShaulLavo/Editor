@@ -43,6 +43,7 @@ type FoldGutterRenderOptions = {
 const DEFAULT_FOLD_GUTTER_WIDTH = 10;
 const DEFAULT_EXPANDED_INDICATOR = "v";
 const DEFAULT_COLLAPSED_INDICATOR = ">";
+const FOLD_GUTTER_CELL_CLASS = "editor-virtualized-fold-gutter-cell";
 
 export function createFoldGutterPlugin(options: FoldGutterPluginOptions = {}): EditorPlugin {
   const contribution = createFoldGutterContribution(options);
@@ -71,33 +72,51 @@ export function createFoldGutterContribution(
   return {
     id: "fold-gutter",
     createCell(document) {
-      const button = document.createElement("button");
-      button.className = "editor-virtualized-fold-toggle";
-      addClassName(button, options.buttonClassName);
-      button.type = "button";
-      button.hidden = true;
-      button.disabled = true;
-      button.tabIndex = -1;
-      button.addEventListener("mousedown", preventFoldButtonMouseDown);
-      button.addEventListener("animationend", clearFoldTransition);
-      button.addEventListener("animationcancel", clearFoldTransition);
-      return button;
+      const cell = document.createElement("span");
+      const button = createFoldButton(document, options.buttonClassName);
+      cell.className = FOLD_GUTTER_CELL_CLASS;
+      cell.appendChild(button);
+      return cell;
     },
     width() {
       return width;
     },
     updateCell(element, row) {
-      if (!(element instanceof HTMLButtonElement)) return;
-      updateFoldGutterButton(element, row, renderOptions);
+      const button = foldButtonFromCell(element);
+      if (!button) return;
+      updateFoldGutterButton(button, row, renderOptions);
     },
     disposeCell(element) {
-      if (!(element instanceof HTMLButtonElement)) return;
-      element.onclick = null;
-      element.removeEventListener("mousedown", preventFoldButtonMouseDown);
-      element.removeEventListener("animationend", clearFoldTransition);
-      element.removeEventListener("animationcancel", clearFoldTransition);
+      const button = foldButtonFromCell(element);
+      if (!button) return;
+      disposeFoldButton(button);
     },
   };
+}
+
+function createFoldButton(document: Document, className: string | undefined): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.className = "editor-virtualized-fold-toggle";
+  addClassName(button, className);
+  button.type = "button";
+  button.hidden = true;
+  button.disabled = true;
+  button.tabIndex = -1;
+  button.addEventListener("mousedown", preventFoldButtonMouseDown);
+  button.addEventListener("animationend", clearFoldTransition);
+  button.addEventListener("animationcancel", clearFoldTransition);
+  return button;
+}
+
+function foldButtonFromCell(element: HTMLElement): HTMLButtonElement | null {
+  return element.querySelector<HTMLButtonElement>(".editor-virtualized-fold-toggle");
+}
+
+function disposeFoldButton(button: HTMLButtonElement): void {
+  button.onclick = null;
+  button.removeEventListener("mousedown", preventFoldButtonMouseDown);
+  button.removeEventListener("animationend", clearFoldTransition);
+  button.removeEventListener("animationcancel", clearFoldTransition);
 }
 
 function updateFoldGutterButton(

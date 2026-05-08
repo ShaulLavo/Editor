@@ -1,4 +1,4 @@
-import type { EditorToken, EditorTokenStyle } from "@editor/core";
+import type { EditorToken, EditorTokenStyle } from "../tokens";
 
 import type { IncrementalTokenizerSnapshot, TokenLineSnapshot } from "./tokenizer";
 

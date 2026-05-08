@@ -4,7 +4,7 @@ import {
   createIncrementalTokenizer,
   snapshotToEditorTokens,
   tokenLinesToEditorTokens,
-} from "../src";
+} from "../../src/shiki";
 
 describe("editor token adapters", () => {
   it("converts line-local token offsets into document offsets", () => {
