@@ -8,8 +8,6 @@ import type {
   EditorViewContributionContext,
   EditorViewContributionUpdateKind,
   EditorViewSnapshot,
-  TextEdit,
-  VirtualizedTextHighlightStyle,
 } from "@editor/core"
 import {
   createWebSocketLspTransport,
@@ -24,15 +22,27 @@ import {
 } from "@editor/lsp"
 import type * as lsp from "vscode-languageserver-protocol"
 import {
+  identifierRangeAtOffset,
+  navigateToDefinition,
+  preferredDefinitionTarget,
+  preferredJumpableDefinitionTarget,
+  requestDefinition,
+  sameOffsetRange,
+  type DefinitionResult,
+  type OffsetRange,
+} from "./definitionNavigation"
+import {
   diagnosticHighlightGroups,
   summarizeDiagnostics,
   type TypeScriptLspDiagnosticSeverity,
 } from "./diagnostics"
 import {
-  documentUriToFileName,
-  isTypeScriptFileName,
-  pathOrUriToDocumentUri,
-} from "./paths"
+  diagnosticsAtOffset,
+  editsForChange,
+  projectDiagnostics,
+} from "./diagnosticProjection"
+import { isTypeScriptFileName, pathOrUriToDocumentUri } from "./paths"
+import { DIAGNOSTIC_STYLES, LINK_HIGHLIGHT_STYLE } from "./plugin.styles"
 import {
   createTooltipController,
   HOVER_REQUEST_DEBOUNCE_MS,
@@ -78,31 +88,9 @@ type DocumentDescriptor = {
   readonly textVersion: number
 }
 
-type OffsetRange = {
-  readonly start: number
-  readonly end: number
-}
-
 const DEFAULT_DIAGNOSTIC_DELAY_MS = 150
 const DEFAULT_TIMEOUT_MS = 15000
 
-const LINK_HIGHLIGHT_STYLE: VirtualizedTextHighlightStyle = {
-  backgroundColor: "transparent",
-  color: "#60a5fa",
-  textDecoration: "underline solid #60a5fa",
-}
-const DIAGNOSTIC_STYLES: Record<
-  TypeScriptLspDiagnosticSeverity,
-  VirtualizedTextHighlightStyle
-> = {
-  error: {
-    backgroundColor: "rgba(239, 68, 68, 0.12)",
-    textDecoration: "underline wavy rgba(248, 113, 113, 0.95)",
-  },
-  warning: { backgroundColor: "rgba(245, 158, 11, 0.26)" },
-  information: { backgroundColor: "rgba(59, 130, 246, 0.22)" },
-  hint: { backgroundColor: "rgba(148, 163, 184, 0.22)" },
-}
 const DIAGNOSTIC_SEVERITIES: readonly TypeScriptLspDiagnosticSeverity[] = [
   "error",
   "warning",
@@ -431,12 +419,11 @@ class TypeScriptLspContribution implements EditorViewContribution {
     change: DocumentSessionChange | null
   ): void {
     const active = this.activeDocument
-    const diagnostics = projectDiagnosticsThroughChange(
-      active?.text ?? "",
-      descriptor.text,
-      this.activeDiagnostics,
-      change
-    )
+    const diagnostics = projectDiagnostics(this.activeDiagnostics, {
+      previousText: active?.text ?? "",
+      nextText: descriptor.text,
+      change,
+    })
     const document = this.workspace.updateDocument(
       descriptor.uri,
       descriptor.text,
@@ -745,14 +732,11 @@ class TypeScriptLspContribution implements EditorViewContribution {
     this.clearDefinitionLink()
     const requestId = this.definitionRequestId + 1
     this.definitionRequestId = requestId
-    void this.client
-      .request<lsp.Location[] | lsp.Location | lsp.LocationLink[] | null>(
-        "textDocument/definition",
-        {
-          textDocument: { uri: active.uri },
-          position: offsetToLspPosition(active.text, offset),
-        } satisfies lsp.TextDocumentPositionParams
-      )
+    void requestDefinition(this.client, {
+      uri: active.uri,
+      text: active.text,
+      offset,
+    })
       .then((result) => this.handleDefinitionResult(requestId, active, result))
       .catch((error: unknown) => this.handleRequestError(error))
     return true
@@ -765,18 +749,15 @@ class TypeScriptLspContribution implements EditorViewContribution {
 
     const range = identifierRangeAtOffset(active.text, offset)
     if (!range) return this.clearDefinitionLink()
-    if (sameRange(this.linkRange, range)) return
+    if (sameOffsetRange(this.linkRange, range)) return
 
     const requestId = this.definitionHoverRequestId + 1
     this.definitionHoverRequestId = requestId
-    void this.client
-      .request<lsp.Location[] | lsp.Location | lsp.LocationLink[] | null>(
-        "textDocument/definition",
-        {
-          textDocument: { uri: active.uri },
-          position: offsetToLspPosition(active.text, offset),
-        } satisfies lsp.TextDocumentPositionParams
-      )
+    void requestDefinition(this.client, {
+      uri: active.uri,
+      text: active.text,
+      offset,
+    })
       .then((result) =>
         this.renderDefinitionLink(requestId, active, range, result)
       )
@@ -787,11 +768,13 @@ class TypeScriptLspContribution implements EditorViewContribution {
     requestId: number,
     active: ActiveDocument,
     range: OffsetRange,
-    result: lsp.Location[] | lsp.Location | lsp.LocationLink[] | null
+    result: DefinitionResult
   ): void {
     if (requestId !== this.definitionHoverRequestId) return
     if (active !== this.activeDocument) return
-    if (!preferredJumpableDefinitionTarget(active, range, result))
+    if (
+      !preferredJumpableDefinitionTarget(active.uri, active.text, range, result)
+    )
       return this.clearDefinitionLink()
 
     this.linkRange = range
@@ -806,7 +789,7 @@ class TypeScriptLspContribution implements EditorViewContribution {
   private handleDefinitionResult(
     requestId: number,
     active: ActiveDocument,
-    result: lsp.Location[] | lsp.Location | lsp.LocationLink[] | null
+    result: DefinitionResult
   ): void {
     if (requestId !== this.definitionRequestId) return
     if (active !== this.activeDocument) return
@@ -814,18 +797,15 @@ class TypeScriptLspContribution implements EditorViewContribution {
     const target = preferredDefinitionTarget(active.uri, result)
     if (!target) return
     if (target.uri === active.uri) {
-      this.navigateWithinActiveDocument(active.text, target.range)
+      navigateToDefinition(target, {
+        text: active.text,
+        setSelection: this.context.setSelection.bind(this.context),
+        focusEditor: this.context.focusEditor.bind(this.context),
+      })
       return
     }
 
     this.options.onOpenDefinition?.(target)
-  }
-
-  private navigateWithinActiveDocument(text: string, range: lsp.Range): void {
-    const start = lspPositionToOffset(text, range.start)
-    const end = lspPositionToOffset(text, range.end)
-    this.context.setSelection(start, end, "typescriptLsp.goToDefinition", start)
-    this.context.focusEditor()
   }
 
   private hideHover(): void {
@@ -912,121 +892,6 @@ function isTypeScriptLanguage(languageId: string): boolean {
   return languageId === "typescript" || languageId === "typescriptreact"
 }
 
-function editsForChange(
-  change: DocumentSessionChange | null
-): readonly TextEdit[] {
-  if (!change) return []
-  return change.edits
-}
-
-function projectDiagnosticsThroughChange(
-  previousText: string,
-  nextText: string,
-  diagnostics: readonly lsp.Diagnostic[],
-  change: DocumentSessionChange | null
-): readonly lsp.Diagnostic[] {
-  if (diagnostics.length === 0) return diagnostics
-
-  const edits = editsForChange(change)
-  if (edits.length === 0) return []
-
-  const projected: lsp.Diagnostic[] = []
-  for (const diagnostic of diagnostics) {
-    const next = projectDiagnosticThroughEdits(
-      previousText,
-      nextText,
-      diagnostic,
-      edits
-    )
-    if (next) projected.push(next)
-  }
-
-  return projected
-}
-
-function projectDiagnosticThroughEdits(
-  previousText: string,
-  nextText: string,
-  diagnostic: lsp.Diagnostic,
-  edits: readonly TextEdit[]
-): lsp.Diagnostic | null {
-  const start = lspPositionToOffset(previousText, diagnostic.range.start)
-  const end = lspPositionToOffset(previousText, diagnostic.range.end)
-  const range = projectOffsetRangeThroughEdits({ start, end }, edits)
-  if (!range) return null
-  if (range.start === range.end && start !== end) return null
-
-  return {
-    ...diagnostic,
-    range: {
-      start: offsetToLspPosition(nextText, range.start),
-      end: offsetToLspPosition(nextText, range.end),
-    },
-  }
-}
-
-function projectOffsetRangeThroughEdits(
-  range: OffsetRange,
-  edits: readonly TextEdit[]
-): OffsetRange | null {
-  let projected: OffsetRange | null = range
-  let delta = 0
-  const sorted = edits.toSorted(
-    (left, right) => left.from - right.from || left.to - right.to
-  )
-
-  for (const edit of sorted) {
-    if (!projected) return null
-
-    const adjusted = {
-      from: edit.from + delta,
-      to: edit.to + delta,
-      text: edit.text,
-    }
-    projected = projectOffsetRangeThroughEdit(projected, adjusted)
-    delta += edit.text.length - (edit.to - edit.from)
-  }
-
-  return projected
-}
-
-function projectOffsetRangeThroughEdit(
-  range: OffsetRange,
-  edit: TextEdit
-): OffsetRange | null {
-  const start = projectOffsetThroughEdit(range.start, edit, "after")
-  const end = projectOffsetThroughEdit(range.end, edit, "before")
-  if (start === null || end === null) return null
-  if (end < start) return null
-
-  return { start, end }
-}
-
-function projectOffsetThroughEdit(
-  offset: number,
-  edit: TextEdit,
-  insertionBias: "before" | "after"
-): number | null {
-  if (edit.from === edit.to)
-    return projectOffsetThroughInsertion(offset, edit, insertionBias)
-  if (offset < edit.from) return offset
-  if (offset > edit.to) return offset + edit.text.length - (edit.to - edit.from)
-  if (offset === edit.to) return edit.from + edit.text.length
-  if (offset === edit.from) return edit.from
-  return null
-}
-
-function projectOffsetThroughInsertion(
-  offset: number,
-  edit: TextEdit,
-  insertionBias: "before" | "after"
-): number {
-  if (offset < edit.from) return offset
-  if (offset > edit.from) return offset + edit.text.length
-  if (insertionBias === "after") return offset + edit.text.length
-  return offset
-}
-
 function publishDiagnosticsParams(params: unknown): {
   readonly uri: lsp.DocumentUri
   readonly version: number | null
@@ -1090,132 +955,6 @@ function hoverRangeOffsets(
 function visibleRangeAtOffset(text: string, offset: number): OffsetRange {
   const start = Math.max(0, Math.min(offset, Math.max(0, text.length - 1)))
   return { start, end: Math.min(text.length, start + 1) }
-}
-
-function identifierRangeAtOffset(
-  text: string,
-  offset: number
-): OffsetRange | null {
-  const clamped = Math.max(0, Math.min(offset, text.length))
-  const index = identifierIndexAtOffset(text, clamped)
-  if (index === null) return null
-
-  let start = index
-  while (start > 0 && isIdentifierCharacter(text[start - 1] ?? "")) start -= 1
-
-  let end = index + 1
-  while (end < text.length && isIdentifierCharacter(text[end] ?? "")) end += 1
-
-  if (end <= start) return null
-  return { start, end }
-}
-
-function identifierIndexAtOffset(text: string, offset: number): number | null {
-  if (isIdentifierCharacter(text[offset] ?? "")) return offset
-  if (offset > 0 && isIdentifierCharacter(text[offset - 1] ?? ""))
-    return offset - 1
-  return null
-}
-
-function isIdentifierCharacter(value: string): boolean {
-  return /^[A-Za-z0-9_$]$/.test(value)
-}
-
-function sameRange(left: OffsetRange | null, right: OffsetRange): boolean {
-  return left?.start === right.start && left.end === right.end
-}
-
-function diagnosticsAtOffset(
-  text: string,
-  offset: number,
-  diagnostics: readonly lsp.Diagnostic[]
-): readonly lsp.Diagnostic[] {
-  return diagnostics.filter((diagnostic) =>
-    diagnosticContainsOffset(text, diagnostic, offset)
-  )
-}
-
-function diagnosticContainsOffset(
-  text: string,
-  diagnostic: lsp.Diagnostic,
-  offset: number
-): boolean {
-  const start = lspPositionToOffset(text, diagnostic.range.start)
-  const end = lspPositionToOffset(text, diagnostic.range.end)
-  if (end > start) return offset >= start && offset <= end
-  return offset === start
-}
-
-function preferredDefinitionTarget(
-  activeUri: lsp.DocumentUri,
-  result: lsp.Location[] | lsp.Location | lsp.LocationLink[] | null
-): TypeScriptLspDefinitionTarget | null {
-  return preferredTarget(activeUri, definitionTargets(result))
-}
-
-function preferredJumpableDefinitionTarget(
-  active: ActiveDocument,
-  sourceRange: OffsetRange,
-  result: lsp.Location[] | lsp.Location | lsp.LocationLink[] | null
-): TypeScriptLspDefinitionTarget | null {
-  const targets = definitionTargets(result).filter(
-    (target) => !targetIsSourceRange(active, sourceRange, target)
-  )
-  return preferredTarget(active.uri, targets)
-}
-
-function preferredTarget(
-  activeUri: lsp.DocumentUri,
-  targets: readonly TypeScriptLspDefinitionTarget[]
-): TypeScriptLspDefinitionTarget | null {
-  return (
-    targets.find((target) => target.uri === activeUri) ??
-    targets.find((target) => !target.path.includes("/node_modules/")) ??
-    targets[0] ??
-    null
-  )
-}
-
-function targetIsSourceRange(
-  active: ActiveDocument,
-  sourceRange: OffsetRange,
-  target: TypeScriptLspDefinitionTarget
-): boolean {
-  if (target.uri !== active.uri) return false
-
-  const targetStart = lspPositionToOffset(active.text, target.range.start)
-  const targetEnd = lspPositionToOffset(active.text, target.range.end)
-  return rangesOverlap(sourceRange, { start: targetStart, end: targetEnd })
-}
-
-function rangesOverlap(left: OffsetRange, right: OffsetRange): boolean {
-  return left.start < right.end && right.start < left.end
-}
-
-function definitionTargets(
-  result: lsp.Location[] | lsp.Location | lsp.LocationLink[] | null
-): readonly TypeScriptLspDefinitionTarget[] {
-  if (!result) return []
-  const items = Array.isArray(result) ? result : [result]
-  return items.flatMap(definitionTarget)
-}
-
-function definitionTarget(
-  item: lsp.Location | lsp.LocationLink
-): readonly TypeScriptLspDefinitionTarget[] {
-  const uri = "targetUri" in item ? item.targetUri : item.uri
-  const range =
-    "targetSelectionRange" in item ? item.targetSelectionRange : item.range
-  const fileName = documentUriToFileName(uri)
-  if (!fileName) return []
-
-  return [
-    {
-      uri,
-      path: fileName.replace(/^\/+/, ""),
-      range,
-    },
-  ]
 }
 
 function isNavigationModifier(event: {
