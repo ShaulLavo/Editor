@@ -132,6 +132,24 @@ describe("parseGitPatch", () => {
     expect(files.map((file) => file.changeType)).toEqual(["add", "delete"]);
   });
 
+  it("drops raw hunk headers if malformed patch text repeats them in hunk bodies", () => {
+    const files = parseGitPatch(
+      [
+        "diff --git a/note.txt b/note.txt",
+        "index 1111111..2222222 100644",
+        "--- a/note.txt",
+        "+++ b/note.txt",
+        "@@ -3,2 +3,2 @@",
+        "@@ -3,2 +3,2 @@",
+        " line",
+        "-old",
+        "+new",
+      ].join("\n"),
+    );
+
+    expect(files[0]?.hunks[0]?.lines.some((line) => line.text.includes("@@"))).toBe(false);
+  });
+
   it("returns an empty list for malformed patch text", () => {
     expect(parseGitPatch("not a patch")).toEqual([]);
   });
@@ -157,8 +175,52 @@ describe("diff projections", () => {
     });
     const projection = createStackedProjection(file);
 
-    expect(projection.rows.map((row) => row.type)).toContain("hunk");
     expect(projection.rows.map((row) => row.type)).toContain("deletion");
     expect(projection.rows.map((row) => row.type)).toContain("addition");
+  });
+
+  it("uses line-info hunk separators instead of raw patch headers", () => {
+    const file = createTextDiff({
+      oldFile: { path: "note.txt", text: "one\ntwo\nthree\nfour\nfive\n" },
+      newFile: { path: "note.txt", text: "one\ntwo\nTHREE\nfour\nfive\n" },
+      contextLines: 0,
+    });
+    const projection = createStackedProjection(file);
+    const separator = projection.rows.find((row) => row.type === "hunk");
+
+    expect(separator?.text).toBe("2 unmodified lines");
+    expect(projection.rows.some((row) => row.text.startsWith("@@"))).toBe(false);
+  });
+
+  it("does not render raw hunk headers if they appear in parsed line content", () => {
+    const projection = createStackedProjection({
+      path: "note.patch",
+      oldPath: "note.patch",
+      newPath: "note.patch",
+      changeType: "change",
+      oldLines: ["@@ -255,6 +261,20 @@"],
+      newLines: ["@@ -255,6 +261,20 @@"],
+      hunks: [
+        {
+          oldStart: 255,
+          oldLines: 1,
+          newStart: 261,
+          newLines: 1,
+          header: "@@ -255,6 +261,20 @@",
+          lines: [
+            {
+              type: "context",
+              text: "@@ -255,6 +261,20 @@",
+              oldLineNumber: 255,
+              newLineNumber: 261,
+            },
+          ],
+        },
+      ],
+      isPartial: true,
+      languageId: null,
+    });
+
+    expect(projection.rows.some((row) => row.text.includes("@@ -255"))).toBe(false);
   });
 });

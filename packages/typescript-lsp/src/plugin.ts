@@ -85,9 +85,47 @@ type TooltipAnchorNames = {
 
 const DEFAULT_DIAGNOSTIC_DELAY_MS = 150
 const DEFAULT_TIMEOUT_MS = 15000
-const HOVER_DELAY_MS = 250
-const HOVER_HIDE_DELAY_MS = 180
+
+/**
+ * Delay, in milliseconds, between the pointer settling on a token and the
+ * TypeScript LSP `textDocument/hover` request being dispatched (which in turn
+ * drives when the tooltip appears). Chosen to debounce rapid pointer sweeps
+ * so the user does not trigger a hover round-trip for every token the cursor
+ * passes through, while staying short enough that an intentional hover still
+ * feels immediate. 250 ms matches the VS Code hover-provider default, which
+ * users are already calibrated to.
+ *
+ * Colocated at the top of `plugin.ts` so Req 1's Wave 3 extraction can move
+ * it alongside the owning module (likely `tooltip.ts`).
+ */
+const HOVER_REQUEST_DEBOUNCE_MS = 250
+
+/**
+ * Grace period, in milliseconds, before the hover tooltip is hidden after
+ * the pointer leaves the trigger token or the tooltip body. Long enough to
+ * bridge quick pointer transits between the token and the tooltip (so the
+ * user can reach into the tooltip to click a link or copy text without the
+ * tooltip flickering away), short enough that the tooltip does not linger
+ * once the user has clearly moved on. Paired with the pointer-reentry logic
+ * in `scheduleHoverHide` / `cancelHoverHide`.
+ *
+ * Colocated at the top of `plugin.ts` so Req 1's Wave 3 extraction can move
+ * it alongside the owning module (likely `tooltip.ts`).
+ */
+const TOOLTIP_HIDE_DELAY_MS = 180
+
+/**
+ * Duration, in milliseconds, that the tooltip's copy-to-clipboard button
+ * retains its "copied" or "failed" confirmation state before reverting to
+ * the idle icon. Long enough for the user to register the feedback (roughly
+ * one second of perception plus a small buffer), short enough that the
+ * state never persists across into a subsequent hover on another token.
+ *
+ * Colocated at the top of `plugin.ts` so Req 1's Wave 3 extraction can move
+ * it alongside the owning module (likely `tooltip.ts`).
+ */
 const COPY_BUTTON_RESET_DELAY_MS = 1200
+
 const TOOLTIP_GAP_PX = 8
 const TOOLTIP_VIEWPORT_MARGIN_PX = 12
 const TOOLTIP_MAX_HEIGHT_PX = 420
@@ -766,7 +804,7 @@ class TypeScriptLspContribution implements EditorViewContribution {
     this.hoverTimer = setTimeout(() => {
       this.hoverTimer = null
       void this.requestHover(offset)
-    }, HOVER_DELAY_MS)
+    }, HOVER_REQUEST_DEBOUNCE_MS)
   }
 
   private async requestHover(offset: number): Promise<void> {
@@ -943,7 +981,7 @@ class TypeScriptLspContribution implements EditorViewContribution {
     this.hoverHideTimer = setTimeout(() => {
       this.hoverHideTimer = null
       this.hideHover()
-    }, HOVER_HIDE_DELAY_MS)
+    }, TOOLTIP_HIDE_DELAY_MS)
   }
 
   private cancelHoverHide(): void {
@@ -1884,6 +1922,5 @@ function isAbortError(error: unknown): boolean {
   return error.name === "LspRequestCancelledError"
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null
-}
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)

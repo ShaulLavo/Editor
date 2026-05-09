@@ -11,10 +11,17 @@ import {
   createShikiHighlighterSession,
   loadShikiTheme,
 } from "@editor/core/shiki";
+import { ResizablePaneGroup, type ResizablePaneLayout } from "@editor/panes";
 import { createDiffGutterContribution } from "./gutters";
 import { joinRenderLines, languageIdForPath } from "./lines";
 import { createSplitProjection, createStackedProjection } from "./projection";
-import type { DiffFile, DiffRenderRow, DiffViewMode, DiffViewOptions } from "./types";
+import type {
+  DiffFile,
+  DiffRenderRow,
+  DiffSplitPaneLayout,
+  DiffViewMode,
+  DiffViewOptions,
+} from "./types";
 
 type MountedPane = {
   readonly view: VirtualizedTextView;
@@ -24,22 +31,26 @@ type MountedPane = {
 };
 
 const DEFAULT_THEME = "github-dark";
+let nextDiffViewId = 0;
 
 export class DiffView {
   private readonly root: HTMLDivElement;
   private readonly fileList: HTMLDivElement;
   private readonly content: HTMLDivElement;
+  private readonly highlightPrefix: string;
   private readonly options: DiffViewOptions;
   private files: readonly DiffFile[] = [];
   private selectedPath: string | null = null;
   private mode: DiffViewMode;
   private panes: MountedPane[] = [];
+  private paneGroup: ResizablePaneGroup | null = null;
   private hunkRows: ReadonlyMap<number, number> = new Map();
   private syncingScroll = false;
 
   constructor(container: HTMLElement, options: DiffViewOptions = {}) {
     this.options = options;
     this.mode = options.mode ?? "split";
+    this.highlightPrefix = `editor-diff-${nextDiffViewId++}`;
     this.root = container.ownerDocument.createElement("div");
     this.fileList = container.ownerDocument.createElement("div");
     this.content = container.ownerDocument.createElement("div");
@@ -130,7 +141,46 @@ export class DiffView {
     const left = this.createPane(split, "old", projection.leftRows, file);
     const right = this.createPane(split, "new", projection.rightRows, file);
     this.panes = [left, right];
+    this.paneGroup = this.createSplitPaneGroup(split, left, right, file);
     this.installScrollSync(left.view, right.view);
+  }
+
+  private createSplitPaneGroup(
+    split: HTMLElement,
+    left: MountedPane,
+    right: MountedPane,
+    file: DiffFile,
+  ): ResizablePaneGroup {
+    const splitPane = this.options.splitPane;
+    return new ResizablePaneGroup(split, {
+      id: `${this.highlightPrefix}-split`,
+      panes: [
+        {
+          id: "old",
+          element: left.view.scrollElement.parentElement ?? left.view.scrollElement,
+          minSize: splitPane?.minSize?.old,
+          maxSize: splitPane?.maxSize?.old,
+        },
+        {
+          id: "new",
+          element: right.view.scrollElement.parentElement ?? right.view.scrollElement,
+          minSize: splitPane?.minSize?.new,
+          maxSize: splitPane?.maxSize?.new,
+        },
+      ],
+      defaultLayout: splitDefaultLayout(splitPane?.defaultLayout),
+      createHandle: splitPane?.createHandle
+        ? (context) =>
+            splitPane.createHandle?.({ ...context, file }) ?? context.document.createElement("div")
+        : (context) => createDefaultSplitHandle(context.document),
+      onLayoutChange: splitPane?.onLayoutChange
+        ? (layout) => splitPane.onLayoutChange?.(diffSplitLayout(layout), file)
+        : undefined,
+      onLayoutChanged: splitPane?.onLayoutChanged
+        ? (layout) => splitPane.onLayoutChanged?.(diffSplitLayout(layout), file)
+        : undefined,
+      disabled: splitPane?.disabled,
+    });
   }
 
   private renderStackedFile(file: DiffFile): void {
@@ -153,15 +203,18 @@ export class DiffView {
       className: "editor-diff-text editor-virtualized",
       gutterContributions: [createDiffGutterContribution(side, () => rows)],
       lineHeight: this.options.lineHeight,
+      selectionHighlightName: `${this.highlightPrefix}-${side}-selection`,
       tabSize: this.options.tabSize,
     });
     view.setEditable(false);
     view.setText(joinRenderLines(rows));
     view.setRowDecorations(rowDecorations(rows));
-    view.setRangeHighlight("diff-inline", inlineHighlightRanges(rows), {
+    view.setRangeHighlight(this.inlineHighlightName(side), inlineHighlightRanges(rows), {
       backgroundColor: "rgba(255, 255, 255, 0.18)",
     });
-    void this.applySyntaxHighlighting({ view, rows, side }, file);
+    void this.applySyntaxHighlighting({ view, rows, side }, file).catch((error: unknown) => {
+      console.warn("[editor/diff] syntax highlighting failed", error);
+    });
     return { view, rows, side };
   }
 
@@ -192,6 +245,8 @@ export class DiffView {
   }
 
   private disposePanes(): void {
+    this.paneGroup?.dispose();
+    this.paneGroup = null;
     for (const pane of this.panes) {
       pane.syntaxSession?.dispose();
       pane.view.dispose();
@@ -225,6 +280,10 @@ export class DiffView {
     ]);
     pane.view.setTheme(result.theme ?? theme);
     pane.view.setTokens(result.tokens as readonly EditorToken[]);
+  }
+
+  private inlineHighlightName(side: MountedPane["side"]): string {
+    return `${this.highlightPrefix}-${side}-inline`;
   }
 }
 
@@ -275,9 +334,47 @@ function decorationForRow(row: DiffRenderRow): VirtualizedTextRowDecoration {
 }
 
 function shikiLanguageForFile(file: DiffFile): string | null {
-  return file.languageId ?? languageIdForPath(file.path);
+  const languageId = file.languageId ?? languageIdForPath(file.path);
+  if (languageId === "typescript" && pathExtension(file.path) === ".tsx") return "tsx";
+  if (languageId === "javascript" && pathExtension(file.path) === ".jsx") return "jsx";
+  return languageId;
+}
+
+function pathExtension(path: string): string {
+  const fileName = path.slice(path.lastIndexOf("/") + 1);
+  const dotIndex = fileName.lastIndexOf(".");
+  if (dotIndex === -1) return "";
+  return fileName.slice(dotIndex).toLowerCase();
 }
 
 async function loadConfiguredTheme(theme: string | undefined): Promise<EditorTheme | null> {
   return (await loadShikiTheme({ theme: theme ?? DEFAULT_THEME })) ?? null;
+}
+
+function splitDefaultLayout(
+  layout: Partial<DiffSplitPaneLayout> | undefined,
+): ResizablePaneLayout | undefined {
+  if (!layout) return undefined;
+  if (layout.old !== undefined && layout.new !== undefined)
+    return { old: layout.old, new: layout.new };
+  if (layout.old !== undefined) return { old: layout.old, new: 100 - layout.old };
+  if (layout.new !== undefined) return { old: 100 - layout.new, new: layout.new };
+  return undefined;
+}
+
+function diffSplitLayout(layout: ResizablePaneLayout): DiffSplitPaneLayout {
+  return {
+    old: layout.old ?? 0,
+    new: layout.new ?? 0,
+  };
+}
+
+function createDefaultSplitHandle(document: Document): HTMLElement {
+  const handle = document.createElement("div");
+  const line = document.createElement("span");
+  handle.className = "editor-diff-split-handle";
+  line.className = "editor-diff-split-handle-line";
+  line.setAttribute("aria-hidden", "true");
+  handle.appendChild(line);
+  return handle;
 }

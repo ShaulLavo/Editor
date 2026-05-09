@@ -1,6 +1,11 @@
 import type { EditorSyntaxLanguageId, EditorToken } from "@editor/core";
+import type { ResizablePaneHandleContext } from "@editor/panes";
 
 export type DiffViewMode = "split" | "stacked";
+
+export type DiffSplitPaneId = "old" | "new";
+
+export type DiffSplitPaneLayout = Readonly<Record<DiffSplitPaneId, number>>;
 
 export type DiffFileChangeType = "change" | "add" | "delete" | "rename" | "rename-change";
 
@@ -87,10 +92,25 @@ export type DiffSyntaxTokens = {
   readonly newTokens?: readonly EditorToken[];
 };
 
+export type DiffSplitHandleContext = ResizablePaneHandleContext & {
+  readonly file: DiffFile;
+};
+
+export type DiffSplitPaneOptions = {
+  readonly defaultLayout?: Partial<DiffSplitPaneLayout>;
+  readonly minSize?: Partial<DiffSplitPaneLayout>;
+  readonly maxSize?: Partial<DiffSplitPaneLayout>;
+  readonly createHandle?: (context: DiffSplitHandleContext) => HTMLElement;
+  readonly onLayoutChange?: (layout: DiffSplitPaneLayout, file: DiffFile) => void;
+  readonly onLayoutChanged?: (layout: DiffSplitPaneLayout, file: DiffFile) => void;
+  readonly disabled?: boolean;
+};
+
 export type DiffViewOptions = {
   readonly mode?: DiffViewMode;
   readonly lineHeight?: number;
   readonly tabSize?: number;
   readonly syntaxHighlight?: boolean;
   readonly theme?: string;
+  readonly splitPane?: DiffSplitPaneOptions;
 };

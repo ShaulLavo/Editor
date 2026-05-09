@@ -1,3 +1,5 @@
+@import "@editor/panes/style.css";
+
 .editor-diff-view {
   --editor-diff-added: #5ecc71;
   --editor-diff-deleted: #ff6762;
@@ -96,9 +98,7 @@
 }
 
 .editor-diff-split {
-  display: grid;
   flex: 1;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
 }
@@ -109,12 +109,49 @@
   min-width: 0;
 }
 
-.editor-diff-pane-old {
-  border-right: 1px solid var(--editor-diff-border);
-}
-
 .editor-diff-text {
   flex: 1;
+}
+
+.editor-diff-split .editor-resizable-pane-handle {
+  background: transparent;
+  align-items: stretch;
+  display: flex;
+  justify-content: center;
+  width: 8px;
+}
+
+.editor-diff-split .editor-resizable-pane-handle::before,
+.editor-diff-split-handle-line {
+  background: var(--editor-diff-border);
+  content: "";
+  display: block;
+  width: 1px;
+}
+
+.editor-diff-split
+  .editor-resizable-pane-handle:is(
+    [data-editor-pane-handle-state="hover"],
+    [data-editor-pane-handle-state="focus"],
+    [data-editor-pane-handle-state="dragging"]
+  ) {
+  background: color-mix(in srgb, var(--editor-diff-modified) 12%, transparent);
+}
+
+.editor-diff-split
+  .editor-resizable-pane-handle:is(
+    [data-editor-pane-handle-state="hover"],
+    [data-editor-pane-handle-state="focus"],
+    [data-editor-pane-handle-state="dragging"]
+  )::before,
+.editor-diff-split
+  .editor-resizable-pane-handle:is(
+    [data-editor-pane-handle-state="hover"],
+    [data-editor-pane-handle-state="focus"],
+    [data-editor-pane-handle-state="dragging"]
+  )
+  .editor-diff-split-handle-line {
+  background: var(--editor-diff-modified);
 }
 
 .editor-diff-row-addition {
@@ -194,10 +231,10 @@
   }
 
   .editor-diff-split {
-    grid-template-columns: minmax(0, 1fr);
+    flex-direction: column !important;
   }
 
-  .editor-diff-pane-old {
-    border-right: 0;
+  .editor-diff-split .editor-resizable-pane-handle {
+    display: none;
   }
 }

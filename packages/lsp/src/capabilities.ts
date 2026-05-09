@@ -5,6 +5,9 @@ const TEXT_DOCUMENT_SYNC_NONE = 0;
 const TEXT_DOCUMENT_SYNC_FULL = 1;
 const TEXT_DOCUMENT_SYNC_INCREMENTAL = 2;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 export const defaultClientCapabilities = (): lsp.ClientCapabilities => ({
   general: {
     positionEncodings: ["utf-16"],
@@ -66,6 +69,3 @@ const cloneValue = (value: unknown): unknown => {
   for (const key of Object.keys(value)) result[key] = cloneValue(value[key]);
   return result;
 };
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);

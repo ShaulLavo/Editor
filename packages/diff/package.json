@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@editor/core": "workspace:*",
+    "@editor/panes": "workspace:*",
     "diff": "^8.0.3"
   },
   "devDependencies": {

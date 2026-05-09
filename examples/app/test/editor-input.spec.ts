@@ -271,6 +271,21 @@ test("shows current file changes in split and stacked diff modes", async ({ page
   await expect(page.locator(".editor-diff-pane-stacked")).toBeVisible();
 });
 
+test("loads syntax highlights for diff rows", async ({ page }) => {
+  await mockGitHubSource(page, "src/index.ts", "const answer: number = 42;\n");
+  await page.goto("/");
+
+  await page.locator(".entry.file").click();
+  await page.locator(".editor-virtualized").click({ position: { x: 150, y: 10 } });
+  await page.keyboard.type("XYZ");
+  await page.getByRole("button", { name: "Diff" }).click();
+
+  await expect(page.locator("#diff-host")).toBeVisible();
+  await expect
+    .poll(() => diffSyntaxHighlightCount(page), { timeout: 15000 })
+    .toBeGreaterThan(0);
+});
+
 async function mockGitHubSource(page: Page, path: string, text: string): Promise<void> {
   await page.route("https://api.github.com/repos/ShaulLavo/singapor/commits/main", (route) =>
     route.fulfill({
@@ -299,6 +314,24 @@ async function mockGitHubSource(page: Page, path: string, text: string): Promise
         contentType: "text/plain",
       }),
   );
+}
+
+async function diffSyntaxHighlightCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const registry = (
+      globalThis.CSS as { highlights?: Iterable<[string, { readonly size: number }]> } | undefined
+    )?.highlights;
+    if (!registry) return 0;
+
+    let count = 0;
+    for (const [name, highlight] of registry) {
+      if (!name.includes("editor-diff")) continue;
+      if (!name.includes("-token-")) continue;
+      count += highlight.size;
+    }
+
+    return count;
+  });
 }
 
 test("preserves scroll when refocusing a scrolled editor", async ({ page }) => {

@@ -79,7 +79,7 @@ export function parseGitPatch(
   patchText: string,
   options: ParseGitPatchOptions = {},
 ): readonly DiffFile[] {
-  const parsed = parsePatch(patchText) as readonly ParsedPatchFile[];
+  const parsed = parsePatchTolerant(patchText);
   const metadata = gitMetadataByPath(patchText);
 
   return parsed
@@ -87,6 +87,27 @@ export function parseGitPatch(
     .map((file, index) =>
       convertParsedPatchFile(file, metadata, cacheKeyForPatch(options.cacheKey, index)),
     );
+}
+
+function parsePatchTolerant(patchText: string): readonly ParsedPatchFile[] {
+  try {
+    return parsePatch(patchText) as readonly ParsedPatchFile[];
+  } catch {
+    return parsePatch(removeRepeatedHunkHeaders(patchText)) as readonly ParsedPatchFile[];
+  }
+}
+
+function removeRepeatedHunkHeaders(patchText: string): string {
+  const lines = patchText.split("\n");
+  const cleaned: string[] = [];
+
+  for (const line of lines) {
+    const previous = cleaned.at(-1);
+    if (previous && isRawHunkHeader(previous) && isRawHunkHeader(line)) continue;
+    cleaned.push(line);
+  }
+
+  return cleaned.join("\n");
 }
 
 function isParsedPatchFileUsable(file: ParsedPatchFile): boolean {
@@ -162,9 +183,12 @@ function convertPatchLine(
   newLineNumber: number,
 ): { readonly line: DiffHunkLine; readonly oldDelta: number; readonly newDelta: number } | null {
   if (rawLine.startsWith("\\")) return null;
+  if (isRawHunkHeader(rawLine)) return null;
 
   const marker = rawLine[0] ?? " ";
   const text = rawLine.slice(1);
+  if (isRawHunkHeader(text)) return null;
+
   if (marker === "-") {
     return {
       line: { type: "deletion", text, oldLineNumber },
@@ -185,6 +209,10 @@ function convertPatchLine(
     oldDelta: 1,
     newDelta: 1,
   };
+}
+
+function isRawHunkHeader(text: string): boolean {
+  return /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/.test(text.trim());
 }
 
 function hunkHeader(hunk: ParsedPatchHunk): string {

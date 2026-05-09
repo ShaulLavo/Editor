@@ -77,6 +77,7 @@ import {
   VirtualizedTextView,
   type HiddenCharactersMode,
   type VirtualizedFoldMarker,
+  type VirtualizedTextRowDecoration,
 } from "../virtualization/virtualizedTextView";
 
 const SYNTAX_EDIT_DEBOUNCE_MS = 75;
@@ -360,6 +361,11 @@ export class Editor {
 
   setHiddenCharacters(mode: HiddenCharactersMode): void {
     this.view.setHiddenCharacters(mode);
+  }
+
+  setRowDecorations(decorations: ReadonlyMap<number, VirtualizedTextRowDecoration>): void {
+    this.view.setRowDecorations(decorations);
+    this.notifyViewContributions("layout", null);
   }
 
   setLineHeight(lineHeight: number): void {

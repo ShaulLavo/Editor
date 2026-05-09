@@ -20,11 +20,16 @@ export function createSplitProjection(file: DiffFile): SplitDiffProjection {
   const leftRows: DiffRenderRow[] = [];
   const rightRows: DiffRenderRow[] = [];
   const hunkRows = new Map<number, number>();
+  let previousOldEnd = 0;
+  let previousNewEnd = 0;
 
   for (const [hunkIndex, hunk] of file.hunks.entries()) {
-    hunkRows.set(hunkIndex, leftRows.length);
-    pushSplitHunkHeader(leftRows, rightRows, hunk, hunkIndex);
+    const separator = hunkSeparatorRow(hunk, previousOldEnd, previousNewEnd, hunkIndex);
+    if (separator) pushSplitHunkSeparator(leftRows, rightRows, separator);
+    hunkRows.set(hunkIndex, separator ? leftRows.length - 1 : leftRows.length);
     pushSplitHunkRows(leftRows, rightRows, hunk.lines, hunkIndex);
+    previousOldEnd = hunkEndLine(hunk.oldStart, hunk.oldLines);
+    previousNewEnd = hunkEndLine(hunk.newStart, hunk.newLines);
   }
 
   if (leftRows.length === 0) pushNoChangesRows(leftRows, rightRows);
@@ -34,24 +39,27 @@ export function createSplitProjection(file: DiffFile): SplitDiffProjection {
 export function createStackedProjection(file: DiffFile): StackedDiffProjection {
   const rows: DiffRenderRow[] = [];
   const hunkRows = new Map<number, number>();
+  let previousOldEnd = 0;
+  let previousNewEnd = 0;
 
   for (const [hunkIndex, hunk] of file.hunks.entries()) {
-    hunkRows.set(hunkIndex, rows.length);
-    rows.push(hunkHeaderRow(hunk, hunkIndex));
+    const separator = hunkSeparatorRow(hunk, previousOldEnd, previousNewEnd, hunkIndex);
+    if (separator) rows.push(separator);
+    hunkRows.set(hunkIndex, separator ? rows.length - 1 : rows.length);
     pushStackedHunkRows(rows, hunk.lines, hunkIndex);
+    previousOldEnd = hunkEndLine(hunk.oldStart, hunk.oldLines);
+    previousNewEnd = hunkEndLine(hunk.newStart, hunk.newLines);
   }
 
   if (rows.length === 0) rows.push(emptyRow("No changes"));
   return { rows, hunkRows };
 }
 
-function pushSplitHunkHeader(
+function pushSplitHunkSeparator(
   leftRows: DiffRenderRow[],
   rightRows: DiffRenderRow[],
-  hunk: DiffHunk,
-  hunkIndex: number,
+  row: DiffRenderRow,
 ): void {
-  const row = hunkHeaderRow(hunk, hunkIndex);
   leftRows.push(row);
   rightRows.push(row);
 }
@@ -149,7 +157,7 @@ function renderRowFromLine(
 ): DiffRenderRow {
   return {
     type,
-    text: line.text,
+    text: renderLineText(line.text),
     oldLineNumber: side !== "new" ? line.oldLineNumber : undefined,
     newLineNumber: side !== "old" ? line.newLineNumber : undefined,
     hunkIndex,
@@ -157,12 +165,42 @@ function renderRowFromLine(
   };
 }
 
-function hunkHeaderRow(hunk: DiffHunk, hunkIndex: number): DiffRenderRow {
+function renderLineText(text: string): string {
+  if (!isRawHunkHeader(text)) return text;
+  return "";
+}
+
+function isRawHunkHeader(text: string): boolean {
+  return /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/.test(text.trim());
+}
+
+function hunkSeparatorRow(
+  hunk: DiffHunk,
+  previousOldEnd: number,
+  previousNewEnd: number,
+  hunkIndex: number,
+): DiffRenderRow | null {
+  const skippedLines = skippedUnmodifiedLines(hunk, previousOldEnd, previousNewEnd);
+  if (skippedLines <= 0) return null;
+
   return {
     type: "hunk",
-    text: hunk.header,
+    text: `${skippedLines} unmodified line${skippedLines === 1 ? "" : "s"}`,
     hunkIndex,
   };
+}
+
+function skippedUnmodifiedLines(
+  hunk: DiffHunk,
+  previousOldEnd: number,
+  previousNewEnd: number,
+): number {
+  return Math.max(hunk.oldStart - previousOldEnd - 1, hunk.newStart - previousNewEnd - 1, 0);
+}
+
+function hunkEndLine(start: number, count: number): number {
+  if (count <= 0) return Math.max(0, start);
+  return start + count - 1;
 }
 
 function placeholderRow(hunkIndex: number): DiffRenderRow {

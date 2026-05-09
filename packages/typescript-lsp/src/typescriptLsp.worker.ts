@@ -920,10 +920,6 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 export const __typeScriptLspWorkerInternalsForTests = {
   applyContentChange,
   applyContentChanges,
@@ -931,3 +927,6 @@ export const __typeScriptLspWorkerInternalsForTests = {
   defaultCompilerOptions,
   fileNameToDocumentUri,
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
