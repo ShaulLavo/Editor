@@ -10,7 +10,6 @@
     "./server": "./src/server.ts"
   },
   "scripts": {
-    "test": "vitest run",
     "typecheck": "tsgo --noEmit",
     "lint": "oxlint .",
     "format": "oxfmt --write .",

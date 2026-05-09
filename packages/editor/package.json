@@ -18,8 +18,6 @@
     "bench:fold-map": "bun bench/foldMap.ts",
     "bench:piece-table": "bun bench/pieceTable-insertions.ts",
     "bench:virtualization": "bun bench/virtualization.ts",
-    "test": "vitest run",
-    "test:browser": "vitest run --browser.enabled --browser.headless test/virtualizedTextView.browser.test.ts",
     "typecheck": "tsgo --noEmit",
     "lint": "oxlint .",
     "format": "oxfmt --write .",

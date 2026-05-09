@@ -17,7 +17,6 @@
     "./style.css": "./src/style.css"
   },
   "scripts": {
-    "test": "vitest run",
     "typecheck": "tsgo --noEmit",
     "lint": "oxlint .",
     "format": "oxfmt --write .",
