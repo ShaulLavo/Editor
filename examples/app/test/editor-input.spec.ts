@@ -32,6 +32,50 @@ async function installInputEventProbe(page: Page): Promise<void> {
   });
 }
 
+async function clickEditorTextOffset(page: Page, offset: number): Promise<void> {
+  const point = await page.evaluate((targetOffset) => {
+    const row = document.querySelector(".editor-virtualized-row");
+    if (!(row instanceof HTMLDivElement)) throw new Error("Missing editor row");
+
+    const textNode = Array.from(row.childNodes).find(
+      (node): node is Text => node.nodeType === Node.TEXT_NODE,
+    );
+    if (!textNode) throw new Error("Missing editor row text");
+
+    const range = document.createRange();
+    const length = textNode.data.length;
+    const target = Math.max(0, Math.min(targetOffset, length));
+
+    if (length === 0) {
+      const rect = row.getBoundingClientRect();
+      return {
+        x: rect.left + 1,
+        y: rect.top + rect.height / 2,
+      };
+    }
+
+    if (target < length) {
+      range.setStart(textNode, target);
+      range.setEnd(textNode, target + 1);
+      const rect = range.getBoundingClientRect();
+      return {
+        x: rect.left + 1,
+        y: rect.top + rect.height / 2,
+      };
+    }
+
+    range.setStart(textNode, length - 1);
+    range.setEnd(textNode, length);
+    const rect = range.getBoundingClientRect();
+    return {
+      x: rect.right + 1,
+      y: rect.top + rect.height / 2,
+    };
+  }, offset);
+
+  await page.mouse.click(point.x, point.y);
+}
+
 test("routes real keyboard typing after clicking the editor surface", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(async (entry) => {
@@ -83,7 +127,7 @@ test("keeps Space from scrolling the focused editor", async ({ page }) => {
     (window as TestWindow).__editor = editor;
   }, coreEntry);
 
-  await page.locator(".editor-virtualized").click({ position: { x: 80, y: 10 } });
+  await clickEditorTextOffset(page, "line ".length);
   await expect(page.locator(".editor-virtualized-input")).toBeFocused();
 
   await page.keyboard.press("Space");
@@ -113,7 +157,7 @@ test("inserts repeated typing at a placed caret", async ({ page }) => {
   }, coreEntry);
   await installInputEventProbe(page);
 
-  await page.locator(".editor-virtualized").click({ position: { x: 59, y: 10 } });
+  await clickEditorTextOffset(page, 3);
   await expect(page.locator(".editor-virtualized-input")).toBeFocused();
 
   await page.keyboard.type("XYZ");
@@ -147,7 +191,7 @@ test("routes native line break input at a placed caret", async ({ page }) => {
   }, coreEntry);
   await installInputEventProbe(page);
 
-  await page.locator(".editor-virtualized").click({ position: { x: 59, y: 10 } });
+  await clickEditorTextOffset(page, 3);
   await expect(page.locator(".editor-virtualized-input")).toBeFocused();
 
   await page.keyboard.press("Enter");
