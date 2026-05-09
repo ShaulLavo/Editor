@@ -28,12 +28,16 @@ import {
   summarizeDiagnostics,
   type TypeScriptLspDiagnosticSeverity,
 } from "./diagnostics"
-import { renderTooltipMarkdown } from "./markdownTooltip"
 import {
   documentUriToFileName,
   isTypeScriptFileName,
   pathOrUriToDocumentUri,
 } from "./paths"
+import {
+  createTooltipController,
+  HOVER_REQUEST_DEBOUNCE_MS,
+  type TooltipController,
+} from "./tooltip"
 import type {
   TypeScriptLspDefinitionTarget,
   TypeScriptLspDiagnosticSummary,
@@ -79,71 +83,9 @@ type OffsetRange = {
   readonly end: number
 }
 
-type TooltipAnchorNames = {
-  readonly anchorName: string
-}
-
 const DEFAULT_DIAGNOSTIC_DELAY_MS = 150
 const DEFAULT_TIMEOUT_MS = 15000
 
-/**
- * Delay, in milliseconds, between the pointer settling on a token and the
- * TypeScript LSP `textDocument/hover` request being dispatched (which in turn
- * drives when the tooltip appears). Chosen to debounce rapid pointer sweeps
- * so the user does not trigger a hover round-trip for every token the cursor
- * passes through, while staying short enough that an intentional hover still
- * feels immediate. 250 ms matches the VS Code hover-provider default, which
- * users are already calibrated to.
- *
- * Colocated at the top of `plugin.ts` so Req 1's Wave 3 extraction can move
- * it alongside the owning module (likely `tooltip.ts`).
- */
-const HOVER_REQUEST_DEBOUNCE_MS = 250
-
-/**
- * Grace period, in milliseconds, before the hover tooltip is hidden after
- * the pointer leaves the trigger token or the tooltip body. Long enough to
- * bridge quick pointer transits between the token and the tooltip (so the
- * user can reach into the tooltip to click a link or copy text without the
- * tooltip flickering away), short enough that the tooltip does not linger
- * once the user has clearly moved on. Paired with the pointer-reentry logic
- * in `scheduleHoverHide` / `cancelHoverHide`.
- *
- * Colocated at the top of `plugin.ts` so Req 1's Wave 3 extraction can move
- * it alongside the owning module (likely `tooltip.ts`).
- */
-const TOOLTIP_HIDE_DELAY_MS = 180
-
-/**
- * Duration, in milliseconds, that the tooltip's copy-to-clipboard button
- * retains its "copied" or "failed" confirmation state before reverting to
- * the idle icon. Long enough for the user to register the feedback (roughly
- * one second of perception plus a small buffer), short enough that the
- * state never persists across into a subsequent hover on another token.
- *
- * Colocated at the top of `plugin.ts` so Req 1's Wave 3 extraction can move
- * it alongside the owning module (likely `tooltip.ts`).
- */
-const COPY_BUTTON_RESET_DELAY_MS = 1200
-
-const TOOLTIP_GAP_PX = 8
-const TOOLTIP_VIEWPORT_MARGIN_PX = 12
-const TOOLTIP_MAX_HEIGHT_PX = 420
-const TOOLTIP_MIN_MAX_HEIGHT_PX = 80
-const TOOLTIP_BODY_CHROME_PX = 46
-const SVG_NS = "http://www.w3.org/2000/svg"
-const TOOLTIP_THEME_VARIABLES = [
-  "--editor-background",
-  "--editor-foreground",
-  "--editor-caret-color",
-  "--editor-syntax-bracket",
-  "--editor-syntax-comment",
-  "--editor-syntax-keyword",
-  "--editor-syntax-number",
-  "--editor-syntax-string",
-  "--editor-syntax-type",
-] as const
-let nextTooltipAnchorId = 0
 const LINK_HIGHLIGHT_STYLE: VirtualizedTextHighlightStyle = {
   backgroundColor: "transparent",
   color: "#60a5fa",
@@ -263,17 +205,14 @@ class TypeScriptLspContribution implements EditorViewContribution {
   private activeDiagnostics: readonly lsp.Diagnostic[] = []
   private disposed = false
   private status: TypeScriptLspStatus = "idle"
-  private readonly tooltip: HTMLDivElement
-  private readonly tooltipAnchor: HTMLDivElement
+  private readonly tooltip: TooltipController
   private hoverTimer: ReturnType<typeof setTimeout> | null = null
-  private hoverHideTimer: ReturnType<typeof setTimeout> | null = null
   private hoverAbort: AbortController | null = null
   private hoverRequestId = 0
   private definitionRequestId = 0
   private definitionHoverRequestId = 0
   private lastPointerOffset: number | null = null
   private linkRange: OffsetRange | null = null
-  private tooltipPointerDown = false
   private currentTheme: EditorTheme | null = null
 
   public constructor(
@@ -284,20 +223,12 @@ class TypeScriptLspContribution implements EditorViewContribution {
     const prefix = context.highlightPrefix ?? "editor-typescript-lsp"
     this.highlightNames = createHighlightNames(prefix)
     this.linkHighlightName = `${prefix}-typescript-lsp-definition-link`
-    const tooltipNames = nextTooltipAnchorNames()
     this.client = this.createClient()
-    this.tooltipAnchor = createTooltipAnchorElement(
-      context.container.ownerDocument,
-      tooltipNames.anchorName
-    )
-    this.tooltip = createTooltipElement(
-      context.container.ownerDocument,
-      tooltipNames
-    )
-    context.container.ownerDocument.body.append(
-      this.tooltipAnchor,
-      this.tooltip
-    )
+    this.tooltip = createTooltipController({
+      document: context.container.ownerDocument,
+      themeSource: context.scrollElement,
+      reentryElement: context.scrollElement,
+    })
     this.installPointerHandlers()
     this.state.register(this)
     this.connect()
@@ -333,8 +264,7 @@ class TypeScriptLspContribution implements EditorViewContribution {
     this.uninstallPointerHandlers()
     this.hideHover()
     this.clearDefinitionLink()
-    this.tooltipAnchor.remove()
-    this.tooltip.remove()
+    this.tooltip.dispose()
     this.clearDiagnosticHighlights()
     this.closeActiveDocument()
     this.client.disconnect()
@@ -608,29 +538,12 @@ class TypeScriptLspContribution implements EditorViewContribution {
         capture: true,
       }
     )
-    this.tooltip.addEventListener(
-      "pointerenter",
-      this.handleTooltipPointerEnter
-    )
-    this.tooltip.addEventListener(
-      "pointerleave",
-      this.handleTooltipPointerLeave
-    )
-    this.tooltip.addEventListener("pointerdown", this.handleTooltipPointerDown)
     this.context.container.ownerDocument.addEventListener(
       "pointerdown",
       this.handleDocumentPointerDown,
       {
         capture: true,
       }
-    )
-    this.context.container.ownerDocument.addEventListener(
-      "pointerup",
-      this.handleDocumentPointerUp
-    )
-    this.context.container.ownerDocument.addEventListener(
-      "pointercancel",
-      this.handleDocumentPointerUp
     )
     this.context.container.ownerDocument.addEventListener(
       "keydown",
@@ -658,30 +571,10 @@ class TypeScriptLspContribution implements EditorViewContribution {
         capture: true,
       }
     )
-    this.tooltip.removeEventListener(
-      "pointerenter",
-      this.handleTooltipPointerEnter
-    )
-    this.tooltip.removeEventListener(
-      "pointerleave",
-      this.handleTooltipPointerLeave
-    )
-    this.tooltip.removeEventListener(
-      "pointerdown",
-      this.handleTooltipPointerDown
-    )
     this.context.container.ownerDocument.removeEventListener(
       "pointerdown",
       this.handleDocumentPointerDown,
       { capture: true }
-    )
-    this.context.container.ownerDocument.removeEventListener(
-      "pointerup",
-      this.handleDocumentPointerUp
-    )
-    this.context.container.ownerDocument.removeEventListener(
-      "pointercancel",
-      this.handleDocumentPointerUp
     )
     this.context.container.ownerDocument.removeEventListener(
       "keydown",
@@ -695,7 +588,7 @@ class TypeScriptLspContribution implements EditorViewContribution {
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
     if (event.buttons !== 0) return this.clearPointerUi()
-    const inTooltipHoverZone = this.pointInTooltipHoverZone(
+    const inTooltipHoverZone = this.tooltip.pointInHoverZone(
       event.clientX,
       event.clientY
     )
@@ -729,7 +622,7 @@ class TypeScriptLspContribution implements EditorViewContribution {
   private readonly handlePointerLeave = (event: PointerEvent): void => {
     this.lastPointerOffset = null
     this.clearDefinitionLink()
-    if (targetInsideElement(this.tooltip, event.relatedTarget)) {
+    if (this.tooltip.containsTarget(event.relatedTarget)) {
       this.cancelHoverHide()
       return
     }
@@ -753,35 +646,11 @@ class TypeScriptLspContribution implements EditorViewContribution {
     this.goToDefinitionAtOffset(offset)
   }
 
-  private readonly handleTooltipPointerEnter = (): void => {
-    this.cancelHoverHide()
-  }
-
-  private readonly handleTooltipPointerLeave = (event: PointerEvent): void => {
-    if (this.tooltipPointerDown) return
-    if (targetInsideElement(this.context.scrollElement, event.relatedTarget))
-      return
-
-    this.scheduleHoverHide()
-  }
-
-  private readonly handleTooltipPointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0) return
-
-    this.tooltipPointerDown = true
-    this.cancelHoverHide()
-  }
-
   private readonly handleDocumentPointerDown = (event: PointerEvent): void => {
     if (event.button !== 0) return
-    if (targetInsideElement(this.tooltip, event.target)) return
+    if (this.tooltip.containsTarget(event.target)) return
 
-    this.tooltipPointerDown = false
     this.clearPointerUi()
-  }
-
-  private readonly handleDocumentPointerUp = (): void => {
-    this.tooltipPointerDown = false
   }
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
@@ -858,14 +727,13 @@ class TypeScriptLspContribution implements EditorViewContribution {
     const rect = this.context.getRangeClientRect(range.start, range.end)
     if (!rect) return this.hideHover()
 
-    positionTooltip(this.tooltipAnchor, rect)
-    syncEditorThemeVariables(this.tooltip, this.context.scrollElement)
-    renderTooltip(this.tooltip, {
+    this.tooltip.show({
+      anchor: rect,
       hoverText: hoverText(hover),
       diagnostics,
       theme: this.currentTheme,
+      preferredPlacement: diagnostics.length > 0 ? "bottom" : "top",
     })
-    placeTooltip(this.tooltip, rect, diagnostics.length > 0 ? "bottom" : "top")
   }
 
   private goToDefinitionAtOffset(offset: number): boolean {
@@ -962,33 +830,19 @@ class TypeScriptLspContribution implements EditorViewContribution {
 
   private hideHover(): void {
     if (this.hoverTimer) clearTimeout(this.hoverTimer)
-    if (this.hoverHideTimer) clearTimeout(this.hoverHideTimer)
     this.hoverTimer = null
-    this.hoverHideTimer = null
     this.hoverAbort?.abort()
     this.hoverAbort = null
     this.hoverRequestId += 1
-    this.tooltipPointerDown = false
-    this.tooltip.hidden = true
-    this.tooltipAnchor.style.display = "none"
-    this.tooltip.replaceChildren()
+    this.tooltip.hide()
   }
 
   private scheduleHoverHide(): void {
-    if (this.tooltipPointerDown) return
-    if (this.hoverHideTimer) clearTimeout(this.hoverHideTimer)
-
-    this.hoverHideTimer = setTimeout(() => {
-      this.hoverHideTimer = null
-      this.hideHover()
-    }, TOOLTIP_HIDE_DELAY_MS)
+    this.tooltip.scheduleHide()
   }
 
   private cancelHoverHide(): void {
-    if (!this.hoverHideTimer) return
-
-    clearTimeout(this.hoverHideTimer)
-    this.hoverHideTimer = null
+    this.tooltip.cancelHide()
   }
 
   private clearPointerUi(): void {
@@ -1006,18 +860,6 @@ class TypeScriptLspContribution implements EditorViewContribution {
   private handleRequestError(error: unknown): void {
     if (isAbortError(error)) return
     this.handleError(error)
-  }
-
-  private pointInTooltipHoverZone(clientX: number, clientY: number): boolean {
-    if (this.tooltip.hidden) return false
-
-    const tooltipRect = this.tooltip.getBoundingClientRect()
-    const anchorRect = this.tooltipAnchor.getBoundingClientRect()
-    const hoverZone = expandRect(
-      unionRects(tooltipRect, anchorRect),
-      TOOLTIP_GAP_PX
-    )
-    return rectContainsPoint(hoverZone, clientX, clientY)
   }
 }
 
@@ -1212,484 +1054,6 @@ function createHighlightNames(
   }
 }
 
-function nextTooltipAnchorNames(): TooltipAnchorNames {
-  nextTooltipAnchorId += 1
-  return {
-    anchorName: `--editor-typescript-lsp-hover-${nextTooltipAnchorId}`,
-  }
-}
-
-function createTooltipAnchorElement(
-  document: Document,
-  anchorName: string
-): HTMLDivElement {
-  const element = document.createElement("div")
-  element.className = "editor-typescript-lsp-hover-anchor"
-  Object.assign(element.style, {
-    position: "fixed",
-    display: "none",
-    opacity: "0",
-    pointerEvents: "none",
-  })
-  element.style.setProperty("anchor-name", anchorName)
-  return element
-}
-
-function createTooltipElement(
-  document: Document,
-  names: TooltipAnchorNames
-): HTMLDivElement {
-  const element = document.createElement("div")
-  element.className = "editor-typescript-lsp-hover"
-  element.hidden = true
-  Object.assign(element.style, {
-    position: "fixed",
-    zIndex: "1000",
-    width: "max-content",
-    maxWidth: "min(520px, calc(100vw - 24px))",
-    maxHeight: defaultTooltipMaxHeight(),
-    overflow: "hidden",
-    padding: "8px 10px",
-    border:
-      "1px solid color-mix(in srgb, var(--editor-foreground, #d4d4d8) 24%, transparent)",
-    borderRadius: "6px",
-    boxSizing: "border-box",
-    background:
-      "color-mix(in srgb, var(--editor-background, #18181b) 96%, var(--editor-foreground, #e4e4e7) 4%)",
-    color: "var(--editor-foreground, #e4e4e7)",
-    boxShadow:
-      "0 12px 34px color-mix(in srgb, var(--editor-background, #000000) 62%, transparent)",
-    display: "grid",
-    gridTemplateRows: "auto auto",
-    gap: "6px",
-    font: "12px/1.45 system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
-    whiteSpace: "normal",
-    pointerEvents: "auto",
-    userSelect: "text",
-    cursor: "text",
-  })
-  applyCssAnchorPosition(element, names)
-  return element
-}
-
-function renderTooltip(
-  element: HTMLDivElement,
-  content: {
-    readonly hoverText: string | null
-    readonly diagnostics: readonly lsp.Diagnostic[]
-    readonly theme?: EditorTheme | null
-  }
-): void {
-  element.replaceChildren()
-  element.style.maxHeight = defaultTooltipMaxHeight()
-
-  const body = element.ownerDocument.createElement("div")
-  body.className = "editor-typescript-lsp-hover-body"
-  Object.assign(body.style, {
-    minWidth: "0",
-    minHeight: "0",
-    maxHeight: defaultTooltipBodyMaxHeight(),
-    overflowX: "hidden",
-    overflowY: "auto",
-    paddingRight: "2px",
-    scrollbarGutter: "stable",
-  })
-  if (content.hoverText) {
-    body.append(
-      renderTooltipMarkdown(
-        element.ownerDocument,
-        content.hoverText,
-        content.theme
-      )
-    )
-  }
-  if (content.diagnostics.length > 0) {
-    body.append(diagnosticSection(element.ownerDocument, content.diagnostics))
-  }
-
-  element.append(
-    createCopyButton(element.ownerDocument, tooltipCopyText(content)),
-    body
-  )
-  element.hidden = false
-}
-
-function createCopyButton(
-  document: Document,
-  copyText: string
-): HTMLButtonElement {
-  const button = document.createElement("button")
-  button.type = "button"
-  button.className = "editor-typescript-lsp-hover-copy"
-  Object.assign(button.style, {
-    display: "inline-grid",
-    placeItems: "center",
-    justifySelf: "end",
-    width: "22px",
-    height: "22px",
-    margin: "-2px -3px 0 0",
-    border: "1px solid transparent",
-    borderRadius: "4px",
-    padding: "0",
-    background: "transparent",
-    color:
-      "color-mix(in srgb, var(--editor-foreground, #a1a1aa) 72%, transparent)",
-    cursor: "pointer",
-    opacity: "0.72",
-    userSelect: "none",
-  })
-  setCopyButtonState(button, "idle")
-  button.addEventListener("mouseenter", () =>
-    styleCopyButtonHover(button, true)
-  )
-  button.addEventListener("mouseleave", () =>
-    styleCopyButtonHover(button, false)
-  )
-  button.addEventListener("click", (event) => {
-    event.preventDefault()
-    event.stopPropagation()
-    void handleCopyButtonClick(button, copyText)
-  })
-  return button
-}
-
-type CopyButtonState = "idle" | "copied" | "failed"
-
-function setCopyButtonState(
-  button: HTMLButtonElement,
-  state: CopyButtonState
-): void {
-  button.title = copyButtonLabel(state)
-  button.setAttribute("aria-label", copyButtonLabel(state))
-  button.style.color = copyButtonColor(state)
-  button.replaceChildren(copyButtonIcon(button.ownerDocument, state))
-}
-
-function styleCopyButtonHover(
-  button: HTMLButtonElement,
-  active: boolean
-): void {
-  Object.assign(button.style, {
-    background: active
-      ? "color-mix(in srgb, var(--editor-foreground, #a1a1aa) 14%, transparent)"
-      : "transparent",
-    borderColor: active
-      ? "color-mix(in srgb, var(--editor-foreground, #a1a1aa) 22%, transparent)"
-      : "transparent",
-    opacity: active ? "1" : "0.72",
-  })
-}
-
-function copyButtonLabel(state: CopyButtonState): string {
-  if (state === "copied") return "Copied hover text"
-  if (state === "failed") return "Copy failed"
-  return "Copy hover text"
-}
-
-function copyButtonColor(state: CopyButtonState): string {
-  if (state === "copied") return "#86efac"
-  if (state === "failed") return "#f87171"
-  return "color-mix(in srgb, var(--editor-foreground, #a1a1aa) 72%, transparent)"
-}
-
-function copyButtonIcon(
-  document: Document,
-  state: CopyButtonState
-): SVGSVGElement {
-  const icon = document.createElementNS(SVG_NS, "svg") as SVGSVGElement
-  icon.setAttribute("viewBox", "0 0 24 24")
-  icon.setAttribute("width", "14")
-  icon.setAttribute("height", "14")
-  icon.setAttribute("aria-hidden", "true")
-  icon.setAttribute("fill", "none")
-  icon.setAttribute("stroke", "currentColor")
-  icon.setAttribute("stroke-width", "2")
-  icon.setAttribute("stroke-linecap", "round")
-  icon.setAttribute("stroke-linejoin", "round")
-
-  for (const pathData of copyButtonIconPaths(state)) {
-    const path = document.createElementNS(SVG_NS, "path")
-    path.setAttribute("d", pathData)
-    icon.append(path)
-  }
-
-  return icon
-}
-
-function copyButtonIconPaths(state: CopyButtonState): readonly string[] {
-  if (state === "copied") return ["M20 6 9 17l-5-5"]
-  if (state === "failed")
-    return ["M12 8v5", "M12 17h.01", "M10.3 4h3.4L22 19H2L10.3 4Z"]
-  return ["M8 8h12v12H8Z", "M4 4h12v2", "M4 4v12h2"]
-}
-
-async function handleCopyButtonClick(
-  button: HTMLButtonElement,
-  copyText: string
-): Promise<void> {
-  const copied = await copyTextToClipboard(button.ownerDocument, copyText)
-  showCopyButtonStatus(button, copied)
-}
-
-function showCopyButtonStatus(
-  button: HTMLButtonElement,
-  copied: boolean
-): void {
-  setCopyButtonState(button, copied ? "copied" : "failed")
-  setTimeout(() => {
-    if (!button.isConnected) return
-    setCopyButtonState(button, "idle")
-  }, COPY_BUTTON_RESET_DELAY_MS)
-}
-
-async function copyTextToClipboard(
-  document: Document,
-  text: string
-): Promise<boolean> {
-  const clipboard = document.defaultView?.navigator.clipboard
-  if (!clipboard) return copyTextWithTextarea(document, text)
-
-  try {
-    await clipboard.writeText(text)
-    return true
-  } catch {
-    return copyTextWithTextarea(document, text)
-  }
-}
-
-function copyTextWithTextarea(document: Document, text: string): boolean {
-  const textarea = document.createElement("textarea")
-  textarea.value = text
-  textarea.setAttribute("readonly", "")
-  Object.assign(textarea.style, {
-    position: "fixed",
-    top: "-9999px",
-    left: "-9999px",
-    opacity: "0",
-  })
-  document.body.append(textarea)
-  textarea.select()
-
-  try {
-    return document.execCommand("copy")
-  } catch {
-    return false
-  } finally {
-    textarea.remove()
-  }
-}
-
-function tooltipCopyText(content: {
-  readonly hoverText: string | null
-  readonly diagnostics: readonly lsp.Diagnostic[]
-}): string {
-  const parts = [
-    plainHoverText(content.hoverText),
-    ...content.diagnostics.map(diagnosticCopyText),
-  ].filter((part) => part.length > 0)
-  return parts.join("\n\n")
-}
-
-function plainHoverText(markdown: string | null): string {
-  if (!markdown) return ""
-  return markdown
-    .replace(/^```[^\n]*\n/gm, "")
-    .replace(/^```\s*$/gm, "")
-    .trim()
-}
-
-function diagnosticCopyText(diagnostic: lsp.Diagnostic): string {
-  return `${severityForDiagnostic(diagnostic)}: ${diagnostic.message}`.trim()
-}
-
-function diagnosticSection(
-  document: Document,
-  diagnostics: readonly lsp.Diagnostic[]
-): HTMLElement {
-  const section = document.createElement("div")
-  section.style.marginTop = "8px"
-  section.style.paddingTop = "8px"
-  section.style.borderTop =
-    "1px solid color-mix(in srgb, var(--editor-foreground, #a1a1aa) 20%, transparent)"
-  for (const diagnostic of diagnostics)
-    section.append(diagnosticRow(document, diagnostic))
-  return section
-}
-
-function syncEditorThemeVariables(
-  target: HTMLElement,
-  source: HTMLElement
-): void {
-  const style = source.ownerDocument.defaultView?.getComputedStyle(source)
-  if (!style) return
-
-  for (const variable of TOOLTIP_THEME_VARIABLES) {
-    const value =
-      source.style.getPropertyValue(variable).trim() ||
-      style.getPropertyValue(variable).trim()
-    if (value) target.style.setProperty(variable, value)
-  }
-}
-
-function diagnosticRow(
-  document: Document,
-  diagnostic: lsp.Diagnostic
-): HTMLElement {
-  const row = document.createElement("div")
-  row.style.display = "grid"
-  row.style.gridTemplateColumns = "auto 1fr"
-  row.style.gap = "8px"
-  row.style.alignItems = "baseline"
-
-  const label = document.createElement("span")
-  label.textContent = severityForDiagnostic(diagnostic)
-  label.style.color = diagnosticColor(diagnostic)
-
-  const message = document.createElement("span")
-  message.textContent = diagnostic.message
-
-  row.append(label, message)
-  return row
-}
-
-function positionTooltip(anchorElement: HTMLDivElement, anchor: DOMRect): void {
-  positionTooltipAnchor(anchorElement, anchor)
-}
-
-function positionTooltipAnchor(element: HTMLDivElement, anchor: DOMRect): void {
-  Object.assign(element.style, {
-    display: "block",
-    left: `${anchor.left}px`,
-    top: `${anchor.top}px`,
-    width: `${Math.max(1, anchor.width)}px`,
-    height: `${Math.max(1, anchor.height)}px`,
-  })
-}
-
-function applyCssAnchorPosition(
-  element: HTMLDivElement,
-  names: TooltipAnchorNames
-): void {
-  element.style.setProperty("position-anchor", names.anchorName)
-  element.style.setProperty("inset", "auto")
-  applyTooltipPlacement(element, "top")
-}
-
-function placeTooltip(
-  element: HTMLDivElement,
-  anchor: DOMRect,
-  preferredPlacement: "top" | "bottom" = "top"
-): void {
-  const viewportHeight = tooltipViewportHeight(element.ownerDocument)
-  const tooltipHeight = Math.min(
-    element.getBoundingClientRect().height,
-    TOOLTIP_MAX_HEIGHT_PX
-  )
-  const placement = tooltipPlacement(
-    anchor,
-    tooltipHeight,
-    viewportHeight,
-    preferredPlacement
-  )
-  const availableHeight = tooltipAvailableHeight(
-    anchor,
-    placement,
-    viewportHeight
-  )
-  const maxHeight = tooltipMaxHeight(availableHeight)
-  element.style.maxHeight = `${maxHeight}px`
-  setTooltipBodyMaxHeight(element, maxHeight)
-  applyTooltipPlacement(element, placement)
-}
-
-function defaultTooltipMaxHeight(): string {
-  return `min(${TOOLTIP_MAX_HEIGHT_PX}px, calc(100vh - ${TOOLTIP_VIEWPORT_MARGIN_PX * 2}px))`
-}
-
-function defaultTooltipBodyMaxHeight(): string {
-  return `min(${TOOLTIP_MAX_HEIGHT_PX - TOOLTIP_BODY_CHROME_PX}px, calc(100vh - ${
-    TOOLTIP_VIEWPORT_MARGIN_PX * 2 + TOOLTIP_BODY_CHROME_PX
-  }px))`
-}
-
-function setTooltipBodyMaxHeight(
-  element: HTMLDivElement,
-  maxHeight: number
-): void {
-  const body = element.querySelector<HTMLElement>(
-    ".editor-typescript-lsp-hover-body"
-  )
-  if (!body) return
-
-  body.style.maxHeight = `${Math.max(1, maxHeight - TOOLTIP_BODY_CHROME_PX)}px`
-}
-
-function tooltipViewportHeight(document: Document): number {
-  return document.defaultView?.innerHeight ?? TOOLTIP_MAX_HEIGHT_PX
-}
-
-function tooltipPlacement(
-  anchor: DOMRect,
-  tooltipHeight: number,
-  viewportHeight: number,
-  preferredPlacement: "top" | "bottom"
-): "top" | "bottom" {
-  const preferredHeight = tooltipAvailableHeight(
-    anchor,
-    preferredPlacement,
-    viewportHeight
-  )
-  if (preferredHeight >= tooltipHeight) return preferredPlacement
-
-  const fallbackPlacement = preferredPlacement === "top" ? "bottom" : "top"
-  const fallbackHeight = tooltipAvailableHeight(
-    anchor,
-    fallbackPlacement,
-    viewportHeight
-  )
-  if (fallbackHeight >= tooltipHeight) return fallbackPlacement
-
-  const availableTop = tooltipAvailableHeight(anchor, "top", viewportHeight)
-  const availableBottom = tooltipAvailableHeight(
-    anchor,
-    "bottom",
-    viewportHeight
-  )
-  return availableTop >= availableBottom ? "top" : "bottom"
-}
-
-function tooltipAvailableHeight(
-  anchor: DOMRect,
-  placement: "top" | "bottom",
-  viewportHeight: number
-): number {
-  if (placement === "top")
-    return anchor.top - TOOLTIP_GAP_PX - TOOLTIP_VIEWPORT_MARGIN_PX
-  return (
-    viewportHeight - anchor.bottom - TOOLTIP_GAP_PX - TOOLTIP_VIEWPORT_MARGIN_PX
-  )
-}
-
-function tooltipMaxHeight(availableHeight: number): number {
-  const maxHeight = Math.min(TOOLTIP_MAX_HEIGHT_PX, Math.floor(availableHeight))
-  return Math.max(TOOLTIP_MIN_MAX_HEIGHT_PX, maxHeight)
-}
-
-function applyTooltipPlacement(
-  element: HTMLDivElement,
-  placement: "top" | "bottom"
-): void {
-  element.style.setProperty("position-area", `${placement} center`)
-  element.style.setProperty(
-    "margin-top",
-    placement === "bottom" ? `${TOOLTIP_GAP_PX}px` : "0"
-  )
-  element.style.setProperty(
-    "margin-bottom",
-    placement === "top" ? `${TOOLTIP_GAP_PX}px` : "0"
-  )
-}
-
 function hoverText(hover: lsp.Hover | null): string | null {
   if (!hover) return null
 
@@ -1854,66 +1218,11 @@ function definitionTarget(
   ]
 }
 
-function severityForDiagnostic(diagnostic: lsp.Diagnostic): string {
-  if (diagnostic.severity === 2) return "warning"
-  if (diagnostic.severity === 3) return "info"
-  if (diagnostic.severity === 4) return "hint"
-  return "error"
-}
-
-function diagnosticColor(diagnostic: lsp.Diagnostic): string {
-  if (diagnostic.severity === 2) return "#fbbf24"
-  if (diagnostic.severity === 3) return "#60a5fa"
-  if (diagnostic.severity === 4) return "#a1a1aa"
-  return "#f87171"
-}
-
 function isNavigationModifier(event: {
   readonly metaKey: boolean
   readonly ctrlKey: boolean
 }): boolean {
   return event.metaKey || event.ctrlKey
-}
-
-function targetInsideElement(
-  element: Element,
-  target: EventTarget | null
-): boolean {
-  if (!(target instanceof Node)) return false
-  return element.contains(target)
-}
-
-function unionRects(left: DOMRect, right: DOMRect): DOMRect {
-  const x = Math.min(left.left, right.left)
-  const y = Math.min(left.top, right.top)
-  const rightEdge = Math.max(left.right, right.right)
-  const bottomEdge = Math.max(left.bottom, right.bottom)
-  return new DOMRect(
-    x,
-    y,
-    Math.max(0, rightEdge - x),
-    Math.max(0, bottomEdge - y)
-  )
-}
-
-function expandRect(rect: DOMRect, amount: number): DOMRect {
-  return new DOMRect(
-    rect.left - amount,
-    rect.top - amount,
-    rect.width + amount * 2,
-    rect.height + amount * 2
-  )
-}
-
-function rectContainsPoint(
-  rect: DOMRect,
-  clientX: number,
-  clientY: number
-): boolean {
-  if (clientX < rect.left) return false
-  if (clientX > rect.right) return false
-  if (clientY < rect.top) return false
-  return clientY <= rect.bottom
 }
 
 function isAbortError(error: unknown): boolean {
