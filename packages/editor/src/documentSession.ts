@@ -22,7 +22,7 @@ import {
 import type { EditorToken, TextEdit } from "./tokens";
 import type { Anchor as PieceTableAnchor, PieceTableSnapshot } from "./pieceTable/pieceTableTypes";
 import { applyBatchToPieceTable } from "./pieceTable/edits";
-import { getPieceTableText } from "./pieceTable/reads";
+import { forEachPieceTableTextChunk, getPieceTableText } from "./pieceTable/reads";
 import { createPieceTableSnapshot } from "./pieceTable/snapshot";
 
 export type DocumentSessionChangeKind = "edit" | "selection" | "undo" | "redo" | "none";
@@ -42,6 +42,7 @@ export type DocumentSessionChange = {
   readonly timings: readonly EditorTimingMeasurement[];
   readonly canUndo: boolean;
   readonly canRedo: boolean;
+  readonly isDirty: boolean;
 };
 
 export type DocumentSession = {
@@ -79,6 +80,8 @@ export type DocumentSession = {
   getSnapshot(): PieceTableSnapshot;
   canUndo(): boolean;
   canRedo(): boolean;
+  isDirty(): boolean;
+  markClean(): void;
 };
 
 export type DocumentSessionSelectionOptions = {
@@ -104,8 +107,17 @@ type CommitEditOptions = {
   readonly history: DocumentSessionEditHistoryMode;
 };
 
+type PieceTableTextChunk = {
+  readonly text: string;
+  readonly start: number;
+  readonly end: number;
+};
+
 class PieceTableDocumentSession implements DocumentSession {
   private history: PieceTableEditorHistory;
+  private cleanSnapshot: PieceTableSnapshot;
+  private dirtyCacheSnapshot: PieceTableSnapshot;
+  private dirtyCacheValue = false;
   private text: string;
   private tokens: readonly EditorToken[] = [];
   private undoEdits: readonly (readonly TextEdit[])[];
@@ -115,6 +127,8 @@ class PieceTableDocumentSession implements DocumentSession {
     const snapshot = createPieceTableSnapshot(text);
     const selections = createSelectionSet([createAnchorSelection(snapshot, snapshot.length)], true);
     this.history = createEditorHistory(snapshot, selections);
+    this.cleanSnapshot = snapshot;
+    this.dirtyCacheSnapshot = snapshot;
     this.text = text;
     this.undoEdits = [];
     this.redoEdits = [];
@@ -316,6 +330,22 @@ class PieceTableDocumentSession implements DocumentSession {
     return this.history.redo !== null;
   }
 
+  public isDirty(): boolean {
+    const snapshot = this.history.current;
+    if (this.dirtyCacheSnapshot === snapshot) return this.dirtyCacheValue;
+
+    const dirty = !pieceTableSnapshotsHaveSameText(snapshot, this.cleanSnapshot);
+    this.dirtyCacheSnapshot = snapshot;
+    this.dirtyCacheValue = dirty;
+    return dirty;
+  }
+
+  public markClean(): void {
+    this.cleanSnapshot = this.history.current;
+    this.dirtyCacheSnapshot = this.history.current;
+    this.dirtyCacheValue = false;
+  }
+
   private commitEdit(
     snapshot: PieceTableSnapshot,
     selections: SelectionSet<PieceTableAnchor>,
@@ -410,6 +440,7 @@ class PieceTableDocumentSession implements DocumentSession {
       timings: [],
       canUndo: this.canUndo(),
       canRedo: this.canRedo(),
+      isDirty: this.isDirty(),
     };
   }
 }
@@ -426,6 +457,78 @@ function normalizeTextEdits(edits: readonly TextEdit[]): readonly TextEdit[] {
 
 function isEffectiveTextEdit(edit: TextEdit): boolean {
   return edit.from !== edit.to || edit.text.length > 0;
+}
+
+function pieceTableSnapshotsHaveSameText(
+  left: PieceTableSnapshot,
+  right: PieceTableSnapshot,
+): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  if (left.length === 0) return true;
+  return pieceTableTextChunksEqual(
+    collectPieceTableTextChunks(left),
+    collectPieceTableTextChunks(right),
+  );
+}
+
+function collectPieceTableTextChunks(snapshot: PieceTableSnapshot): readonly PieceTableTextChunk[] {
+  const chunks: PieceTableTextChunk[] = [];
+  forEachPieceTableTextChunk(snapshot, (text, start, end) => {
+    chunks.push({ text, start, end });
+  });
+  return chunks;
+}
+
+function pieceTableTextChunksEqual(
+  left: readonly PieceTableTextChunk[],
+  right: readonly PieceTableTextChunk[],
+): boolean {
+  let leftIndex = 0;
+  let rightIndex = 0;
+  let leftOffset = left[0]?.start ?? 0;
+  let rightOffset = right[0]?.start ?? 0;
+
+  while (leftIndex < left.length && rightIndex < right.length) {
+    const leftChunk = left[leftIndex];
+    const rightChunk = right[rightIndex];
+    if (!leftChunk || !rightChunk) return false;
+
+    const length = Math.min(leftChunk.end - leftOffset, rightChunk.end - rightOffset);
+    if (!pieceTableTextRangesEqual(leftChunk, leftOffset, rightChunk, rightOffset, length)) {
+      return false;
+    }
+
+    leftOffset += length;
+    rightOffset += length;
+    if (leftOffset === leftChunk.end) {
+      leftIndex += 1;
+      leftOffset = left[leftIndex]?.start ?? 0;
+    }
+    if (rightOffset === rightChunk.end) {
+      rightIndex += 1;
+      rightOffset = right[rightIndex]?.start ?? 0;
+    }
+  }
+
+  return leftIndex === left.length && rightIndex === right.length;
+}
+
+function pieceTableTextRangesEqual(
+  left: PieceTableTextChunk,
+  leftOffset: number,
+  right: PieceTableTextChunk,
+  rightOffset: number,
+  length: number,
+): boolean {
+  for (let index = 0; index < length; index += 1) {
+    const leftCode = left.text.charCodeAt(leftOffset + index);
+    const rightCode = right.text.charCodeAt(rightOffset + index);
+    if (leftCode !== rightCode) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function invertTextEdits(

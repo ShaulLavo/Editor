@@ -14,6 +14,7 @@ const createChange = (text: string, edit: { from: number; to: number; text: stri
     timings: [],
     canUndo: false,
     canRedo: false,
+    isDirty: true,
   }) satisfies DocumentSessionChange;
 
 describe.skipIf(typeof Worker === "undefined")("Shiki worker highlighter", () => {

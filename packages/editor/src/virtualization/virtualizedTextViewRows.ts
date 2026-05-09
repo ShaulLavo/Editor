@@ -244,6 +244,7 @@ function updateRowElement(
   snapshot: FixedRowVirtualizerSnapshot,
 ): void {
   if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
+  applyRowDecoration(view, row, item.index);
   updateCursorLineContentClass(view, row.element, isCursorLineVirtualRow(view, item.index));
   updateGutterRowElement(view, row, item);
   if (row.top !== item.start) {
@@ -313,6 +314,7 @@ function updateRowElementForSameLineEdit(
   snapshot: FixedRowVirtualizerSnapshot,
 ): void {
   if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
+  applyRowDecoration(view, row, item.index);
   updateGutterRowElement(view, row, item);
   if (row.top !== item.start) {
     row.element.style.transform = `translate3d(0, ${item.start}px, 0)`;
@@ -787,10 +789,92 @@ function isRowCurrent(
   const text = lineText(view, item.index);
   if (row.text !== text) return false;
   if (row.chunkKey !== rowChunkKey(view, text, snapshot)) return false;
+  if ((row.element.dataset.editorRowDecorationKey ?? "") !== rowDecorationKey(view, item.index)) {
+    return false;
+  }
 
   const foldMarker = foldMarkerForVirtualRow(view, item.index);
   if (row.foldMarkerKey !== (foldMarker?.key ?? "")) return false;
   return row.foldCollapsed === (foldMarker?.collapsed ?? false);
+}
+
+function applyRowDecoration(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
+  virtualRow: number,
+): void {
+  const decoration = rowDecorationForVirtualRow(view, virtualRow);
+  setDecorationClass(row.element, "editorRowDecorationClass", decoration?.className ?? "");
+  setDecorationClass(
+    row.gutterElement,
+    "editorRowDecorationGutterClass",
+    decoration?.gutterClassName ?? "",
+  );
+  setDecorationKey(row.element, rowDecorationKey(view, virtualRow));
+}
+
+function rowDecorationForVirtualRow(view: VirtualizedTextViewInternal, virtualRow: number) {
+  return view.rowDecorations.get(bufferRowForVirtualRow(view, virtualRow));
+}
+
+function rowDecorationKey(view: VirtualizedTextViewInternal, virtualRow: number): string {
+  const decoration = rowDecorationForVirtualRow(view, virtualRow);
+  if (!decoration) return "";
+
+  return `${decoration.className ?? ""}|${decoration.gutterClassName ?? ""}`;
+}
+
+function setDecorationClass(
+  element: HTMLElement,
+  dataKey: "editorRowDecorationClass" | "editorRowDecorationGutterClass",
+  className: string,
+): void {
+  const previous = element.dataset[dataKey] ?? "";
+  if (previous === className) return;
+
+  removeClassNames(element, previous);
+  addClassNames(element, className);
+  setStoredDecorationClass(element, dataKey, className);
+}
+
+function setStoredDecorationClass(
+  element: HTMLElement,
+  dataKey: "editorRowDecorationClass" | "editorRowDecorationGutterClass",
+  className: string,
+): void {
+  if (className.length > 0) {
+    element.dataset[dataKey] = className;
+    return;
+  }
+
+  delete element.dataset[dataKey];
+}
+
+function setDecorationKey(element: HTMLElement, key: string): void {
+  if (key.length > 0) {
+    element.dataset.editorRowDecorationKey = key;
+    return;
+  }
+
+  delete element.dataset.editorRowDecorationKey;
+}
+
+function addClassNames(element: HTMLElement, className: string): void {
+  const names = splitClassNames(className);
+  if (names.length === 0) return;
+
+  element.classList.add(...names);
+}
+
+function removeClassNames(element: HTMLElement, className: string): void {
+  const names = splitClassNames(className);
+  if (names.length === 0) return;
+
+  element.classList.remove(...names);
+}
+
+function splitClassNames(className: string): string[] {
+  return className.split(/\s+/).filter(Boolean);
 }
 
 function releaseRowsOutside(

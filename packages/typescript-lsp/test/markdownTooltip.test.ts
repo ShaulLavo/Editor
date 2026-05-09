@@ -30,6 +30,20 @@ describe("tooltip Markdown rendering", () => {
     expect(code?.textContent).toContain("veryLongValueName");
   });
 
+  it("applies an editor theme to Markdown tooltip content", () => {
+    const element = renderTooltipMarkdown(document, "```ts\nconst value = 'x'\n```", {
+      foregroundColor: "#24292f",
+      syntax: {
+        keyword: "#cf222e",
+        string: "#0a3069",
+      },
+    });
+
+    expect(element.style.getPropertyValue("--editor-foreground")).toBe("#24292f");
+    expect(element.style.getPropertyValue("--editor-syntax-keyword")).toBe("#cf222e");
+    expect(element.style.getPropertyValue("--editor-syntax-string")).toBe("#0a3069");
+  });
+
   it("renders paragraphs, emphasis, strong text, and inline code", () => {
     const element = renderTooltipMarkdown(
       document,

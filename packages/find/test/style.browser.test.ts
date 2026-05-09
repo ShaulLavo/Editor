@@ -15,4 +15,17 @@ describe("find widget styles", () => {
     expect(getComputedStyle(row).display).toBe("flex");
     row.remove();
   });
+
+  it("uses inherited editor theme colors", () => {
+    const host = document.createElement("div");
+    const widget = document.createElement("div");
+    host.style.setProperty("--editor-background", "rgb(250, 250, 250)");
+    host.style.setProperty("--editor-foreground", "rgb(15, 23, 42)");
+    widget.className = "editor-find-widget";
+    host.append(widget);
+    document.body.append(host);
+
+    expect(getComputedStyle(widget).color).toBe("rgb(15, 23, 42)");
+    host.remove();
+  });
 });

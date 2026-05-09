@@ -1,5 +1,6 @@
 import {
   Editor,
+  type DocumentSession,
   type DocumentSessionChange,
   type EditorChangeHandler,
   type EditorCommandContext,
@@ -32,6 +33,7 @@ import {
 export type ReactEditorDocument = {
   readonly documentId?: string;
   readonly revision?: string | number;
+  readonly session?: DocumentSession | null;
   readonly text: string;
   readonly languageId?: EditorSyntaxLanguageId | null;
   readonly scrollPosition?: EditorScrollPosition;
@@ -469,6 +471,15 @@ function syncDocument(
     return;
   }
 
+  if (document.session) {
+    editor.attachSession(document.session, {
+      documentId: document.documentId,
+      languageId: document.languageId,
+      scrollPosition: document.scrollPosition,
+    });
+    return;
+  }
+
   editor.openDocument({
     documentId: document.documentId,
     languageId: document.languageId,
@@ -559,13 +570,36 @@ function createDocumentState(): ReactEditorDocumentState {
 
 function documentKey(
   document:
-    | (Readonly<{ readonly documentId?: string; readonly revision?: string | number }> & object)
+    | (Readonly<{
+        readonly documentId?: string;
+        readonly revision?: string | number;
+        readonly session?: DocumentSession | null;
+      }> &
+        object)
     | null
     | undefined,
 ): ReactEditorDocumentKey {
   if (!document) return NO_DOCUMENT;
 
-  return `${document.documentId ?? ""}\u0000${document.revision ?? ""}`;
+  const session = "session" in document ? document.session : null;
+  return `${document.documentId ?? ""}\u0000${document.revision ?? ""}\u0000${sessionIdentity(
+    session,
+  )}`;
+}
+
+const sessionKeys = new WeakMap<DocumentSession, number>();
+let nextSessionKey = 1;
+
+function sessionIdentity(session: DocumentSession | null | undefined): string {
+  if (!session) return "";
+
+  const existing = sessionKeys.get(session);
+  if (existing !== undefined) return `${existing}`;
+
+  const key = nextSessionKey;
+  nextSessionKey += 1;
+  sessionKeys.set(session, key);
+  return `${key}`;
 }
 
 function createEmptyStoreSnapshot(): ReactEditorStoreSnapshot {

@@ -48,6 +48,11 @@ export type VirtualizedTextHighlightStyle = {
   readonly textDecoration?: string;
 };
 
+export type VirtualizedTextRowDecoration = {
+  readonly className?: string;
+  readonly gutterClassName?: string;
+};
+
 export type EditorCursorLineHighlightOptions = {
   readonly gutterNumber?: boolean;
   readonly gutterBackground?: boolean | readonly string[];

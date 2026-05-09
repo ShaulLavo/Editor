@@ -30,6 +30,11 @@ import type { EditorFindOptions } from "./types";
 const FIND_MATCH_STYLE = { backgroundColor: "rgba(234, 179, 8, 0.34)" };
 const FIND_CURRENT_STYLE = { backgroundColor: "rgba(245, 158, 11, 0.72)", color: "#111827" };
 const FIND_SCOPE_STYLE = { backgroundColor: "rgba(59, 130, 246, 0.22)" };
+const EDITOR_THEME_VARIABLES = [
+  "--editor-background",
+  "--editor-foreground",
+  "--editor-caret-color",
+] as const;
 
 export type EditorFindSelectionRange = {
   readonly anchor: number;
@@ -115,7 +120,7 @@ export class EditorFindController {
     this.matchHighlightName = `${highlightPrefix}-find-match`;
     this.currentHighlightName = `${highlightPrefix}-find-current`;
     this.scopeHighlightName = `${highlightPrefix}-find-scope`;
-    this.widget = new EditorFindWidget(host.container, {
+    this.widget = new EditorFindWidget(host.container, host.scrollElement, {
       onSearchInput: (value) => this.setSearchString(value),
       onReplaceInput: (value) => this.setReplaceString(value),
       onToggleReplace: () => this.toggleReplace(),
@@ -477,6 +482,7 @@ class EditorFindWidget {
 
   public constructor(
     container: HTMLElement,
+    private readonly themeSource: HTMLElement,
     private readonly options: EditorFindWidgetOptions,
   ) {
     const document = container.ownerDocument;
@@ -499,6 +505,7 @@ class EditorFindWidget {
   }
 
   public show(replaceVisible: boolean): void {
+    syncEditorThemeVariables(this.root, this.themeSource);
     this.root.hidden = false;
     this.replaceRow.hidden = !replaceVisible;
   }
@@ -508,6 +515,7 @@ class EditorFindWidget {
   }
 
   public update(state: EditorFindWidgetState): void {
+    syncEditorThemeVariables(this.root, this.themeSource);
     if (this.findInput.value !== state.searchString) this.findInput.value = state.searchString;
     if (this.replaceInput.value !== state.replaceString)
       this.replaceInput.value = state.replaceString;
@@ -712,6 +720,17 @@ function createFindButton(
   setNativeTooltip(button, title);
   if (onClick) button.addEventListener("click", onClick);
   return button;
+}
+
+function syncEditorThemeVariables(target: HTMLElement, source: HTMLElement): void {
+  const style = source.ownerDocument.defaultView?.getComputedStyle(source);
+  if (!style) return;
+
+  for (const variable of EDITOR_THEME_VARIABLES) {
+    const value =
+      source.style.getPropertyValue(variable).trim() || style.getPropertyValue(variable).trim();
+    if (value) target.style.setProperty(variable, value);
+  }
 }
 
 function createLucideIcon(document: Document, icon: IconNode): SVGElement {

@@ -9,6 +9,7 @@
   --editor-caret-color: var(--editor-foreground);
   --editor-hidden-character-foreground: #71717a;
   --editor-minimap-background: var(--editor-background);
+  --editor-minimap-background-opacity: 0.5;
   --editor-syntax-attribute: #99f6e4;
   --editor-syntax-bracket: #d4d4d8;
   --editor-syntax-comment: #71717a;
@@ -54,6 +55,7 @@
   --editor-caret-color: var(--editor-foreground);
   --editor-hidden-character-foreground: #71717a;
   --editor-minimap-background: var(--editor-background);
+  --editor-minimap-background-opacity: 0.5;
   --editor-syntax-attribute: #99f6e4;
   --editor-syntax-bracket: #d4d4d8;
   --editor-syntax-comment: #71717a;

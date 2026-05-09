@@ -11,6 +11,7 @@ import type {
   MountedVirtualizedTextRow,
   TokenGroup,
   VirtualizedFoldMarker,
+  VirtualizedTextRowDecoration,
 } from "./virtualizedTextViewTypes";
 
 export type RevealBlock = "nearest" | "end";
@@ -93,6 +94,7 @@ export interface VirtualizedTextViewInternal {
   displayRows: DisplayRow[];
   foldMap: FoldMap | null;
   foldMarkers: readonly VirtualizedFoldMarker[];
+  rowDecorations: ReadonlyMap<number, VirtualizedTextRowDecoration>;
   foldMarkerByStartRow: ReadonlyMap<number, VirtualizedFoldMarker>;
   foldMarkerByKey: ReadonlyMap<string, VirtualizedFoldMarker>;
   blockRows: readonly BlockRow[];

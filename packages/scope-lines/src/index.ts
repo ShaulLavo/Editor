@@ -14,13 +14,17 @@ export type ScopeLinesPluginOptions = {
   readonly enabled?: boolean;
   readonly className?: string;
   readonly minLineSpan?: number;
+  readonly mode?: ScopeLinesMode;
   readonly showActive?: boolean;
 };
+
+export type ScopeLinesMode = "all" | "current";
 
 type ResolvedScopeLinesOptions = {
   readonly enabled: boolean;
   readonly className?: string;
   readonly minLineSpan: number;
+  readonly mode: ScopeLinesMode;
   readonly showActive: boolean;
 };
 
@@ -28,6 +32,7 @@ type ScopeGuide = {
   readonly marker: VirtualizedFoldMarker;
   readonly column: number;
   readonly indentLevel: number;
+  readonly containsCursor: boolean;
   readonly active: boolean;
 };
 
@@ -103,6 +108,7 @@ function resolveScopeLinesOptions(options: ScopeLinesPluginOptions): ResolvedSco
     enabled: options.enabled ?? true,
     className: options.className,
     minLineSpan: normalizeMinLineSpan(options.minLineSpan),
+    mode: options.mode ?? "all",
     showActive: options.showActive ?? true,
   };
 }
@@ -177,7 +183,8 @@ function createScopeGuides(
     const guide = createScopeGuide(marker, snapshot, options);
     if (guide) guides.push(guide);
   }
-  return guides;
+  if (options.mode === "all") return guides;
+  return nearestCursorScopeGuides(guides);
 }
 
 function createScopeGuide(
@@ -191,11 +198,14 @@ function createScopeGuide(
   const placement = scopeGuidePlacement(marker, snapshot);
   if (placement.column < 0) return null;
 
+  const containsCursor = markerContainsCursor(marker, snapshot);
+
   return {
     marker,
     column: placement.column,
     indentLevel: placement.indentLevel,
-    active: options.showActive && markerContainsCursor(marker, snapshot),
+    containsCursor,
+    active: options.showActive && containsCursor,
   };
 }
 
@@ -280,6 +290,24 @@ function markerContainsCursor(
   return cursor > marker.startOffset && cursor < marker.endOffset;
 }
 
+function nearestCursorScopeGuides(guides: readonly ScopeGuide[]): ScopeGuide[] {
+  const nearest = guides.reduce<ScopeGuide | null>(nearestCursorScopeGuide, null);
+  return nearest ? [nearest] : [];
+}
+
+function nearestCursorScopeGuide(
+  current: ScopeGuide | null,
+  candidate: ScopeGuide,
+): ScopeGuide | null {
+  if (!candidate.containsCursor) return current;
+  if (!current) return candidate;
+
+  const currentSpan = current.marker.endOffset - current.marker.startOffset;
+  const candidateSpan = candidate.marker.endOffset - candidate.marker.startOffset;
+  if (candidateSpan >= currentSpan) return current;
+  return candidate;
+}
+
 function appendGuideSegments(
   segments: ScopeLineSegment[],
   guide: ScopeGuide,
@@ -340,6 +368,7 @@ function snapshotSignature(
     snapshot.metrics.characterWidth,
     snapshot.tabSize,
     options.minLineSpan,
+    options.mode,
     options.showActive,
     foldMarkerSignature(snapshot.foldMarkers),
     selectionSignature(snapshot),

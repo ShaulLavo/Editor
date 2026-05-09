@@ -151,6 +151,61 @@ describe("VirtualizedTextView", () => {
     expect(highlightsMap.get("test-find")?.size).toBe(1);
   });
 
+  it("removes custom range highlights when ranges become empty", () => {
+    view.setText("alpha\nbeta\ngamma");
+    view.setScrollMetrics(0, 20);
+
+    view.setRangeHighlight("test-find", [{ start: 0, end: 5 }], {
+      backgroundColor: "rgba(234, 179, 8, 0.34)",
+    });
+    view.setRangeHighlight("test-find", [], {
+      backgroundColor: "rgba(234, 179, 8, 0.34)",
+    });
+
+    expect(highlightsMap.has("test-find")).toBe(false);
+    expect(registryDeletes).toBe(1);
+  });
+
+  it("decorates mounted rows by buffer row and refreshes on scroll", () => {
+    view.setText("alpha\nbeta\ngamma");
+    view.setScrollMetrics(0, 20);
+
+    view.setRowDecorations(
+      new Map([
+        [0, { className: "row-added", gutterClassName: "gutter-added" }],
+        [2, { className: "row-deleted" }],
+      ]),
+    );
+
+    expect(container.querySelector('[data-editor-virtual-row="0"]')?.className).toContain(
+      "row-added",
+    );
+
+    view.setScrollMetrics(40, 20);
+
+    expect(container.querySelector('[data-editor-virtual-row="2"]')?.className).toContain(
+      "row-deleted",
+    );
+  });
+
+  it("unregisters custom range highlights while all ranges are offscreen", () => {
+    view.setText(createLines(20));
+    view.setScrollMetrics(0, 20);
+
+    view.setRangeHighlight("test-find", [{ start: 0, end: 5 }], {
+      backgroundColor: "rgba(234, 179, 8, 0.34)",
+    });
+    view.setRangeHighlight("test-find", [{ start: 70, end: 75 }], {
+      backgroundColor: "rgba(234, 179, 8, 0.34)",
+    });
+
+    expect(highlightsMap.has("test-find")).toBe(false);
+
+    view.setScrollMetrics(200, 20);
+
+    expect(highlightsMap.get("test-find")?.size).toBe(1);
+  });
+
   it("passes raw CSS counter styles through the line gutter", () => {
     view.dispose();
     view = new VirtualizedTextView(container, {

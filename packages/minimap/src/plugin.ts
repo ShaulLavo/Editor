@@ -10,7 +10,7 @@ import { resolveMinimapOptions } from "./options";
 import type { EditorMinimapOptions, ResolvedMinimapOptions } from "./types";
 import { canUseMinimapWorker, MinimapWorkerClient, type MinimapHost } from "./workerClient";
 
-const OVERLAY_SCROLLBAR_GUTTER_FALLBACK = 14;
+const HORIZONTAL_SCROLLBAR_GUTTER_FALLBACK = 14;
 
 export function createMinimapPlugin(options: EditorMinimapOptions = {}): EditorPlugin {
   const resolved = resolveMinimapOptions(options);
@@ -182,11 +182,15 @@ class MinimapContribution implements EditorViewContribution {
   }
 
   private updateNativeScrollbarGutter(): void {
-    const gutter = nativeScrollbarGutter(
+    const measuredGutter = nativeScrollbarGutter(
       this.latestSnapshot.viewport,
       this.reservedWidth,
       this.scrollElementBorderMetrics,
     );
+    const gutter = {
+      vertical: measuredGutter.vertical,
+      horizontal: horizontalScrollbarGutter(this.context.scrollElement, measuredGutter.horizontal),
+    };
     if (
       gutter.vertical === this.verticalScrollbarWidth &&
       gutter.horizontal === this.horizontalScrollbarHeight
@@ -291,15 +295,12 @@ function nativeScrollbarGutter(
   const hasHorizontalScrollbar =
     viewport.clientWidth > 0 && viewport.scrollWidth > viewport.clientWidth;
   const vertical = hasVerticalScrollbar
-    ? Math.max(
-        measuredVerticalScrollbarGutter(viewport, border.x, reservedOverlayWidth),
-        OVERLAY_SCROLLBAR_GUTTER_FALLBACK,
-      )
+    ? measuredVerticalScrollbarGutter(viewport, border.x, reservedOverlayWidth)
     : 0;
   const horizontal = hasHorizontalScrollbar
     ? Math.max(
         measuredHorizontalScrollbarGutter(viewport, border.y),
-        OVERLAY_SCROLLBAR_GUTTER_FALLBACK,
+        HORIZONTAL_SCROLLBAR_GUTTER_FALLBACK,
       )
     : 0;
 
@@ -326,6 +327,12 @@ function measuredHorizontalScrollbarGutter(
 
   const borderBoxHeight = viewport.borderBoxHeight ?? viewport.clientHeight + borderWidth;
   return Math.max(0, borderBoxHeight - viewport.clientHeight - borderWidth);
+}
+
+function horizontalScrollbarGutter(element: HTMLElement, measuredGutter: number): number {
+  if (element.scrollWidth <= element.clientWidth) return measuredGutter;
+
+  return Math.max(measuredGutter, HORIZONTAL_SCROLLBAR_GUTTER_FALLBACK);
 }
 
 function readScrollElementBorderMetrics(element: HTMLElement): ScrollElementBorderMetrics {

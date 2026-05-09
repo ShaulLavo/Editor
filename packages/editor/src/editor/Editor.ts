@@ -291,6 +291,7 @@ export class Editor {
       length,
       canUndo: this.session?.canUndo() ?? false,
       canRedo: this.session?.canRedo() ?? false,
+      isDirty: this.session?.isDirty() ?? false,
     };
   }
 
@@ -353,6 +354,7 @@ export class Editor {
   setTheme(theme: EditorTheme | null | undefined): void {
     this.configuredTheme = theme ?? null;
     this.applyResolvedTheme();
+    this.reloadHighlighterSession();
     this.notifyViewContributions("tokens", null);
   }
 
@@ -387,18 +389,30 @@ export class Editor {
 
   attachSession(session: DocumentSession, options: EditorSessionOptions = {}): void {
     this.documentVersion += 1;
-    this.documentId = null;
-    this.languageId = null;
-    this.syntaxStatus = "plain";
+    const documentVersion = this.documentVersion;
+    this.documentId = options.documentId ?? null;
+    this.languageId = options.languageId ?? null;
     this.disposeSyntaxSession();
     this.disposeHighlighterSession();
     this.session = session;
     this.sessionOptions = options;
+    const text = session.getText();
+    const internalDocumentId = this.documentId ?? this.generatedOpenSessionId(documentVersion);
+    this.highlighterSession = this.pluginHost.createHighlighterSession({
+      documentId: internalDocumentId,
+      languageId: this.languageId,
+      text,
+      snapshot: session.getSnapshot(),
+    });
+    this.syntaxSession = this.createSyntaxSession(internalDocumentId, text);
+    this.syntaxStatus = this.syntaxSession ? "loading" : "plain";
     this.view.setEditable(true);
     this.setDocument({ text: session.getText(), tokens: session.getTokens() });
     this.applyDocumentScrollPosition(options.scrollPosition);
     this.syncDomSelection();
     this.notifyViewContributions("document", null);
+    this.notifyChange(null);
+    this.refreshSyntax(documentVersion, null);
   }
 
   detachSession(): void {
@@ -545,6 +559,21 @@ export class Editor {
     this.setHighlighterTheme(null);
   }
 
+  private reloadHighlighterSession(): void {
+    this.disposeHighlighterSession();
+    if (!this.session) return;
+
+    const documentId = this.documentId ?? this.generatedOpenSessionId(this.documentVersion);
+    this.highlighterSession = this.pluginHost.createHighlighterSession({
+      documentId,
+      languageId: this.languageId,
+      text: this.session.getText(),
+      snapshot: this.session.getSnapshot(),
+    });
+    this.refreshHighlighterTheme();
+    this.refreshHighlightTokens(this.documentVersion, null);
+  }
+
   private refreshHighlighterTheme(): void {
     this.highlighterThemeRequests.schedule({
       run: () => this.pluginHost.loadHighlighterTheme(),
@@ -613,6 +642,7 @@ export class Editor {
     return {
       documentId: this.documentId,
       languageId: this.languageId,
+      theme: this.resolvedTheme(),
       text: this.text,
       textVersion: this.documentVersion,
       lineStarts: this.view.getLineStarts(),
@@ -1573,8 +1603,14 @@ export class Editor {
   }
 
   private applyResolvedTheme(): void {
-    this.view.setTheme(
-      mergeEditorThemes(this.configuredTheme, this.providerHighlighterTheme, this.highlighterTheme),
+    this.view.setTheme(this.resolvedTheme());
+  }
+
+  private resolvedTheme(): EditorTheme | null {
+    return mergeEditorThemes(
+      this.configuredTheme,
+      this.providerHighlighterTheme,
+      this.highlighterTheme,
     );
   }
 

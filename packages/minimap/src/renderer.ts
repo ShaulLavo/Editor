@@ -217,6 +217,7 @@ export class MinimapWorkerRenderer {
         charRenderer,
         useLighterFont,
         renderBackground,
+        renderBackgroundAlpha: state.styles.minimapBackground.a,
       });
     }
 
@@ -377,6 +378,7 @@ type RenderLineOptions = {
   readonly charRenderer: ReturnType<typeof MinimapCharRendererFactory.create>;
   readonly useLighterFont: boolean;
   readonly renderBackground: RGBA8;
+  readonly renderBackgroundAlpha: number;
 };
 
 type Segment = {
@@ -415,7 +417,7 @@ function renderCharacter(
       options.color,
       255,
       options.renderBackground,
-      255,
+      options.renderBackgroundAlpha,
       options.layout.lineHeight === 1,
     );
     return dx + options.layout.charWidth;
@@ -429,7 +431,7 @@ function renderCharacter(
     options.color,
     255,
     options.renderBackground,
-    255,
+    options.renderBackgroundAlpha,
     options.layout.scale,
     options.useLighterFont,
     options.layout.lineHeight === 1,

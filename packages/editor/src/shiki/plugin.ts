@@ -10,7 +10,7 @@ import {
 export type ShikiLanguageMap = Partial<Record<EditorSyntaxLanguageId, string>>;
 
 export type ShikiHighlighterPluginOptions = {
-  readonly theme?: string;
+  readonly theme?: string | (() => string);
   readonly languages?: ShikiLanguageMap;
   readonly preloadLanguages?: readonly string[];
   readonly preloadThemes?: readonly string[];
@@ -55,7 +55,7 @@ const createSession = (
   return createShikiHighlighterSession({
     ...sessionOptions,
     lang,
-    theme: pluginOptions.theme ?? DEFAULT_THEME,
+    theme: shikiThemeName(pluginOptions),
     langs: preloadLanguages(lang, pluginOptions),
     themes: pluginOptions.preloadThemes,
   } satisfies ShikiHighlighterSessionOptions);
@@ -63,9 +63,16 @@ const createSession = (
 
 const loadConfiguredTheme = (options: ShikiHighlighterPluginOptions) =>
   loadShikiTheme({
-    theme: options.theme ?? DEFAULT_THEME,
+    theme: shikiThemeName(options),
     themes: options.preloadThemes,
   });
+
+const shikiThemeName = (options: ShikiHighlighterPluginOptions): string => {
+  const theme = options.theme;
+  if (typeof theme === "function") return theme();
+
+  return theme ?? DEFAULT_THEME;
+};
 
 const shikiLanguageForSession = (
   options: EditorHighlighterSessionOptions,

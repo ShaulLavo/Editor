@@ -4,7 +4,7 @@ import type {
   EditorViewSnapshot,
   TextEdit,
 } from "@editor/core";
-import { parseCssColor, RGBA_BLACK, RGBA_WHITE } from "./color";
+import { parseCssColor, RGBA_BLACK, RGBA_WHITE, transparent } from "./color";
 import { findSectionHeaderDecorations } from "./sectionHeaders";
 import type {
   MinimapBaseStyles,
@@ -254,9 +254,12 @@ export class MinimapWorkerClient {
     return {
       foreground,
       background,
-      minimapBackground: this.colorResolver.resolve(
-        style.getPropertyValue("--editor-minimap-background"),
-        background,
+      minimapBackground: transparent(
+        this.colorResolver.resolve(
+          style.getPropertyValue("--editor-minimap-background"),
+          background,
+        ),
+        minimapBackgroundOpacity(style),
       ),
       foregroundOpacity: 255,
       selection: this.colorResolver.resolve(
@@ -277,7 +280,6 @@ export class MinimapWorkerClient {
 
   private sizeCanvasElements(snapshot: EditorViewSnapshot): void {
     const height = `${Math.max(0, snapshot.viewport.clientHeight)}px`;
-    this.host.root.style.height = height;
     this.host.mainCanvas.style.height = height;
     this.host.decorationsCanvas.style.height = height;
   }
@@ -458,12 +460,23 @@ function cancelFrame(handle: number): void {
   clearTimeout(handle);
 }
 
+function minimapBackgroundOpacity(style: CSSStyleDeclaration): number {
+  const value = Number.parseFloat(style.getPropertyValue("--editor-minimap-background-opacity"));
+  if (!Number.isFinite(value)) return 1;
+
+  return Math.min(1, Math.max(0, value));
+}
+
 class ColorResolver {
   private readonly probe: HTMLSpanElement;
+  private readonly canvasContext: CanvasRenderingContext2D | null;
   private readonly cache = new Map<string, RGBA8>();
 
   public constructor(root: HTMLElement) {
     this.probe = root.ownerDocument.createElement("span");
+    this.canvasContext = root.ownerDocument.createElement("canvas").getContext("2d", {
+      willReadFrequently: true,
+    });
     this.probe.style.position = "absolute";
     this.probe.style.visibility = "hidden";
     this.probe.textContent = ".";
@@ -476,7 +489,7 @@ class ColorResolver {
     if (cached) return cached;
 
     this.probe.style.color = value;
-    const resolved = parseCssColor(getComputedStyle(this.probe).color, fallback);
+    const resolved = this.resolveComputedColor(getComputedStyle(this.probe).color, fallback);
     this.cache.set(value, resolved);
     return resolved;
   }
@@ -488,5 +501,24 @@ class ColorResolver {
   public dispose(): void {
     this.clear();
     this.probe.remove();
+  }
+
+  private resolveComputedColor(value: string, fallback: RGBA8): RGBA8 {
+    const canvasColor = this.canvasColor(value);
+    if (canvasColor) return canvasColor;
+
+    return parseCssColor(value, fallback);
+  }
+
+  private canvasColor(value: string): RGBA8 | null {
+    const context = this.canvasContext;
+    if (!context) return null;
+
+    context.clearRect(0, 0, 1, 1);
+    context.fillStyle = value;
+    context.fillRect(0, 0, 1, 1);
+
+    const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+    return { r: r ?? 0, g: g ?? 0, b: b ?? 0, a: a ?? 0 };
   }
 }

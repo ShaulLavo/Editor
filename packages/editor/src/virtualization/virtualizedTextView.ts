@@ -101,6 +101,7 @@ import type {
   NativeGeometryValidation,
   SameLineEditPatch,
   VirtualizedFoldMarker,
+  VirtualizedTextRowDecoration,
   VirtualizedTextViewOptions,
   VirtualizedTextViewState,
 } from "./virtualizedTextViewTypes";
@@ -112,6 +113,7 @@ export type {
   NativeGeometryValidation,
   VirtualizedFoldMarker,
   VirtualizedTextChunk,
+  VirtualizedTextRowDecoration,
   VirtualizedTextRow,
   VirtualizedTextViewOptions,
   VirtualizedTextViewState,
@@ -187,6 +189,7 @@ export class VirtualizedTextView {
       displayRows: [],
       foldMap: null,
       foldMarkers: [],
+      rowDecorations: new Map(),
       foldMarkerByStartRow: new Map(),
       foldMarkerByKey: new Map(),
       blockRows: options.blockRows ?? [],
@@ -408,6 +411,13 @@ export class VirtualizedTextView {
     resetContentWidthScan(view);
     view.lastRenderedRowsKey = "";
     updateVirtualizerRows(view);
+  }
+
+  public setRowDecorations(decorations: ReadonlyMap<number, VirtualizedTextRowDecoration>): void {
+    const view = this.view;
+    view.rowDecorations = decorations;
+    view.lastRenderedRowsKey = "";
+    this.renderSnapshot(view.virtualizer.getSnapshot());
   }
 
   public reserveOverlayWidth(side: "left" | "right", width: number): boolean {

@@ -297,7 +297,6 @@ function editorThemeFromShikiTheme(theme: ShikiThemeLike): EditorTheme {
     gutterBackgroundColor: theme.colors?.["editorGutter.background"] ?? backgroundColor,
     gutterForegroundColor: theme.colors?.["editorLineNumber.foreground"],
     caretColor: theme.colors?.["editorCursor.foreground"] ?? foregroundColor,
-    minimapBackgroundColor: backgroundColor,
     ...(syntax ? { syntax } : {}),
   };
 }

@@ -115,6 +115,54 @@ describe("createScopeLinesPlugin", () => {
 
     expect(testContext.scrollElement.querySelectorAll(".editor-scope-line-active")).toHaveLength(2);
   });
+
+  it("renders only the nearest cursor scope in current mode", () => {
+    const registration = registeredProvider(createScopeLinesPlugin({ mode: "current" }));
+    const testContext = context(
+      snapshot({
+        selections: [{ anchorOffset: 29, headOffset: 29, startOffset: 29, endOffset: 29 }],
+      }),
+    );
+
+    registration?.createContribution(testContext);
+
+    const lines = [
+      ...testContext.scrollElement.querySelectorAll<HTMLElement>(".editor-scope-line"),
+    ];
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.style.left).toBe("16px");
+    expect(lines[0]?.dataset.editorScopeLineLevel).toBe("2");
+    expect(lines[0]?.classList.contains("editor-scope-line-active")).toBe(true);
+  });
+
+  it("renders no current-mode scope when the cursor is outside fold ranges", () => {
+    const registration = registeredProvider(createScopeLinesPlugin({ mode: "current" }));
+    const testContext = context(
+      snapshot({
+        selections: [{ anchorOffset: 0, headOffset: 0, startOffset: 0, endOffset: 0 }],
+      }),
+    );
+
+    registration?.createContribution(testContext);
+
+    expect(testContext.scrollElement.querySelectorAll(".editor-scope-line")).toHaveLength(0);
+  });
+
+  it("keeps current-mode rendering separate from active styling", () => {
+    const registration = registeredProvider(
+      createScopeLinesPlugin({ mode: "current", showActive: false }),
+    );
+    const testContext = context(
+      snapshot({
+        selections: [{ anchorOffset: 29, headOffset: 29, startOffset: 29, endOffset: 29 }],
+      }),
+    );
+
+    registration?.createContribution(testContext);
+
+    expect(testContext.scrollElement.querySelectorAll(".editor-scope-line")).toHaveLength(1);
+    expect(testContext.scrollElement.querySelector(".editor-scope-line-active")).toBeNull();
+  });
 });
 
 function registeredProvider(plugin: ReturnType<typeof createScopeLinesPlugin>) {

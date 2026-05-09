@@ -62,24 +62,32 @@ export class MinimapCharRenderer {
     const renderHeight = force1pxHeight ? 1 : charHeight;
     if (dx + charWidth > target.width || dy + renderHeight > target.height) return;
 
-    const blended = blendForeground(color, backgroundColor, 0.5 * (foregroundAlpha / 255));
-    const destAlpha = Math.max(foregroundAlpha, backgroundAlpha);
+    const foregroundRatio = 0.5 * (foregroundAlpha / 255);
+    const alpha = sourceOverAlpha(backgroundAlpha / 255, foregroundRatio);
+    const blended = sourceOverColor(
+      backgroundColor,
+      color,
+      backgroundAlpha / 255,
+      foregroundRatio,
+      alpha,
+    );
     const destWidth = target.width * Constants.RGBA_CHANNELS_CNT;
     let row = dy * destWidth + dx * Constants.RGBA_CHANNELS_CNT;
 
     for (let y = 0; y < renderHeight; y += 1) {
-      writeBlockRow(target.data, row, charWidth, blended, destAlpha);
+      writeBlockRow(target.data, row, charWidth, blended, blended.a);
       row += destWidth;
     }
   }
 
   private renderCharData(options: RenderCharDataOptions): void {
+    if (options.backgroundAlpha === 0) {
+      this.renderTransparentCharData(options);
+      return;
+    }
+
     const dest = options.target.data;
     const destWidth = options.target.width * Constants.RGBA_CHANNELS_CNT;
-    const destAlpha = Math.max(options.foregroundAlpha, options.backgroundAlpha);
-    const deltaR = options.color.r - options.backgroundColor.r;
-    const deltaG = options.color.g - options.backgroundColor.g;
-    const deltaB = options.color.b - options.backgroundColor.b;
     let sourceOffset =
       options.charIndex * options.charWidth * Constants.BASE_CHAR_HEIGHT * this.scale;
     let row = options.dy * destWidth + options.dx * Constants.RGBA_CHANNELS_CNT;
@@ -89,11 +97,27 @@ export class MinimapCharRenderer {
         charWidth: options.charWidth,
         charData: options.charData,
         foregroundAlpha: options.foregroundAlpha,
+        color: options.color,
         backgroundColor: options.backgroundColor,
-        deltaR,
-        deltaG,
-        deltaB,
-        destAlpha,
+        backgroundAlpha: options.backgroundAlpha,
+      });
+      row += destWidth;
+    }
+  }
+
+  private renderTransparentCharData(options: RenderCharDataOptions): void {
+    const dest = options.target.data;
+    const destWidth = options.target.width * Constants.RGBA_CHANNELS_CNT;
+    let sourceOffset =
+      options.charIndex * options.charWidth * Constants.BASE_CHAR_HEIGHT * this.scale;
+    let row = options.dy * destWidth + options.dx * Constants.RGBA_CHANNELS_CNT;
+
+    for (let y = 0; y < options.renderHeight; y += 1) {
+      sourceOffset = writeTransparentCharRow(dest, row, sourceOffset, {
+        charWidth: options.charWidth,
+        charData: options.charData,
+        foregroundAlpha: options.foregroundAlpha,
+        color: options.color,
       });
       row += destWidth;
     }
@@ -125,11 +149,16 @@ type WriteCharRowOptions = {
   readonly charWidth: number;
   readonly charData: Uint8ClampedArray;
   readonly foregroundAlpha: number;
+  readonly color: RGBA8;
   readonly backgroundColor: RGBA8;
-  readonly deltaR: number;
-  readonly deltaG: number;
-  readonly deltaB: number;
-  readonly destAlpha: number;
+  readonly backgroundAlpha: number;
+};
+
+type WriteTransparentCharRowOptions = {
+  readonly charWidth: number;
+  readonly charData: Uint8ClampedArray;
+  readonly foregroundAlpha: number;
+  readonly color: RGBA8;
 };
 
 function writeCharRow(
@@ -143,12 +172,62 @@ function writeCharRow(
   for (let x = 0; x < options.charWidth; x += 1) {
     const c = ((options.charData[source] ?? 0) / 255) * (options.foregroundAlpha / 255);
     source += 1;
-    dest[column++] = options.backgroundColor.r + options.deltaR * c;
-    dest[column++] = options.backgroundColor.g + options.deltaG * c;
-    dest[column++] = options.backgroundColor.b + options.deltaB * c;
-    dest[column++] = options.destAlpha;
+    const alpha = sourceOverAlpha(options.backgroundAlpha / 255, c);
+    const color = sourceOverColor(
+      options.backgroundColor,
+      options.color,
+      options.backgroundAlpha / 255,
+      c,
+      alpha,
+    );
+    dest[column++] = color.r;
+    dest[column++] = color.g;
+    dest[column++] = color.b;
+    dest[column++] = clamp8(alpha * 255);
   }
   return source;
+}
+
+function writeTransparentCharRow(
+  dest: Uint8ClampedArray,
+  row: number,
+  sourceOffset: number,
+  options: WriteTransparentCharRowOptions,
+): number {
+  let column = row;
+  let source = sourceOffset;
+  for (let x = 0; x < options.charWidth; x += 1) {
+    const coverage = ((options.charData[source] ?? 0) / 255) * (options.foregroundAlpha / 255);
+    source += 1;
+    dest[column++] = options.color.r;
+    dest[column++] = options.color.g;
+    dest[column++] = options.color.b;
+    dest[column++] = clamp8(coverage * 255);
+  }
+  return source;
+}
+
+function sourceOverAlpha(backgroundAlpha: number, foregroundAlpha: number): number {
+  return foregroundAlpha + backgroundAlpha * (1 - foregroundAlpha);
+}
+
+function sourceOverColor(
+  background: RGBA8,
+  foreground: RGBA8,
+  backgroundAlpha: number,
+  foregroundAlpha: number,
+  alpha: number,
+): RGBA8 {
+  if (alpha <= 0) return { r: 0, g: 0, b: 0, a: 0 };
+
+  const backgroundRatio = (backgroundAlpha * (1 - foregroundAlpha)) / alpha;
+  const foregroundRatio = foregroundAlpha / alpha;
+  return {
+    r: clamp8(background.r * backgroundRatio + foreground.r * foregroundRatio),
+    g: clamp8(background.g * backgroundRatio + foreground.g * foregroundRatio),
+    b: clamp8(background.b * backgroundRatio + foreground.b * foregroundRatio),
+    a: clamp8(alpha * 255),
+  };
 }
 
 function writeBlockRow(
@@ -165,13 +244,4 @@ function writeBlockRow(
     dest[column++] = color.b;
     dest[column++] = alpha;
   }
-}
-
-function blendForeground(color: RGBA8, background: RGBA8, amount: number): RGBA8 {
-  return {
-    r: background.r + (color.r - background.r) * amount,
-    g: background.g + (color.g - background.g) * amount,
-    b: background.b + (color.b - background.b) * amount,
-    a: 255,
-  };
 }

@@ -1,3 +1,4 @@
+import { applyEditorTheme, type EditorTheme } from "@editor/core";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import remarkStringify from "remark-stringify";
@@ -100,9 +101,14 @@ export function normalizeTooltipMarkdown(markdown: string): string {
   return String(stringifyProcessor.processSync(markdown));
 }
 
-export function renderTooltipMarkdown(document: Document, markdown: string): HTMLElement {
+export function renderTooltipMarkdown(
+  document: Document,
+  markdown: string,
+  theme?: EditorTheme | null,
+): HTMLElement {
   const root = document.createElement("div");
   root.className = "editor-typescript-lsp-hover-markdown";
+  applyEditorTheme(root, theme);
   applyStyles(root, {
     display: "block",
   });
@@ -162,8 +168,8 @@ function inlineCodeElement(document: Document, value: string): HTMLElement {
   applyStyles(element, {
     padding: "1px 4px",
     borderRadius: "4px",
-    background: "rgba(82, 82, 91, 0.55)",
-    color: "#f4f4f5",
+    background: "color-mix(in srgb, var(--editor-foreground, #a1a1aa) 16%, transparent)",
+    color: "var(--editor-foreground, #f4f4f5)",
     font: "12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
   });
   return element;
@@ -180,8 +186,9 @@ function codeBlockElement(document: Document, value: string, lang: unknown): HTM
     margin: "0",
     padding: "8px 10px",
     borderRadius: "5px",
-    background: "rgba(9, 9, 11, 0.72)",
-    color: "#f4f4f5",
+    background:
+      "color-mix(in srgb, var(--editor-background, #09090b) 88%, var(--editor-foreground, #f4f4f5) 12%)",
+    color: "var(--editor-foreground, #f4f4f5)",
     boxSizing: "border-box",
     maxWidth: "100%",
     overflow: "hidden",
@@ -245,12 +252,12 @@ function typeScriptTokenKind(token: string): string | null {
 }
 
 function typeScriptTokenColor(tokenKind: string): string {
-  if (tokenKind === "comment") return "#a1a1aa";
-  if (tokenKind === "string") return "#86efac";
-  if (tokenKind === "number") return "#fbbf24";
-  if (tokenKind === "keyword") return "#93c5fd";
-  if (tokenKind === "type") return "#67e8f9";
-  return "#d4d4d8";
+  if (tokenKind === "comment") return "var(--editor-syntax-comment, #a1a1aa)";
+  if (tokenKind === "string") return "var(--editor-syntax-string, #86efac)";
+  if (tokenKind === "number") return "var(--editor-syntax-number, #fbbf24)";
+  if (tokenKind === "keyword") return "var(--editor-syntax-keyword, #93c5fd)";
+  if (tokenKind === "type") return "var(--editor-syntax-type, #67e8f9)";
+  return "var(--editor-syntax-bracket, #d4d4d8)";
 }
 
 function linkElement(document: Document, node: MarkdownNode): HTMLElement {
@@ -262,7 +269,7 @@ function linkElement(document: Document, node: MarkdownNode): HTMLElement {
   element.target = "_blank";
   element.rel = "noreferrer";
   applyStyles(element, {
-    color: "#93c5fd",
+    color: "var(--editor-caret-color, #93c5fd)",
     textDecoration: "underline",
   });
   appendChildren(element, document, node.children ?? []);
@@ -360,7 +367,7 @@ function tableCellElement(
   const element = document.createElement(tagName);
   applyStyles(element, {
     padding: "3px 7px",
-    border: "1px solid rgba(82, 82, 91, 0.72)",
+    border: "1px solid color-mix(in srgb, var(--editor-foreground, #a1a1aa) 22%, transparent)",
     textAlign: tableTextAlign(align),
   });
   appendChildren(element, document, node.children ?? []);
@@ -382,8 +389,8 @@ function blockquoteElement(document: Document, node: MarkdownNode): HTMLElement 
   applyStyles(element, {
     margin: "0",
     paddingLeft: "10px",
-    borderLeft: "2px solid rgba(113, 113, 122, 0.9)",
-    color: "#d4d4d8",
+    borderLeft: "2px solid color-mix(in srgb, var(--editor-foreground, #a1a1aa) 46%, transparent)",
+    color: "color-mix(in srgb, var(--editor-foreground, #d4d4d8) 86%, transparent)",
   });
   return element;
 }

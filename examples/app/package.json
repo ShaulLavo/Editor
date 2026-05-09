@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@editor/core": "workspace:*",
+    "@editor/diff": "workspace:*",
     "@editor/find": "workspace:*",
     "@editor/gutters": "workspace:*",
     "@editor/minimap": "workspace:*",

@@ -25,6 +25,7 @@ export type {
   VirtualizedTextChunk,
   VirtualizedTextHighlightRange,
   VirtualizedTextHighlightStyle,
+  VirtualizedTextRowDecoration,
   VirtualizedTextRow,
   VirtualizedTextViewOptions,
   VirtualizedTextViewState,

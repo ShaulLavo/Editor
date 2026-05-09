@@ -900,6 +900,23 @@ describe("Editor", () => {
   });
 
   describe("attachSession", () => {
+    it("attaches document identity, language, scroll, and dirty state", () => {
+      const session = createDocumentSession("abc");
+
+      editor.attachSession(session, {
+        documentId: "note.ts",
+        languageId: "typescript",
+        scrollPosition: { top: 12, left: 4 },
+      });
+
+      expect(editor.getState()).toMatchObject({
+        documentId: "note.ts",
+        languageId: "typescript",
+        isDirty: false,
+      });
+      expect(editor.getScrollPosition()).toEqual({ top: 12, left: 4 });
+    });
+
     it("focuses the real input surface", () => {
       const session = createDocumentSession("abc");
       editor.attachSession(session);
@@ -2415,6 +2432,39 @@ describe("Editor", () => {
       expect(root.style.getPropertyValue("--editor-foreground")).toBe("#24292e");
       expect(root.style.getPropertyValue("--editor-gutter-foreground")).toBe("#6e7781");
       expect(root.style.getPropertyValue("--editor-syntax-keyword")).toBe("#cf222e");
+    });
+
+    it("exposes the resolved highlighter theme to view contributions", async () => {
+      const events: ViewContributionEvent[] = [];
+      const highlighter = createMockHighlighterSession({
+        refresh: async () =>
+          createHighlightResult([], {
+            backgroundColor: "#ffffff",
+            foregroundColor: "#24292e",
+            syntax: { keyword: "#cf222e" },
+          }),
+      });
+      editor.dispose();
+      editor = new Editor(container, {
+        plugins: withTestLanguagePlugins(
+          createViewContributionPlugin(events),
+          createHighlighterPlugin(highlighter),
+        ),
+      });
+
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
+      await flushMicrotasks();
+
+      const tokenEvent = events.findLast((event) => event.kind === "tokens");
+      expect(tokenEvent?.snapshot?.theme).toMatchObject({
+        backgroundColor: "#ffffff",
+        foregroundColor: "#24292e",
+        syntax: { keyword: "#cf222e" },
+      });
     });
 
     it("applies highlighter provider theme colors before a document is opened", async () => {

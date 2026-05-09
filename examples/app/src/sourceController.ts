@@ -1,3 +1,4 @@
+import { createTextDiff, type DiffView, type DiffViewMode } from "@editor/diff";
 import type { Editor } from "@editor/core/editor";
 import type { TypeScriptLspDefinitionTarget } from "@editor/typescript-lsp";
 import type { Sidebar } from "./components/sidebar.ts";
@@ -22,6 +23,11 @@ type SourceWorkspace = {
   clearWorkspaceFiles(): void;
 };
 
+type SourceViewHosts = {
+  showEditor(): void;
+  showDiff(): void;
+};
+
 export class SourceController {
   private currentSnapshot: SourceSnapshot | null = null;
   private currentSelectedPath: string | undefined;
@@ -31,6 +37,10 @@ export class SourceController {
   private readonly statusBar: StatusBar;
   private readonly editor: Editor;
   private readonly sourceWorkspace: SourceWorkspace | null;
+  private readonly diffView: DiffView | null;
+  private readonly viewHosts: SourceViewHosts | null;
+  private diffMode: DiffViewMode = "split";
+  private activeView: "edit" | "diff" = "edit";
 
   constructor(
     topBar: TopBar,
@@ -38,12 +48,22 @@ export class SourceController {
     statusBar: StatusBar,
     editor: Editor,
     sourceWorkspace: SourceWorkspace | null = null,
+    diffView: DiffView | null = null,
+    viewHosts: SourceViewHosts | null = null,
   ) {
     this.topBar = topBar;
     this.sidebar = sidebar;
     this.statusBar = statusBar;
     this.editor = editor;
     this.sourceWorkspace = sourceWorkspace;
+    this.diffView = diffView;
+    this.viewHosts = viewHosts;
+    this.topBar.setHandlers({
+      onEditMode: () => this.showEditMode(),
+      onDiffMode: () => this.showDiffMode(),
+      onSplitDiff: () => this.setDiffMode("split"),
+      onStackedDiff: () => this.setDiffMode("stacked"),
+    });
   }
 
   start(): void {
@@ -54,6 +74,7 @@ export class SourceController {
 
   updateStatus(state = this.editor.getState()): void {
     this.statusBar.update(this.currentSelectedPath, state);
+    if (this.activeView === "diff") this.renderCurrentDiff();
   }
 
   openDefinition(target: TypeScriptLspDefinitionTarget): boolean {
@@ -146,9 +167,62 @@ export class SourceController {
       text: file.text,
       languageId: languageIdForFilePath(file.path),
     });
+    if (this.activeView === "diff") this.renderCurrentDiff();
     if (reason === "user") this.editor.focus();
     this.updateStatus();
   };
+
+  private showEditMode(): void {
+    this.activeView = "edit";
+    this.viewHosts?.showEditor();
+    this.topBar.setViewMode("edit");
+    this.editor.focus();
+  }
+
+  private showDiffMode(): void {
+    if (!this.renderCurrentDiff()) return;
+
+    this.activeView = "diff";
+    this.viewHosts?.showDiff();
+    this.topBar.setViewMode("diff");
+    this.topBar.setDiffMode(this.diffMode);
+  }
+
+  private setDiffMode(mode: DiffViewMode): void {
+    this.diffMode = mode;
+    this.diffView?.setMode(mode);
+    this.topBar.setDiffMode(mode);
+  }
+
+  private renderCurrentDiff(): boolean {
+    const diffView = this.diffView;
+    const file = this.currentFile();
+    if (!diffView || !file) return false;
+
+    diffView.setMode(this.diffMode);
+    diffView.setFiles([
+      createTextDiff({
+        oldFile: {
+          path: file.path,
+          text: file.text,
+          languageId: languageIdForFilePath(file.path),
+          objectId: file.sha,
+        },
+        newFile: {
+          path: file.path,
+          text: this.editor.getText(),
+          languageId: languageIdForFilePath(file.path),
+        },
+      }),
+    ]);
+    return true;
+  }
+
+  private currentFile(): SourceFile | null {
+    const snapshot = this.currentSnapshot;
+    if (!snapshot || !this.currentSelectedPath) return null;
+    return findSourceFile(snapshot.files, this.currentSelectedPath);
+  }
 
   private handleRefreshFailure(): void {
     if (this.currentSnapshot) {

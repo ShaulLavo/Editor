@@ -287,6 +287,7 @@ describe("createTypeScriptLspPlugin", () => {
       "content",
       documentChange([{ from: 22, to: 23, text: "2" }]),
     );
+    vi.mocked(context.setRangeHighlight!).mockClear();
 
     worker.receive({
       jsonrpc: "2.0",
@@ -310,6 +311,64 @@ describe("createTypeScriptLspPlugin", () => {
     expect(context.setRangeHighlight).not.toHaveBeenCalled();
   });
 
+  it("optimistically shortens diagnostic highlights through local deletion", async () => {
+    const worker = new FakeWorker();
+    const context = viewContributionContext(editorSnapshot({ text: "const value: string = 123;" }));
+    const plugin = createTypeScriptLspPlugin({ workerFactory: () => worker });
+    const provider = activatePlugin(plugin);
+    const contribution = provider.createContribution(context);
+    if (!contribution) throw new Error("missing contribution");
+
+    worker.receive(initializeResponse(message(worker.sent[0])));
+    await flushPromises();
+    worker.receive(
+      publishDiagnosticsMessage({
+        range: {
+          start: { line: 0, character: 22 },
+          end: { line: 0, character: 25 },
+        },
+      }),
+    );
+
+    contribution.update(
+      editorSnapshot({ text: "const value: string = 1;", textVersion: 2 }),
+      "content",
+      documentChange([{ from: 23, to: 25, text: "" }]),
+    );
+
+    expect(latestRangeHighlightRanges(context, "editor-test-typescript-lsp-error")).toEqual([
+      { start: 22, end: 23 },
+    ]);
+  });
+
+  it("optimistically clears diagnostic highlights when local deletion removes the range", async () => {
+    const worker = new FakeWorker();
+    const context = viewContributionContext(editorSnapshot({ text: "const value: string = 123;" }));
+    const plugin = createTypeScriptLspPlugin({ workerFactory: () => worker });
+    const provider = activatePlugin(plugin);
+    const contribution = provider.createContribution(context);
+    if (!contribution) throw new Error("missing contribution");
+
+    worker.receive(initializeResponse(message(worker.sent[0])));
+    await flushPromises();
+    worker.receive(
+      publishDiagnosticsMessage({
+        range: {
+          start: { line: 0, character: 22 },
+          end: { line: 0, character: 25 },
+        },
+      }),
+    );
+
+    contribution.update(
+      editorSnapshot({ text: "const value: string = ;", textVersion: 2 }),
+      "content",
+      documentChange([{ from: 22, to: 25, text: "" }]),
+    );
+
+    expect(latestRangeHighlightRanges(context, "editor-test-typescript-lsp-error")).toEqual([]);
+  });
+
   it("renders hover quick info with diagnostics at the pointer", async () => {
     vi.useFakeTimers();
     const worker = new FakeWorker();
@@ -318,7 +377,16 @@ describe("createTypeScriptLspPlugin", () => {
       configurable: true,
       value: { writeText },
     });
-    const context = viewContributionContext(editorSnapshot());
+    const context = viewContributionContext(
+      editorSnapshot({
+        theme: {
+          foregroundColor: "#24292f",
+          syntax: { keyword: "#cf222e" },
+        },
+      }),
+    );
+    context.scrollElement.style.setProperty("--editor-background", "rgb(250, 250, 250)");
+    context.scrollElement.style.setProperty("--editor-foreground", "rgb(15, 23, 42)");
     const plugin = createTypeScriptLspPlugin({ workerFactory: () => worker });
     const provider = activatePlugin(plugin);
     provider.createContribution(context);
@@ -360,6 +428,15 @@ describe("createTypeScriptLspPlugin", () => {
     expect(tooltipElement().style.overflow).toBe("hidden");
     expect(tooltipElement().style.pointerEvents).toBe("auto");
     expect(tooltipElement().style.userSelect).toBe("text");
+    expect(tooltipElement().style.getPropertyValue("--editor-background")).toBe(
+      "rgb(250, 250, 250)",
+    );
+    expect(tooltipElement().style.getPropertyValue("--editor-foreground")).toBe("rgb(15, 23, 42)");
+    expect(
+      tooltipElement()
+        .querySelector<HTMLElement>(".editor-typescript-lsp-hover-markdown")
+        ?.style.getPropertyValue("--editor-syntax-keyword"),
+    ).toBe("#cf222e");
     expect(tooltipBody()?.style.overflowY).toBe("auto");
     expect(tooltipAnchorElement().style.display).toBe("block");
     expect(copyButton().textContent).toBe("");
@@ -773,7 +850,14 @@ function initializeResponse(request: JsonMessage): JsonMessage {
   };
 }
 
-function publishDiagnosticsMessage(): JsonMessage {
+function publishDiagnosticsMessage(
+  options: {
+    readonly range?: {
+      readonly start: { readonly line: number; readonly character: number };
+      readonly end: { readonly line: number; readonly character: number };
+    };
+  } = {},
+): JsonMessage {
   return {
     jsonrpc: "2.0",
     method: "textDocument/publishDiagnostics",
@@ -785,7 +869,7 @@ function publishDiagnosticsMessage(): JsonMessage {
           severity: 1,
           source: "typescript",
           message: "bad assignment",
-          range: {
+          range: options.range ?? {
             start: { line: 0, character: 22 },
             end: { line: 0, character: 23 },
           },
@@ -806,6 +890,18 @@ function sentSocketMethods(socket: FakeWebSocket): readonly unknown[] {
 function textDocumentFor(item: unknown): unknown {
   const params = message(item).params as { readonly textDocument: unknown };
   return params.textDocument;
+}
+
+function latestRangeHighlightRanges(
+  context: EditorViewContributionContext,
+  name: string,
+): readonly { readonly start: number; readonly end: number }[] {
+  const calls = vi.mocked(context.setRangeHighlight!).mock.calls;
+  for (const call of calls.toReversed()) {
+    if (call[0] === name) return call[1];
+  }
+
+  throw new Error(`Missing range highlight call: ${name}`);
 }
 
 function tooltipElement(): HTMLElement {

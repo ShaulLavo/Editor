@@ -1,17 +1,18 @@
-export { createTypeScriptLspPlugin, type TypeScriptLspResolvedOptions } from "./plugin";
+export { type TypeScriptLspResolvedOptions } from "./plugin"
+export { createTypeScriptLspPlugin } from "./pluginWithWorker"
 export {
   diagnosticHighlightGroups,
   summarizeDiagnostics,
   type TypeScriptLspDiagnosticHighlightGroups,
   type TypeScriptLspDiagnosticSeverity,
-} from "./diagnostics";
+} from "./diagnostics"
 export {
   documentUriToFileName,
   fileNameToDocumentUri,
   isTypeScriptFileName,
   pathOrUriToDocumentUri,
   sourcePathToFileName,
-} from "./paths";
+} from "./paths"
 export type {
   TypeScriptLspDiagnosticCounts,
   TypeScriptLspDefinitionTarget,
@@ -20,4 +21,4 @@ export type {
   TypeScriptLspPluginOptions,
   TypeScriptLspSourceFile,
   TypeScriptLspStatus,
-} from "./types";
+} from "./types"

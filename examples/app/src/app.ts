@@ -1,5 +1,7 @@
 import { Editor } from "@editor/core/editor";
+import { DiffView } from "@editor/diff";
 import "@editor/core/style.css";
+import "@editor/diff/style.css";
 import "@editor/find/style.css";
 import "@editor/minimap/style.css";
 import "@editor/scope-lines/style.css";
@@ -52,7 +54,7 @@ export function mountApp(): void {
       console.warn("[typescript-lsp]", error);
     },
   });
-  const editor = new Editor(editorPane.element, {
+  const editor = new Editor(editorPane.editorHost, {
     cursorLineHighlight: {
       gutterNumber: true,
       gutterBackground: ["fold-gutter"],
@@ -82,7 +84,17 @@ export function mountApp(): void {
       controller?.updateStatus(state);
     },
   });
-  controller = new SourceController(topBar, sidebar, statusBar, editor, typeScriptLsp);
+  const diffView = new DiffView(editorPane.diffHost);
+  controller = new SourceController(topBar, sidebar, statusBar, editor, typeScriptLsp, diffView, {
+    showEditor: () => {
+      editorPane.editorHost.hidden = false;
+      editorPane.diffHost.hidden = true;
+    },
+    showDiff: () => {
+      editorPane.editorHost.hidden = true;
+      editorPane.diffHost.hidden = false;
+    },
+  });
 
   syncTypeScriptStatus();
   controller.start();

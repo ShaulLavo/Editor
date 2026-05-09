@@ -42,6 +42,54 @@ describe("DocumentSession", () => {
     expect(session.canUndo()).toBe(true);
   });
 
+  it("tracks dirty state from the clean snapshot checkpoint", () => {
+    const session = createDocumentSession("abc");
+
+    expect(session.isDirty()).toBe(false);
+
+    session.applyText("!");
+    expect(session.isDirty()).toBe(true);
+
+    const undone = session.undo();
+    expect(undone.isDirty).toBe(false);
+    expect(session.isDirty()).toBe(false);
+
+    const redone = session.redo();
+    expect(redone.isDirty).toBe(true);
+    expect(session.isDirty()).toBe(true);
+  });
+
+  it("clears dirty state when edits restore the clean text", () => {
+    const session = createDocumentSession("abc");
+
+    session.applyText("!");
+    expect(session.isDirty()).toBe(true);
+
+    const change = session.backspace();
+    expect(change.text).toBe("abc");
+    expect(change.isDirty).toBe(false);
+    expect(session.isDirty()).toBe(false);
+    expect(session.canUndo()).toBe(true);
+  });
+
+  it("marks the current snapshot clean without clearing undo history", () => {
+    const session = createDocumentSession("abc");
+    session.applyText("!");
+
+    session.markClean();
+
+    expect(session.isDirty()).toBe(false);
+    expect(session.canUndo()).toBe(true);
+
+    session.undo();
+    expect(session.getText()).toBe("abc");
+    expect(session.isDirty()).toBe(true);
+
+    session.redo();
+    expect(session.getText()).toBe("abc!");
+    expect(session.isDirty()).toBe(false);
+  });
+
   it("applies text to multiple selections as one undoable edit", () => {
     const session = createDocumentSession("abcdef");
     session.setSelections([

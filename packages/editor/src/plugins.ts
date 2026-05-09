@@ -77,6 +77,7 @@ export type EditorVisibleRowSnapshot = {
 export type EditorViewSnapshot = {
   readonly documentId: string | null;
   readonly languageId: EditorSyntaxLanguageId | null;
+  readonly theme?: EditorTheme | null;
   readonly text: string;
   readonly textVersion: number;
   readonly lineStarts: readonly number[];

@@ -208,6 +208,25 @@ test("focuses the editor for typing after loading a GitHub source file", async (
   await expect(page.locator(".editor-virtualized")).toContainText("abcXYZ");
 });
 
+test("shows current file changes in split and stacked diff modes", async ({ page }) => {
+  await mockGitHubSource(page, "README.md", "abc");
+  await page.goto("/");
+
+  await page.locator(".entry.file").click();
+  await page.keyboard.type("XYZ");
+  await page.getByRole("button", { name: "Diff" }).click();
+
+  await expect(page.locator("#diff-host")).toBeVisible();
+  await expect(page.locator(".editor-diff-split")).toBeVisible();
+  await expect(page.locator(".editor-diff-row-addition")).toContainText("abcXYZ");
+  await expect(page.locator(".editor-diff-row-deletion")).toContainText("abc");
+
+  await page.getByRole("button", { name: "Stacked" }).click();
+
+  await expect(page.locator(".editor-diff-split")).toHaveCount(0);
+  await expect(page.locator(".editor-diff-pane-stacked")).toBeVisible();
+});
+
 async function mockGitHubSource(page: Page, path: string, text: string): Promise<void> {
   await page.route("https://api.github.com/repos/ShaulLavo/singapor/commits/main", (route) =>
     route.fulfill({

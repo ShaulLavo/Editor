@@ -1,4 +1,8 @@
-import type { Editor, EditorResolvedSelection } from "@editor/core";
+import {
+  createDocumentSession,
+  type Editor,
+  type EditorResolvedSelection,
+} from "@editor/core";
 import { act, createElement, useLayoutEffect, type ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -107,6 +111,51 @@ describe("useEditor", () => {
 
     expect(mounted.controller.getText()).toBe("server beta");
     expect(mounted.controller.getSnapshot()?.documentId).toBe("a.ts");
+
+    mounted.dispose();
+  });
+
+  it("reattaches cached document sessions with text and undo history intact", () => {
+    const alphaSession = createDocumentSession("alpha");
+    const betaSession = createDocumentSession("beta");
+    const mounted = mountReactEditor({
+      document: {
+        documentId: "a.ts",
+        revision: 1,
+        session: alphaSession,
+        text: alphaSession.getText(),
+      },
+    });
+
+    act(() => mounted.controller.commands.edit({ from: 5, to: 5, text: "!" }));
+
+    expect(alphaSession.getText()).toBe("alpha!");
+    expect(mounted.controller.getState()?.isDirty).toBe(true);
+
+    mounted.render({
+      document: {
+        documentId: "b.ts",
+        revision: 1,
+        session: betaSession,
+        text: betaSession.getText(),
+      },
+    });
+    mounted.render({
+      document: {
+        documentId: "a.ts",
+        revision: 1,
+        session: alphaSession,
+        text: alphaSession.getText(),
+      },
+    });
+
+    expect(mounted.controller.getText()).toBe("alpha!");
+    expect(mounted.controller.getState()?.canUndo).toBe(true);
+
+    act(() => mounted.controller.commands.dispatchCommand("undo"));
+
+    expect(mounted.controller.getText()).toBe("alpha");
+    expect(mounted.controller.getState()?.isDirty).toBe(false);
 
     mounted.dispose();
   });

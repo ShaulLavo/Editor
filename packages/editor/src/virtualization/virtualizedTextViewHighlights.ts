@@ -136,13 +136,18 @@ export function setRangeHighlight(
   ranges: readonly VirtualizedTextHighlightRange[],
   style: VirtualizedTextHighlightStyle,
 ): void {
+  if (ranges.length === 0) {
+    clearRangeHighlight(view, name);
+    return;
+  }
+
   const group = getOrCreateRangeHighlightGroup(view, name, style);
   group.ranges = ranges.map((range) => ({
     start: clamp(range.start, 0, view.text.length),
     end: clamp(range.end, 0, view.text.length),
   }));
   group.style = style;
-  group.signature = "";
+  group.signature = staleRangeHighlightSignature();
   renderRangeHighlight(view, name);
   rebuildStyleRules(view);
 }
@@ -157,7 +162,10 @@ export function renderRangeHighlight(view: VirtualizedTextViewInternal, name: st
   group.signature = signature;
   group.highlight.clear();
   addMountedRangeHighlightRanges(view, group);
-  if (group.highlight.size === 0) return;
+  if (group.highlight.size === 0) {
+    unregisterRangeHighlight(view, group);
+    return;
+  }
 
   ensureRangeHighlightRegistered(view, group);
 }
@@ -167,7 +175,7 @@ export function clearRangeHighlight(view: VirtualizedTextViewInternal, name: str
   if (!group) return;
 
   group.highlight.clear();
-  if (group.registered) view.highlightRegistry?.delete(name);
+  unregisterRangeHighlight(view, group);
   view.rangeHighlightGroups.delete(name);
   rebuildStyleRules(view);
 }
@@ -724,6 +732,20 @@ function ensureRangeHighlightRegistered(
 
   view.highlightRegistry.set(group.name, group.highlight);
   group.registered = true;
+}
+
+function unregisterRangeHighlight(
+  view: VirtualizedTextViewInternal,
+  group: VirtualizedTextHighlightGroup,
+): void {
+  if (!group.registered) return;
+
+  view.highlightRegistry?.delete(group.name);
+  group.registered = false;
+}
+
+function staleRangeHighlightSignature(): string {
+  return "\0";
 }
 
 function rangeHighlightSignature(

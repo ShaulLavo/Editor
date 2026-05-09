@@ -27,6 +27,8 @@ export type EditorScrollPosition = {
 };
 
 export type EditorSessionOptions = {
+  readonly documentId?: string | null;
+  readonly languageId?: EditorSyntaxLanguageId | null;
   readonly onChange?: EditorSessionChangeHandler;
   readonly scrollPosition?: EditorScrollPosition;
 };
@@ -44,6 +46,7 @@ export type EditorState = {
   readonly length: number;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
+  readonly isDirty: boolean;
 };
 
 export type EditorChangeHandler = (
