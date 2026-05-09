@@ -421,6 +421,11 @@ describe("createTypeScriptLspPlugin", () => {
     expect(document.body.textContent).toContain("const value: string");
     expect(document.body.textContent).toContain("bad assignment");
     expect(tooltipElement().querySelector("pre > code")?.textContent).toBe("const value: string");
+    expect(
+      tooltipElement()
+        .querySelector<HTMLElement>(".editor-typescript-lsp-hover-markdown")
+        ?.style.getPropertyValue("--editor-typescript-lsp-hover-code-block-background"),
+    ).toBe("");
     expect(tooltipElement().style.getPropertyValue("position-anchor")).toMatch(
       /^--editor-typescript-lsp-hover-/,
     );
@@ -467,6 +472,46 @@ describe("createTypeScriptLspPlugin", () => {
     tooltipElement().dispatchEvent(new PointerEvent("pointerleave"));
     await vi.advanceTimersByTimeAsync(190);
     expect(tooltipElement().hidden).toBe(true);
+  });
+
+  it("can opt hover Markdown code backgrounds back in", async () => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker();
+    const context = viewContributionContext(editorSnapshot());
+    const plugin = createTypeScriptLspPlugin({
+      hoverMarkdownCodeBackground: true,
+      workerFactory: () => worker,
+    });
+    const provider = activatePlugin(plugin);
+    provider.createContribution(context);
+
+    worker.receive(initializeResponse(message(worker.sent[0])));
+    await flushPromises();
+    context.scrollElement.dispatchEvent(
+      new PointerEvent("pointermove", { clientX: 12, clientY: 16, buttons: 0 }),
+    );
+    await vi.advanceTimersByTimeAsync(260);
+
+    const hoverRequest = message(worker.sent.toReversed().find(hasMethod("textDocument/hover")));
+    worker.receive({
+      jsonrpc: "2.0",
+      id: hoverRequest.id,
+      result: {
+        contents: { kind: "markdown", value: "`value`\n\n```ts\nconst value: string\n```" },
+      },
+    });
+    await flushPromises();
+
+    expect(
+      tooltipElement()
+        .querySelector<HTMLElement>(".editor-typescript-lsp-hover-markdown")
+        ?.style.getPropertyValue("--editor-typescript-lsp-hover-inline-code-background"),
+    ).toContain("color-mix");
+    expect(
+      tooltipElement()
+        .querySelector<HTMLElement>(".editor-typescript-lsp-hover-markdown")
+        ?.style.getPropertyValue("--editor-typescript-lsp-hover-code-block-background"),
+    ).toContain("color-mix");
   });
 
   it("caps long hover tooltip content and keeps the body scrollable", async () => {

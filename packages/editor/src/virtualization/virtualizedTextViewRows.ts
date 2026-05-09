@@ -188,6 +188,21 @@ export function disposeGutterCells(view: VirtualizedTextViewInternal): void {
   for (const row of rows) disposeRowGutterCells(view, row);
 }
 
+export function updateGutterContributions(
+  view: VirtualizedTextViewInternal,
+  contributions: readonly EditorGutterContribution[],
+): boolean {
+  if (sameGutterContributions(view.gutterContributions, contributions)) return false;
+
+  const previousContributions = contributionMap(view.gutterContributions);
+  view.gutterContributions = [...contributions];
+  syncGutterHostElement(view);
+  syncGutterRows(view, previousContributions);
+  view.gutterWidthDirty = true;
+  view.lastRenderedRowsKey = "";
+  return true;
+}
+
 function disposeRowGutterCells(
   view: VirtualizedTextViewInternal,
   row: MountedVirtualizedTextRow,
@@ -197,6 +212,94 @@ function disposeRowGutterCells(
     if (cell) contribution.disposeCell?.(cell);
   }
   row.gutterCells.clear();
+}
+
+function sameGutterContributions(
+  left: readonly EditorGutterContribution[],
+  right: readonly EditorGutterContribution[],
+): boolean {
+  if (left.length !== right.length) return false;
+
+  return left.every((contribution, index) => contribution === right[index]);
+}
+
+function contributionMap(
+  contributions: readonly EditorGutterContribution[],
+): ReadonlyMap<string, EditorGutterContribution> {
+  return new Map(contributions.map((contribution) => [contribution.id, contribution]));
+}
+
+function syncGutterHostElement(view: VirtualizedTextViewInternal): void {
+  if (view.gutterContributions.length === 0) {
+    view.gutterElement.remove();
+    return;
+  }
+
+  if (view.gutterElement.isConnected) return;
+
+  view.spacer.insertBefore(view.gutterElement, view.caretLayerElement);
+}
+
+function syncGutterRows(
+  view: VirtualizedTextViewInternal,
+  previousContributions: ReadonlyMap<string, EditorGutterContribution>,
+): void {
+  for (const row of allRows(view)) syncGutterRow(view, row, previousContributions);
+}
+
+function allRows(view: VirtualizedTextViewInternal): readonly MountedVirtualizedTextRow[] {
+  return [...view.rowElements.values(), ...view.rowPool];
+}
+
+function syncGutterRow(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
+  previousContributions: ReadonlyMap<string, EditorGutterContribution>,
+): void {
+  removeStaleGutterCells(row, previousContributions, view.gutterContributions);
+  addCurrentGutterCells(view, row);
+  syncGutterRowElement(view, row);
+}
+
+function removeStaleGutterCells(
+  row: MountedVirtualizedTextRow,
+  previousContributions: ReadonlyMap<string, EditorGutterContribution>,
+  contributions: readonly EditorGutterContribution[],
+): void {
+  const currentContributions = contributionMap(contributions);
+  for (const [id, cell] of row.gutterCells) {
+    if (currentContributions.get(id) === previousContributions.get(id)) continue;
+
+    previousContributions.get(id)?.disposeCell?.(cell);
+    cell.remove();
+    row.gutterCells.delete(id);
+  }
+}
+
+function addCurrentGutterCells(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
+): void {
+  const document = view.scrollElement.ownerDocument;
+  for (const contribution of view.gutterContributions) {
+    const cell = row.gutterCells.get(contribution.id) ?? createGutterCell(contribution, document);
+    row.gutterCells.set(contribution.id, cell);
+    row.gutterElement.appendChild(cell);
+  }
+}
+
+function syncGutterRowElement(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
+): void {
+  if (view.gutterContributions.length === 0) {
+    row.gutterElement.remove();
+    return;
+  }
+  if (!view.rowElements.has(row.index)) return;
+  if (row.gutterElement.isConnected) return;
+
+  view.gutterElement.appendChild(row.gutterElement);
 }
 
 function updateRow(

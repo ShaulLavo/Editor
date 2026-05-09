@@ -35,6 +35,7 @@ export type TypeScriptLspPluginOptions = {
   readonly rootUri?: lsp.DocumentUri | null;
   readonly compilerOptions?: ts.CompilerOptions;
   readonly diagnosticDelayMs?: number;
+  readonly hoverMarkdownCodeBackground?: boolean;
   readonly timeoutMs?: number;
   readonly workerFactory?: () => LspWorkerLike;
   readonly webSocketRoute?: string | URL;

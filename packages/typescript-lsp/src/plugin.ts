@@ -61,6 +61,7 @@ export type TypeScriptLspResolvedOptions = {
   readonly rootUri: lsp.DocumentUri | null
   readonly compilerOptions: TypeScriptLspPluginOptions["compilerOptions"]
   readonly diagnosticDelayMs: number
+  readonly hoverMarkdownCodeBackground: boolean
   readonly timeoutMs: number
   readonly workerFactory?: () => LspWorkerLike
   readonly webSocketRoute?: string | URL
@@ -216,6 +217,7 @@ class TypeScriptLspContribution implements EditorViewContribution {
       document: context.container.ownerDocument,
       themeSource: context.scrollElement,
       reentryElement: context.scrollElement,
+      markdownCodeBackground: this.options.hoverMarkdownCodeBackground,
     })
     this.installPointerHandlers()
     this.state.register(this)
@@ -850,6 +852,7 @@ function resolveOptions(
     rootUri: options.rootUri ?? "file:///",
     compilerOptions: options.compilerOptions,
     diagnosticDelayMs: options.diagnosticDelayMs ?? DEFAULT_DIAGNOSTIC_DELAY_MS,
+    hoverMarkdownCodeBackground: options.hoverMarkdownCodeBackground ?? false,
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     workerFactory: options.workerFactory,
     webSocketRoute: options.webSocketRoute,

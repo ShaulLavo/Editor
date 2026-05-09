@@ -9,11 +9,31 @@ export class EditorViewContributionController {
   private notifying = false;
   private activeUpdateKind: EditorViewContributionUpdateKind | null = null;
   private pendingLayout = false;
+  private readonly contributions: EditorViewContribution[];
 
   constructor(
-    private readonly contributions: readonly EditorViewContribution[],
+    contributions: readonly EditorViewContribution[],
     private readonly createSnapshot: () => EditorViewSnapshot,
-  ) {}
+  ) {
+    this.contributions = [...contributions];
+  }
+
+  add(contribution: EditorViewContribution): void {
+    this.contributions.push(contribution);
+    contribution.update(this.createSnapshot(), "document", null);
+  }
+
+  remove(contribution: EditorViewContribution): void {
+    const index = this.contributions.indexOf(contribution);
+    if (index === -1) return;
+
+    this.contributions.splice(index, 1);
+    contribution.dispose();
+  }
+
+  dispose(): void {
+    while (this.contributions.length > 0) this.contributions.pop()?.dispose();
+  }
 
   notify(
     kind: EditorViewContributionUpdateKind,

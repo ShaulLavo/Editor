@@ -53,12 +53,17 @@ import {
   type EditorDisposable,
   type EditorFeatureContribution,
   type EditorFeatureContributionContext,
+  type EditorFeatureContributionProvider,
+  type EditorGutterContribution,
   type EditorHighlightResult,
   type EditorHighlighterSession,
   type EditorOverlaySide,
+  type EditorPlugin,
   type EditorResolvedSelection,
   type EditorSelectionRange,
+  type EditorViewContribution,
   type EditorViewContributionContext,
+  type EditorViewContributionProvider,
   type EditorViewContributionUpdateKind,
   type EditorViewSnapshot,
 } from "../plugins";
@@ -114,6 +119,7 @@ type EditorFindFeature = {
 };
 
 export class Editor {
+  private readonly container: HTMLElement;
   private readonly view: VirtualizedTextView;
   private readonly foldState: EditorFoldState;
   private readonly el: HTMLDivElement;
@@ -121,7 +127,15 @@ export class Editor {
   private readonly pluginHost: EditorPluginHost;
   private readonly commandHandlers = new Map<EditorCommandId, EditorCommandHandler>();
   private readonly editorFeatures = new Map<string, unknown>();
-  private readonly editorFeatureContributions: readonly EditorFeatureContribution[];
+  private readonly editorFeatureContributions: EditorFeatureContribution[] = [];
+  private readonly viewContributionsByProvider = new Map<
+    EditorViewContributionProvider,
+    EditorViewContribution
+  >();
+  private readonly editorFeatureContributionsByProvider = new Map<
+    EditorFeatureContributionProvider,
+    EditorFeatureContribution
+  >();
   private readonly keymap: EditorKeymapController;
   private readonly viewContributions: EditorViewContributionController;
   private readonly highlightPrefix: string;
@@ -150,6 +164,7 @@ export class Editor {
   private readonly tabSize: number;
 
   constructor(container: HTMLElement, options: EditorOptions = {}) {
+    this.container = container;
     this.options = options;
     this.tabSize = normalizeTabSize(options.tabSize);
     this.configuredTheme = options.theme ?? null;
@@ -171,8 +186,8 @@ export class Editor {
     this.el = this.view.scrollElement;
     this.applyResolvedTheme();
     this.refreshHighlighterTheme();
-    this.editorFeatureContributions = this.pluginHost.createEditorFeatureContributions(
-      this.createEditorFeatureContributionContext(container),
+    this.createInitialEditorFeatureContributions(
+      this.pluginHost.getEditorFeatureContributionProviders(),
     );
     this.keymap = new EditorKeymapController({
       target: this.el,
@@ -180,9 +195,21 @@ export class Editor {
       dispatch: (command, context) => this.dispatchCommand(command, context),
     });
     this.viewContributions = new EditorViewContributionController(
-      this.pluginHost.createViewContributions(this.createViewContributionContext(container)),
+      this.createInitialViewContributions(this.pluginHost.getViewContributionProviders()),
       () => this.createViewSnapshot(),
     );
+    this.pluginHost.setEvents({
+      onHighlighterProvidersChanged: () => this.handleHighlighterProvidersChanged(),
+      onSyntaxProvidersChanged: () => this.reloadSyntaxSession(),
+      onViewContributionProviderAdded: (provider) => this.addViewContributionProvider(provider),
+      onViewContributionProviderRemoved: (provider) =>
+        this.removeViewContributionProvider(provider),
+      onEditorFeatureContributionProviderAdded: (provider) =>
+        this.addEditorFeatureContributionProvider(provider),
+      onEditorFeatureContributionProviderRemoved: (provider) =>
+        this.removeEditorFeatureContributionProvider(provider),
+      onGutterContributionsChanged: () => this.syncGutterContributions(),
+    });
     this.installEditingHandlers();
     this.initializeDefaultText();
   }
@@ -374,6 +401,18 @@ export class Editor {
     this.notifyViewContributions("layout", null);
   }
 
+  addPlugin(plugin: EditorPlugin): EditorDisposable {
+    return this.pluginHost.addPlugin(plugin);
+  }
+
+  removePlugin(plugin: EditorPlugin): boolean {
+    return this.pluginHost.removePlugin(plugin);
+  }
+
+  setPlugins(plugins: readonly EditorPlugin[]): void {
+    this.pluginHost.setPlugins(plugins);
+  }
+
   dispatchCommand(command: EditorCommandId, context: EditorCommandContext = {}): boolean {
     const registeredResult = this.runRegisteredCommand(command, context);
     if (registeredResult !== null) {
@@ -443,6 +482,8 @@ export class Editor {
 
   dispose(): void {
     this.uninstallEditingHandlers();
+    this.viewContributions.dispose();
+    this.disposeEditorFeatureContributions();
     this.keymap.dispose();
     this.highlighterThemeRequests.dispose();
     this.disposeSyntaxSession();
@@ -569,7 +610,7 @@ export class Editor {
     this.disposeHighlighterSession();
     if (!this.session) return;
 
-    const documentId = this.documentId ?? this.generatedOpenSessionId(this.documentVersion);
+    const documentId = this.currentSessionDocumentId();
     this.highlighterSession = this.pluginHost.createHighlighterSession({
       documentId,
       languageId: this.languageId,
@@ -580,12 +621,117 @@ export class Editor {
     this.refreshHighlightTokens(this.documentVersion, null);
   }
 
+  private handleHighlighterProvidersChanged(): void {
+    this.reloadHighlighterSession();
+    this.reloadSyntaxSession();
+  }
+
+  private reloadSyntaxSession(): void {
+    this.disposeSyntaxSession();
+    this.clearSyntaxFolds();
+    if (!this.session) return;
+
+    this.syntaxSession = this.createSyntaxSession(this.currentSessionDocumentId(), this.getText());
+    this.syntaxStatus = this.syntaxSession ? "loading" : "plain";
+    this.refreshSyntax(this.documentVersion, null);
+    this.notifyChange(null);
+  }
+
   private refreshHighlighterTheme(): void {
     this.highlighterThemeRequests.schedule({
       run: () => this.pluginHost.loadHighlighterTheme(),
       apply: (theme) => this.setProviderHighlighterTheme(theme),
       fail: () => this.setProviderHighlighterTheme(null),
     });
+  }
+
+  private currentSessionDocumentId(): string {
+    return this.documentId ?? this.generatedOpenSessionId(this.documentVersion);
+  }
+
+  private createInitialViewContributions(
+    providers: readonly EditorViewContributionProvider[],
+  ): EditorViewContribution[] {
+    const contributions: EditorViewContribution[] = [];
+    for (const provider of providers) {
+      const contribution = this.createViewContribution(provider);
+      if (!contribution) continue;
+
+      contributions.push(contribution);
+      this.viewContributionsByProvider.set(provider, contribution);
+    }
+
+    return contributions;
+  }
+
+  private addViewContributionProvider(provider: EditorViewContributionProvider): void {
+    const contribution = this.createViewContribution(provider);
+    if (!contribution) return;
+
+    this.viewContributionsByProvider.set(provider, contribution);
+    this.viewContributions.add(contribution);
+  }
+
+  private removeViewContributionProvider(provider: EditorViewContributionProvider): void {
+    const contribution = this.viewContributionsByProvider.get(provider);
+    if (!contribution) return;
+
+    this.viewContributionsByProvider.delete(provider);
+    this.viewContributions.remove(contribution);
+  }
+
+  private createViewContribution(
+    provider: EditorViewContributionProvider,
+  ): EditorViewContribution | null {
+    return provider.createContribution(this.createViewContributionContext(this.container));
+  }
+
+  private createInitialEditorFeatureContributions(
+    providers: readonly EditorFeatureContributionProvider[],
+  ): void {
+    for (const provider of providers) this.addEditorFeatureContributionProvider(provider, false);
+  }
+
+  private addEditorFeatureContributionProvider(
+    provider: EditorFeatureContributionProvider,
+    notify = true,
+  ): void {
+    const contribution = provider.createContribution(
+      this.createEditorFeatureContributionContext(this.container),
+    );
+    if (!contribution) return;
+
+    this.editorFeatureContributionsByProvider.set(provider, contribution);
+    this.editorFeatureContributions.push(contribution);
+    if (notify) contribution.handleEditorChange?.(null);
+  }
+
+  private removeEditorFeatureContributionProvider(
+    provider: EditorFeatureContributionProvider,
+  ): void {
+    const contribution = this.editorFeatureContributionsByProvider.get(provider);
+    if (!contribution) return;
+
+    this.editorFeatureContributionsByProvider.delete(provider);
+    removeArrayItem(this.editorFeatureContributions, contribution);
+    contribution.dispose();
+  }
+
+  private disposeEditorFeatureContributions(): void {
+    while (this.editorFeatureContributions.length > 0) {
+      this.editorFeatureContributions.pop()?.dispose();
+    }
+    this.editorFeatureContributionsByProvider.clear();
+  }
+
+  private syncGutterContributions(): void {
+    if (!this.view.setGutterContributions(this.currentGutterContributions())) return;
+
+    this.notifyViewContributions("layout", null);
+  }
+
+  private currentGutterContributions(): readonly EditorGutterContribution[] {
+    return [...this.pluginHost.getGutterContributions()];
   }
 
   private createViewContributionContext(container: HTMLElement): EditorViewContributionContext {
@@ -1747,6 +1893,13 @@ function viewContributionKindForChange(
 
 function indentTimingName(direction: "indent" | "outdent"): string {
   return direction === "indent" ? "input.indent" : "input.outdent";
+}
+
+function removeArrayItem<T>(items: T[], item: T): void {
+  const index = items.indexOf(item);
+  if (index === -1) return;
+
+  items.splice(index, 1);
 }
 
 type ExactOccurrenceRange = {

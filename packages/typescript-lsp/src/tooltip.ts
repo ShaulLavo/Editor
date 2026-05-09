@@ -85,6 +85,8 @@ export type TooltipOptions = {
    * hover/hide scheduling from there.
    */
   readonly reentryElement: HTMLElement
+  /** Render additional filled backgrounds behind Markdown inline and fenced code. */
+  readonly markdownCodeBackground?: boolean
 }
 
 export type TooltipController = {
@@ -161,6 +163,7 @@ export function createTooltipController(
       hoverText: showOptions.hoverText,
       diagnostics: showOptions.diagnostics,
       theme: showOptions.theme,
+      markdownCodeBackground: options.markdownCodeBackground ?? false,
     })
     placeTooltip(tooltip, showOptions.anchor, placement)
   }
@@ -275,7 +278,7 @@ function createTooltipElement(
     maxWidth: "min(520px, calc(100vw - 24px))",
     maxHeight: defaultTooltipMaxHeight(),
     overflow: "hidden",
-    padding: "8px 10px",
+    padding: "2px 10px 8px",
     border:
       "1px solid color-mix(in srgb, var(--editor-foreground, #d4d4d8) 24%, transparent)",
     borderRadius: "6px",
@@ -304,6 +307,7 @@ function renderTooltip(
     readonly hoverText: string | null
     readonly diagnostics: readonly lsp.Diagnostic[]
     readonly theme?: EditorTheme | null
+    readonly markdownCodeBackground: boolean
   }
 ): void {
   element.replaceChildren()
@@ -325,7 +329,8 @@ function renderTooltip(
       renderTooltipMarkdown(
         element.ownerDocument,
         content.hoverText,
-        content.theme
+        content.theme,
+        { codeBackground: content.markdownCodeBackground }
       )
     )
   }

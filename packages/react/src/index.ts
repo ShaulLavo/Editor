@@ -201,11 +201,13 @@ class ReactEditorControllerImplementation implements ReactEditorController {
   public readonly [CONTROLLER_PRIVATE] = this;
   public readonly store = new ReactEditorStore();
   public readonly commands: ReactEditorCommands;
+  private readonly reactSyncPlugin: EditorPlugin;
   private readonly documentState = createDocumentState();
   private options: ReactEditorOptions;
 
   public constructor(options: ReactEditorOptions) {
     this.options = options;
+    this.reactSyncPlugin = createReactSyncPlugin(this);
     this.commands = createCommands(() => this.getEditor(), this.documentState);
   }
 
@@ -277,6 +279,10 @@ class ReactEditorControllerImplementation implements ReactEditorController {
     syncScrollPosition(this.getEditor(), this.options.scrollPosition);
   }
 
+  public syncPluginsOption(): void {
+    syncPlugins(this.getEditor(), this.reactSyncPlugin, this.options.plugins);
+  }
+
   public syncSnapshot(
     snapshot: EditorViewSnapshot,
     kind: EditorViewContributionUpdateKind,
@@ -325,7 +331,7 @@ class ReactEditorControllerImplementation implements ReactEditorController {
       ...constructorOptions,
       hiddenCharacters,
       theme: theme ?? undefined,
-      plugins: [createReactSyncPlugin(this), ...(plugins ?? [])],
+      plugins: [this.reactSyncPlugin, ...(plugins ?? [])],
       onChange: (state, change) => {
         this.syncChange(state, change);
         this.options.onChange?.(state, change);
@@ -439,6 +445,7 @@ function useControlledOptionSync(
     () => controller.syncScrollPositionOption(),
     [controller, scrollPosition?.top, scrollPosition?.left],
   );
+  useEditorLayoutEffect(() => controller.syncPluginsOption(), [controller, options.plugins]);
 }
 
 function createReactSyncPlugin(controller: ReactEditorControllerImplementation): EditorPlugin {
@@ -519,6 +526,16 @@ function syncScrollPosition(
   if (!editor || !scrollPosition) return;
 
   editor.setScrollPosition(scrollPosition);
+}
+
+function syncPlugins(
+  editor: Editor | null,
+  reactSyncPlugin: EditorPlugin,
+  plugins: readonly EditorPlugin[] | null | undefined,
+): void {
+  if (!editor) return;
+
+  editor.setPlugins([reactSyncPlugin, ...(plugins ?? [])]);
 }
 
 function disposeEditor(store: ReactEditorStore): void {

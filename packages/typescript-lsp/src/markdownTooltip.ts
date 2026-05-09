@@ -16,7 +16,13 @@ type MarkdownNode = {
   readonly align?: readonly (string | null | undefined)[];
 };
 
+export type TooltipMarkdownRenderOptions = {
+  readonly codeBackground?: boolean;
+};
+
 const TYPESCRIPT_LIKE_LANGUAGES = new Set(["javascript", "js", "jsx", "ts", "tsx", "typescript"]);
+const INLINE_CODE_BACKGROUND_VARIABLE = "--editor-typescript-lsp-hover-inline-code-background";
+const CODE_BLOCK_BACKGROUND_VARIABLE = "--editor-typescript-lsp-hover-code-block-background";
 
 const TYPESCRIPT_KEYWORDS = new Set([
   "abstract",
@@ -105,10 +111,12 @@ export function renderTooltipMarkdown(
   document: Document,
   markdown: string,
   theme?: EditorTheme | null,
+  options: TooltipMarkdownRenderOptions = {},
 ): HTMLElement {
   const root = document.createElement("div");
   root.className = "editor-typescript-lsp-hover-markdown";
   applyEditorTheme(root, theme);
+  applyCodeBackgroundVariables(root, options);
   applyStyles(root, {
     display: "block",
   });
@@ -168,7 +176,7 @@ function inlineCodeElement(document: Document, value: string): HTMLElement {
   applyStyles(element, {
     padding: "1px 4px",
     borderRadius: "4px",
-    background: "color-mix(in srgb, var(--editor-foreground, #a1a1aa) 16%, transparent)",
+    background: `var(${INLINE_CODE_BACKGROUND_VARIABLE}, transparent)`,
     color: "var(--editor-foreground, #f4f4f5)",
     font: "12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
   });
@@ -184,10 +192,9 @@ function codeBlockElement(document: Document, value: string, lang: unknown): HTM
 
   applyStyles(pre, {
     margin: "0",
-    padding: "8px 10px",
+    padding: "0",
     borderRadius: "5px",
-    background:
-      "color-mix(in srgb, var(--editor-background, #09090b) 88%, var(--editor-foreground, #f4f4f5) 12%)",
+    background: `var(${CODE_BLOCK_BACKGROUND_VARIABLE}, transparent)`,
     color: "var(--editor-foreground, #f4f4f5)",
     boxSizing: "border-box",
     maxWidth: "100%",
@@ -202,6 +209,22 @@ function codeBlockElement(document: Document, value: string, lang: unknown): HTM
 
   pre.append(code);
   return pre;
+}
+
+function applyCodeBackgroundVariables(
+  element: HTMLElement,
+  options: TooltipMarkdownRenderOptions,
+): void {
+  if (!options.codeBackground) return;
+
+  element.style.setProperty(
+    INLINE_CODE_BACKGROUND_VARIABLE,
+    "color-mix(in srgb, var(--editor-foreground, #a1a1aa) 16%, transparent)",
+  );
+  element.style.setProperty(
+    CODE_BLOCK_BACKGROUND_VARIABLE,
+    "color-mix(in srgb, var(--editor-background, #09090b) 88%, var(--editor-foreground, #f4f4f5) 12%)",
+  );
 }
 
 function renderCodeContent(

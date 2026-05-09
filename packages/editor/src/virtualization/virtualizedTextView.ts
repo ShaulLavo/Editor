@@ -1,6 +1,7 @@
 import type { FoldMap } from "../foldMap";
 import { normalizeTabSize, type BlockRow } from "../displayTransforms";
 import type { EditorTheme } from "../theme";
+import type { EditorGutterContribution } from "../plugins";
 import type { EditorToken, TextEdit } from "../tokens";
 import { applyEditorTheme } from "../theme";
 import { measureBrowserTextMetrics, type BrowserTextMetrics } from "./browserMetrics";
@@ -81,6 +82,7 @@ import {
   scrollToRow,
   textOffsetFromDomBoundary,
   updateContentWidth,
+  updateGutterContributions,
   updateGutterWidthIfNeeded,
   updateMountedRowsAfterSameLineEdit,
   updateSpacerWidth,
@@ -418,6 +420,13 @@ export class VirtualizedTextView {
     view.rowDecorations = decorations;
     view.lastRenderedRowsKey = "";
     this.renderSnapshot(view.virtualizer.getSnapshot());
+  }
+
+  public setGutterContributions(contributions: readonly EditorGutterContribution[]): boolean {
+    if (!updateGutterContributions(this.view, contributions)) return false;
+
+    this.renderSnapshot(this.view.virtualizer.getSnapshot());
+    return true;
   }
 
   public reserveOverlayWidth(side: "left" | "right", width: number): boolean {

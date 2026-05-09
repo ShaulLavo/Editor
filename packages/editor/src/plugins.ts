@@ -222,19 +222,69 @@ export type EditorPlugin = {
   activate(context: EditorPluginContext): void | EditorDisposable | readonly EditorDisposable[];
 };
 
+export type EditorPluginHostEvents = {
+  onHighlighterProvidersChanged?(): void;
+  onSyntaxProvidersChanged?(): void;
+  onViewContributionProviderAdded?(provider: EditorViewContributionProvider): void;
+  onViewContributionProviderRemoved?(provider: EditorViewContributionProvider): void;
+  onEditorFeatureContributionProviderAdded?(provider: EditorFeatureContributionProvider): void;
+  onEditorFeatureContributionProviderRemoved?(provider: EditorFeatureContributionProvider): void;
+  onGutterContributionsChanged?(): void;
+};
+
+type ActiveEditorPlugin = {
+  references: number;
+  disposable: EditorDisposable | null;
+};
+
 export class EditorPluginHost implements EditorDisposable {
   private readonly highlighters: EditorHighlighterProvider[] = [];
   private readonly syntaxProviders: EditorSyntaxProvider[] = [];
   private readonly viewContributions: EditorViewContributionProvider[] = [];
   private readonly editorFeatureContributions: EditorFeatureContributionProvider[] = [];
   private readonly gutterContributions: EditorGutterContribution[] = [];
-  private readonly disposables: EditorDisposable[] = [];
+  private readonly activePlugins = new Map<EditorPlugin, ActiveEditorPlugin>();
+  private readonly managedPlugins = new Set<EditorPlugin>();
+  private readonly manualPluginReferences = new Map<EditorPlugin, number>();
+  private readonly context = this.createContext();
+  private events: EditorPluginHostEvents = {};
 
   public constructor(plugins: readonly EditorPlugin[] = []) {
-    const context = this.createContext();
+    this.setPlugins(plugins);
+  }
 
-    for (const plugin of plugins) {
-      this.adoptActivationResult(plugin.activate(context));
+  public setEvents(events: EditorPluginHostEvents): void {
+    this.events = events;
+  }
+
+  public addPlugin(plugin: EditorPlugin): EditorDisposable {
+    this.retainPlugin(plugin);
+    this.manualPluginReferences.set(plugin, this.manualReferenceCount(plugin) + 1);
+
+    return disposableOnce(() => this.releaseManualPlugin(plugin));
+  }
+
+  public removePlugin(plugin: EditorPlugin): boolean {
+    const removedManaged = this.removeManagedPlugin(plugin);
+    const removedManual = this.removeManualPlugin(plugin);
+    return removedManaged || removedManual;
+  }
+
+  public setPlugins(plugins: readonly EditorPlugin[]): void {
+    const nextPlugins = new Set(plugins);
+
+    for (const plugin of this.managedPlugins) {
+      if (nextPlugins.has(plugin)) continue;
+
+      this.managedPlugins.delete(plugin);
+      this.releasePlugin(plugin);
+    }
+
+    for (const plugin of nextPlugins) {
+      if (this.managedPlugins.has(plugin)) continue;
+
+      this.managedPlugins.add(plugin);
+      this.retainPlugin(plugin);
     }
   }
 
@@ -276,7 +326,6 @@ export class EditorPluginHost implements EditorDisposable {
       if (contribution) contributions.push(contribution);
     }
 
-    this.disposables.push(...contributions);
     return contributions;
   }
 
@@ -289,7 +338,6 @@ export class EditorPluginHost implements EditorDisposable {
       if (contribution) contributions.push(contribution);
     }
 
-    this.disposables.push(...contributions);
     return contributions;
   }
 
@@ -297,13 +345,100 @@ export class EditorPluginHost implements EditorDisposable {
     return this.gutterContributions;
   }
 
+  public getViewContributionProviders(): readonly EditorViewContributionProvider[] {
+    return this.viewContributions;
+  }
+
+  public getEditorFeatureContributionProviders(): readonly EditorFeatureContributionProvider[] {
+    return this.editorFeatureContributions;
+  }
+
   public dispose(): void {
-    while (this.disposables.length > 0) this.disposables.pop()?.dispose();
+    while (this.activePlugins.size > 0) {
+      const plugin = this.activePlugins.keys().next().value;
+      if (!plugin) break;
+
+      this.disposeActivePlugin(plugin);
+    }
+    this.managedPlugins.clear();
+    this.manualPluginReferences.clear();
     this.highlighters.length = 0;
     this.syntaxProviders.length = 0;
     this.viewContributions.length = 0;
     this.editorFeatureContributions.length = 0;
     this.gutterContributions.length = 0;
+  }
+
+  private retainPlugin(plugin: EditorPlugin): void {
+    const activePlugin = this.activePlugins.get(plugin);
+    if (activePlugin) {
+      activePlugin.references += 1;
+      return;
+    }
+
+    this.activePlugins.set(plugin, {
+      references: 1,
+      disposable: this.activatePlugin(plugin),
+    });
+  }
+
+  private releasePlugin(plugin: EditorPlugin): void {
+    const activePlugin = this.activePlugins.get(plugin);
+    if (!activePlugin) return;
+
+    activePlugin.references -= 1;
+    if (activePlugin.references > 0) return;
+
+    this.disposeActivePlugin(plugin);
+  }
+
+  private activatePlugin(plugin: EditorPlugin): EditorDisposable | null {
+    return disposableFromActivationResult(plugin.activate(this.context));
+  }
+
+  private disposeActivePlugin(plugin: EditorPlugin): void {
+    const activePlugin = this.activePlugins.get(plugin);
+    if (!activePlugin) return;
+
+    this.activePlugins.delete(plugin);
+    activePlugin.disposable?.dispose();
+  }
+
+  private removeManagedPlugin(plugin: EditorPlugin): boolean {
+    if (!this.managedPlugins.delete(plugin)) return false;
+
+    this.releasePlugin(plugin);
+    return true;
+  }
+
+  private removeManualPlugin(plugin: EditorPlugin): boolean {
+    const references = this.manualReferenceCount(plugin);
+    if (references === 0) return false;
+
+    this.manualPluginReferences.delete(plugin);
+    for (let index = 0; index < references; index += 1) this.releasePlugin(plugin);
+    return true;
+  }
+
+  private releaseManualPlugin(plugin: EditorPlugin): void {
+    const references = this.manualReferenceCount(plugin);
+    if (references === 0) return;
+
+    this.setManualReferenceCount(plugin, references - 1);
+    this.releasePlugin(plugin);
+  }
+
+  private manualReferenceCount(plugin: EditorPlugin): number {
+    return this.manualPluginReferences.get(plugin) ?? 0;
+  }
+
+  private setManualReferenceCount(plugin: EditorPlugin, references: number): void {
+    if (references > 0) {
+      this.manualPluginReferences.set(plugin, references);
+      return;
+    }
+
+    this.manualPluginReferences.delete(plugin);
   }
 
   private createContext(): EditorPluginContext {
@@ -319,6 +454,7 @@ export class EditorPluginHost implements EditorDisposable {
 
   private registerHighlighter(provider: EditorHighlighterProvider): EditorDisposable {
     this.highlighters.push(provider);
+    this.events.onHighlighterProvidersChanged?.();
 
     return {
       dispose: () => this.unregisterHighlighter(provider),
@@ -330,10 +466,12 @@ export class EditorPluginHost implements EditorDisposable {
     if (index === -1) return;
 
     this.highlighters.splice(index, 1);
+    this.events.onHighlighterProvidersChanged?.();
   }
 
   private registerSyntaxProvider(provider: EditorSyntaxProvider): EditorDisposable {
     this.syntaxProviders.push(provider);
+    this.events.onSyntaxProvidersChanged?.();
 
     return {
       dispose: () => this.unregisterSyntaxProvider(provider),
@@ -345,10 +483,12 @@ export class EditorPluginHost implements EditorDisposable {
     if (index === -1) return;
 
     this.syntaxProviders.splice(index, 1);
+    this.events.onSyntaxProvidersChanged?.();
   }
 
   private registerViewContribution(provider: EditorViewContributionProvider): EditorDisposable {
     this.viewContributions.push(provider);
+    this.events.onViewContributionProviderAdded?.(provider);
 
     return {
       dispose: () => this.unregisterViewContribution(provider),
@@ -360,12 +500,14 @@ export class EditorPluginHost implements EditorDisposable {
     if (index === -1) return;
 
     this.viewContributions.splice(index, 1);
+    this.events.onViewContributionProviderRemoved?.(provider);
   }
 
   private registerEditorFeatureContribution(
     provider: EditorFeatureContributionProvider,
   ): EditorDisposable {
     this.editorFeatureContributions.push(provider);
+    this.events.onEditorFeatureContributionProviderAdded?.(provider);
 
     return {
       dispose: () => this.unregisterEditorFeatureContribution(provider),
@@ -377,10 +519,12 @@ export class EditorPluginHost implements EditorDisposable {
     if (index === -1) return;
 
     this.editorFeatureContributions.splice(index, 1);
+    this.events.onEditorFeatureContributionProviderRemoved?.(provider);
   }
 
   private registerGutterContribution(contribution: EditorGutterContribution): EditorDisposable {
     this.gutterContributions.push(contribution);
+    this.events.onGutterContributionsChanged?.();
 
     return {
       dispose: () => this.unregisterGutterContribution(contribution),
@@ -392,19 +536,36 @@ export class EditorPluginHost implements EditorDisposable {
     if (index === -1) return;
 
     this.gutterContributions.splice(index, 1);
+    this.events.onGutterContributionsChanged?.();
   }
+}
 
-  private adoptActivationResult(
-    result: void | EditorDisposable | readonly EditorDisposable[],
-  ): void {
-    if (!result) return;
-    if (isDisposableList(result)) {
-      this.disposables.push(...result);
-      return;
-    }
+function disposableFromActivationResult(
+  result: void | EditorDisposable | readonly EditorDisposable[],
+): EditorDisposable | null {
+  if (!result) return null;
+  if (!isDisposableList(result)) return result;
 
-    this.disposables.push(result);
-  }
+  return {
+    dispose: () => disposeAll(result),
+  };
+}
+
+function disposeAll(disposables: readonly EditorDisposable[]): void {
+  for (const disposable of disposables.toReversed()) disposable.dispose();
+}
+
+function disposableOnce(dispose: () => void): EditorDisposable {
+  let disposed = false;
+
+  return {
+    dispose() {
+      if (disposed) return;
+
+      disposed = true;
+      dispose();
+    },
+  };
 }
 
 const isDisposableList = (
