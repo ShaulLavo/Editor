@@ -269,6 +269,9 @@ test("shows current file changes in split and stacked diff modes", async ({ page
 
   await expect(page.locator(".editor-diff-split")).toHaveCount(0);
   await expect(page.locator(".editor-diff-pane-stacked")).toBeVisible();
+  await expect
+    .poll(() => diffStackedPaneFillsContent(page))
+    .toBe(true);
 });
 
 test("loads syntax highlights for diff rows", async ({ page }) => {
@@ -331,6 +334,18 @@ async function diffSyntaxHighlightCount(page: Page): Promise<number> {
     }
 
     return count;
+  });
+}
+
+async function diffStackedPaneFillsContent(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const content = document.querySelector(".editor-diff-content");
+    const pane = document.querySelector(".editor-diff-pane-stacked");
+    if (!(content instanceof HTMLElement) || !(pane instanceof HTMLElement)) return false;
+
+    const contentRect = content.getBoundingClientRect();
+    const paneRect = pane.getBoundingClientRect();
+    return Math.abs(contentRect.width - paneRect.width) <= 1;
   });
 }
 
