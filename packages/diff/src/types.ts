@@ -11,6 +11,16 @@ export type DiffFileChangeType = "change" | "add" | "delete" | "rename" | "renam
 
 export type DiffLineType = "context" | "addition" | "deletion";
 
+export type DiffHunkLocation = {
+  readonly path: string;
+  readonly fileIndex: number;
+  readonly hunkIndex: number;
+};
+
+export type DiffHunkNavigationOptions = {
+  readonly wrap?: boolean;
+};
+
 export type DiffRenderRowType =
   | "context"
   | "addition"

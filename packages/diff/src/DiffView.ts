@@ -17,6 +17,8 @@ import { joinRenderLines, languageIdForPath } from "./lines";
 import { createSplitProjection, createStackedProjection } from "./projection";
 import type {
   DiffFile,
+  DiffHunkLocation,
+  DiffHunkNavigationOptions,
   DiffRenderRow,
   DiffSplitPaneLayout,
   DiffViewMode,
@@ -28,6 +30,13 @@ type MountedPane = {
   readonly rows: readonly DiffRenderRow[];
   readonly side: "old" | "new" | "stacked";
   syntaxSession?: { dispose(): void };
+};
+
+type HunkNavigationDirection = "next" | "previous";
+
+type HunkNavigationCursor = {
+  readonly fileIndex: number;
+  readonly hunkIndex: number;
 };
 
 const DEFAULT_THEME = "github-dark";
@@ -45,6 +54,7 @@ export class DiffView {
   private panes: MountedPane[] = [];
   private paneGroup: ResizablePaneGroup | null = null;
   private hunkRows: ReadonlyMap<number, number> = new Map();
+  private currentHunk: DiffHunkLocation | null = null;
   private syncingScroll = false;
 
   constructor(container: HTMLElement, options: DiffViewOptions = {}) {
@@ -64,7 +74,9 @@ export class DiffView {
   setFiles(files: readonly DiffFile[]): void {
     this.files = [...files];
     this.selectedPath = selectedPathForFiles(this.files, this.selectedPath);
+    this.currentHunk = validHunkLocation(this.files, this.currentHunk);
     this.render();
+    this.revealCurrentHunkInSelectedFile();
   }
 
   setMode(mode: DiffViewMode): void {
@@ -72,6 +84,7 @@ export class DiffView {
 
     this.mode = mode;
     this.renderSelectedFile();
+    this.revealCurrentHunkInSelectedFile();
   }
 
   setSelectedFile(path: string): void {
@@ -79,14 +92,30 @@ export class DiffView {
     if (!this.files.some((file) => file.path === path)) return;
 
     this.selectedPath = path;
+    this.currentHunk = null;
     this.render();
   }
 
-  revealHunk(index: number): void {
-    const row = this.hunkRows.get(index);
-    if (row === undefined) return;
+  revealHunk(index: number): boolean {
+    const fileIndex = this.selectedFileIndex();
+    if (fileIndex === -1) return false;
 
-    for (const pane of this.panes) pane.view.scrollToRow(row);
+    const file = this.files[fileIndex];
+    if (!file) return false;
+
+    return this.revealHunkLocation({ path: file.path, fileIndex, hunkIndex: index });
+  }
+
+  revealNextHunk(options: DiffHunkNavigationOptions = {}): boolean {
+    return this.revealAdjacentHunk("next", options);
+  }
+
+  revealPreviousHunk(options: DiffHunkNavigationOptions = {}): boolean {
+    return this.revealAdjacentHunk("previous", options);
+  }
+
+  getCurrentHunk(): DiffHunkLocation | null {
+    return this.currentHunk;
   }
 
   dispose(): void {
@@ -244,6 +273,68 @@ export class DiffView {
     return this.files.find((file) => file.path === this.selectedPath) ?? this.files[0] ?? null;
   }
 
+  private selectedFileIndex(): number {
+    if (this.selectedPath === null) return this.files.length > 0 ? 0 : -1;
+    return this.files.findIndex((file) => file.path === this.selectedPath);
+  }
+
+  private revealAdjacentHunk(
+    direction: HunkNavigationDirection,
+    options: DiffHunkNavigationOptions,
+  ): boolean {
+    const target = adjacentHunkLocation(
+      allHunkLocations(this.files),
+      this.currentHunkCursor(direction),
+      direction,
+      options.wrap ?? false,
+    );
+    if (!target) return false;
+
+    return this.revealHunkLocation(target);
+  }
+
+  private currentHunkCursor(direction: HunkNavigationDirection): HunkNavigationCursor | null {
+    const current = validHunkLocation(this.files, this.currentHunk);
+    if (current) return current;
+
+    const fileIndex = this.selectedFileIndex();
+    const file = this.files[fileIndex];
+    if (!file) return null;
+    return {
+      fileIndex,
+      hunkIndex: direction === "next" ? -1 : file.hunks.length,
+    };
+  }
+
+  private revealHunkLocation(location: DiffHunkLocation): boolean {
+    const target = validHunkLocation(this.files, location);
+    if (!target) return false;
+
+    if (this.selectedPath !== target.path) {
+      this.selectedPath = target.path;
+      this.render();
+    }
+
+    if (!this.scrollToHunk(target.hunkIndex)) return false;
+
+    this.currentHunk = target;
+    return true;
+  }
+
+  private revealCurrentHunkInSelectedFile(): void {
+    if (this.currentHunk?.path !== this.selectedPath) return;
+
+    this.scrollToHunk(this.currentHunk.hunkIndex);
+  }
+
+  private scrollToHunk(index: number): boolean {
+    const row = this.hunkRows.get(index);
+    if (row === undefined) return false;
+
+    for (const pane of this.panes) pane.view.scrollToRow(row);
+    return true;
+  }
+
   private disposePanes(): void {
     this.paneGroup?.dispose();
     this.paneGroup = null;
@@ -290,6 +381,83 @@ export class DiffView {
 function selectedPathForFiles(files: readonly DiffFile[], current: string | null): string | null {
   if (current && files.some((file) => file.path === current)) return current;
   return files[0]?.path ?? null;
+}
+
+function allHunkLocations(files: readonly DiffFile[]): readonly DiffHunkLocation[] {
+  const locations: DiffHunkLocation[] = [];
+
+  for (const [fileIndex, file] of files.entries()) {
+    for (const [hunkIndex] of file.hunks.entries()) {
+      locations.push({ path: file.path, fileIndex, hunkIndex });
+    }
+  }
+
+  return locations;
+}
+
+function validHunkLocation(
+  files: readonly DiffFile[],
+  location: DiffHunkLocation | null,
+): DiffHunkLocation | null {
+  if (!location) return null;
+
+  const file = files[location.fileIndex];
+  if (!file) return null;
+  if (file.path !== location.path) return null;
+  if (location.hunkIndex < 0) return null;
+  if (location.hunkIndex >= file.hunks.length) return null;
+  return location;
+}
+
+function adjacentHunkLocation(
+  locations: readonly DiffHunkLocation[],
+  cursor: HunkNavigationCursor | null,
+  direction: HunkNavigationDirection,
+  wrap: boolean,
+): DiffHunkLocation | null {
+  if (locations.length === 0) return null;
+  if (!cursor) return direction === "next" ? locations[0]! : locations[locations.length - 1]!;
+
+  const target =
+    direction === "next"
+      ? firstHunkAfterCursor(locations, cursor)
+      : lastHunkBeforeCursor(locations, cursor);
+  if (target) return target;
+  if (!wrap) return null;
+
+  return direction === "next" ? locations[0]! : locations[locations.length - 1]!;
+}
+
+function firstHunkAfterCursor(
+  locations: readonly DiffHunkLocation[],
+  cursor: HunkNavigationCursor,
+): DiffHunkLocation | null {
+  for (const location of locations) {
+    if (compareHunkLocationToCursor(location, cursor) > 0) return location;
+  }
+
+  return null;
+}
+
+function lastHunkBeforeCursor(
+  locations: readonly DiffHunkLocation[],
+  cursor: HunkNavigationCursor,
+): DiffHunkLocation | null {
+  let target: DiffHunkLocation | null = null;
+  for (const location of locations) {
+    if (compareHunkLocationToCursor(location, cursor) >= 0) return target;
+    target = location;
+  }
+
+  return target;
+}
+
+function compareHunkLocationToCursor(
+  location: DiffHunkLocation,
+  cursor: HunkNavigationCursor,
+): number {
+  if (location.fileIndex !== cursor.fileIndex) return location.fileIndex - cursor.fileIndex;
+  return location.hunkIndex - cursor.hunkIndex;
 }
 
 function rowDecorations(

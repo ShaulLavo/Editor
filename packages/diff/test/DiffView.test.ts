@@ -69,6 +69,61 @@ describe("DiffView split panes", () => {
   });
 });
 
+describe("DiffView hunk navigation", () => {
+  it("reveals next and previous hunks in the selected file", () => {
+    const { diffView } = renderDiffViewWithFiles([
+      createTextDiff({
+        oldFile: { path: "note.txt", text: "one\ntwo\nthree\nfour\nfive\n" },
+        newFile: { path: "note.txt", text: "ONE\ntwo\nthree\nFOUR\nfive\n" },
+        contextLines: 0,
+      }),
+    ]);
+
+    expect(diffView.revealNextHunk()).toBe(true);
+    expect(diffView.getCurrentHunk()).toMatchObject({ path: "note.txt", hunkIndex: 0 });
+
+    expect(diffView.revealNextHunk()).toBe(true);
+    expect(diffView.getCurrentHunk()).toMatchObject({ path: "note.txt", hunkIndex: 1 });
+
+    expect(diffView.revealPreviousHunk()).toBe(true);
+    expect(diffView.getCurrentHunk()).toMatchObject({ path: "note.txt", hunkIndex: 0 });
+  });
+
+  it("moves to the next file with changes", () => {
+    const { diffView } = renderDiffViewWithFiles([
+      createTextDiff({
+        oldFile: { path: "first.txt", text: "old\n" },
+        newFile: { path: "first.txt", text: "new\n" },
+      }),
+      createTextDiff({
+        oldFile: { path: "second.txt", text: "before\n" },
+        newFile: { path: "second.txt", text: "after\n" },
+      }),
+    ]);
+
+    expect(diffView.revealNextHunk()).toBe(true);
+    expect(diffView.getCurrentHunk()).toMatchObject({ path: "first.txt", hunkIndex: 0 });
+
+    expect(diffView.revealNextHunk()).toBe(true);
+    expect(diffView.getCurrentHunk()).toMatchObject({ path: "second.txt", hunkIndex: 0 });
+  });
+
+  it("reports false at the end unless wrapping is enabled", () => {
+    const { diffView } = renderDiffViewWithFiles([
+      createTextDiff({
+        oldFile: { path: "first.txt", text: "old\n" },
+        newFile: { path: "first.txt", text: "new\n" },
+      }),
+    ]);
+
+    expect(diffView.revealNextHunk()).toBe(true);
+    expect(diffView.revealNextHunk()).toBe(false);
+
+    expect(diffView.revealNextHunk({ wrap: true })).toBe(true);
+    expect(diffView.getCurrentHunk()).toMatchObject({ path: "first.txt", hunkIndex: 0 });
+  });
+});
+
 type RenderDiffViewOptions = {
   readonly createHandle?: DiffSplitPaneOptions["createHandle"];
   readonly onLayoutChange?: DiffSplitPaneOptions["onLayoutChange"];
@@ -76,6 +131,21 @@ type RenderDiffViewOptions = {
 };
 
 function renderDiffView(options: RenderDiffViewOptions = {}) {
+  return renderDiffViewWithFiles(
+    [
+      createTextDiff({
+        oldFile: { path: "note.txt", text: "one\ntwo\n" },
+        newFile: { path: "note.txt", text: "one\nTWO\n" },
+      }),
+    ],
+    options,
+  );
+}
+
+function renderDiffViewWithFiles(
+  files: Parameters<DiffView["setFiles"]>[0],
+  options: RenderDiffViewOptions = {},
+) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const diffView = new DiffView(container, {
@@ -86,12 +156,7 @@ function renderDiffView(options: RenderDiffViewOptions = {}) {
       onLayoutChanged: options.onLayoutChanged,
     },
   });
-  diffView.setFiles([
-    createTextDiff({
-      oldFile: { path: "note.txt", text: "one\ntwo\n" },
-      newFile: { path: "note.txt", text: "one\nTWO\n" },
-    }),
-  ]);
+  diffView.setFiles(files);
   return { container, diffView };
 }
 

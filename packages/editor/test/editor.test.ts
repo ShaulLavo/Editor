@@ -4,6 +4,7 @@ import { createEditorFindPlugin } from "../../find/src/index.ts";
 import { createFoldGutterPlugin, createLineGutterPlugin } from "../../gutters/src/index.ts";
 import {
   createDocumentSession,
+  createMergeConflictPlugin,
   Editor,
   resetEditorInstanceCount,
   resolveSelection,
@@ -579,6 +580,65 @@ describe("Editor", () => {
 
       editor.setContent("new content");
       expect(highlightsMap.size).toBe(0);
+    });
+  });
+
+  describe("merge conflicts", () => {
+    it("reports conflict marker regions in the current document", () => {
+      editor.setText(["<<<<<<< HEAD", "ours", "=======", "theirs", ">>>>>>> branch"].join("\n"));
+
+      const conflicts = editor.getMergeConflicts();
+
+      expect(conflicts).toHaveLength(1);
+      expect(conflicts[0]).toMatchObject({
+        oursLabel: "HEAD",
+        theirsLabel: "branch",
+      });
+    });
+
+    it("resolves a conflict through the normal editor edit path", () => {
+      editor.setText(
+        ["before", "<<<<<<< HEAD", "ours", "=======", "theirs", ">>>>>>> branch"].join("\n"),
+      );
+
+      expect(editor.resolveMergeConflict(0, "theirs")).toBe(true);
+
+      expect(editor.getText()).toBe("before\ntheirs\n");
+      expect(editor.getMergeConflicts()).toEqual([]);
+      expect(editor.getState().canUndo).toBe(true);
+    });
+
+    it("returns false for absent conflicts or absent base sections", () => {
+      editor.setText(["<<<<<<< HEAD", "ours", "=======", "theirs", ">>>>>>> branch"].join("\n"));
+
+      expect(editor.resolveMergeConflict(2, "ours")).toBe(false);
+      expect(editor.resolveMergeConflict(0, "base")).toBe(false);
+      expect(editor.getMergeConflicts()).toHaveLength(1);
+    });
+
+    it("renders conflict action rows that resolve the current conflict", () => {
+      editor.dispose();
+      container.textContent = "";
+      editor = new Editor(container, {
+        plugins: withTestLanguagePlugins(createMergeConflictPlugin()),
+      });
+      editor.setText(["<<<<<<< HEAD", "ours", "=======", "theirs", ">>>>>>> branch"].join("\n"));
+
+      const actions = [
+        ...container.querySelectorAll<HTMLButtonElement>(".editor-merge-conflict-action"),
+      ];
+
+      expect(actions.map((action) => action.textContent)).toEqual(["HEAD", "branch", "Both"]);
+      expect(actions.map((action) => action.title)).toEqual([
+        "Use HEAD",
+        "Use branch",
+        "Use both local and remote changes",
+      ]);
+
+      actions[1]!.click();
+
+      expect(editor.getText()).toBe("theirs\n");
+      expect(container.querySelector(".editor-merge-conflict-actions")).toBeNull();
     });
   });
 

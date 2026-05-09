@@ -5,6 +5,8 @@ export type {
   CreateTextDiffOptions,
   DiffFile,
   DiffFileChangeType,
+  DiffHunkLocation,
+  DiffHunkNavigationOptions,
   DiffHunk,
   DiffHunkLine,
   DiffInlineRange,

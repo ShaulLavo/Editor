@@ -73,6 +73,12 @@ import {
   type EditorSyntaxResult,
   type EditorSyntaxSession,
 } from "../syntax/session";
+import {
+  parseMergeConflicts,
+  resolveMergeConflict as resolveMergeConflictText,
+  type MergeConflictRegion,
+  type MergeConflictResolution,
+} from "../mergeConflicts";
 import type { FoldRange } from "../syntax/session";
 import type { EditorTheme } from "../theme";
 import { mergeEditorThemes } from "../theme";
@@ -325,6 +331,38 @@ export class Editor {
 
   getText(): string {
     return this.session?.getText() ?? this.text;
+  }
+
+  getMergeConflicts(): readonly MergeConflictRegion[] {
+    return parseMergeConflicts(this.getText());
+  }
+
+  resolveMergeConflict(index: number, resolution: MergeConflictResolution): boolean {
+    const text = this.getText();
+    const conflict = parseMergeConflicts(text)[index];
+    if (!conflict) return false;
+
+    const resolved = resolveMergeConflictText(text, conflict, resolution);
+    if (!resolved) return false;
+
+    this.edit(
+      { from: resolved.range.start, to: resolved.range.end, text: resolved.replacement },
+      {
+        selection: {
+          anchor: resolved.selection.start,
+          head: resolved.selection.end,
+        },
+      },
+    );
+    return true;
+  }
+
+  revealMergeConflict(index: number): boolean {
+    const conflict = parseMergeConflicts(this.getText())[index];
+    if (!conflict) return false;
+
+    this.setSelection(conflict.range.start);
+    return true;
   }
 
   focus(): void {

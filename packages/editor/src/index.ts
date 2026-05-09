@@ -8,6 +8,8 @@ export * from "./documentSession";
 export * from "./displayTransforms";
 export * from "./foldMap";
 export * from "./history";
+export * from "./mergeConflicts";
+export * from "./mergeConflictPlugin";
 export * from "./pieceTable";
 export * from "./plugins";
 export * from "./selections";

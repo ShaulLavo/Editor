@@ -1,4 +1,4 @@
-import { Editor } from "@editor/core/editor";
+import { createMergeConflictPlugin, Editor } from "@editor/core/editor";
 import { DiffView } from "@editor/diff";
 import "@editor/core/style.css";
 import "@editor/diff/style.css";
@@ -75,6 +75,7 @@ export function mountApp(): void {
       }),
       // Shiki highlighter: import createShikiHighlighterPlugin from "@editor/core/shiki".
       // createShikiHighlighterPlugin({ theme: "github-dark" }),
+      createMergeConflictPlugin(),
       createEditorFindPlugin(),
       createScopeLinesPlugin(),
       createMinimapPlugin(),
