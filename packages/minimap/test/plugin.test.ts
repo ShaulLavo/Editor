@@ -78,6 +78,8 @@ describe("createMinimapPlugin", () => {
       const testContext = context(snapshotWithScrollbar);
       defineThrowingLayoutProperty(testContext.scrollElement, "offsetHeight");
       defineThrowingLayoutProperty(testContext.scrollElement, "offsetWidth");
+      defineThrowingLayoutProperty(testContext.scrollElement, "scrollWidth");
+      defineThrowingLayoutProperty(testContext.scrollElement, "clientWidth");
 
       const contribution = registration?.createContribution(testContext);
       const host = testContext.container.querySelector<HTMLElement>(".editor-minimap-right");
@@ -204,7 +206,7 @@ class MockWorker {
 
 function defineThrowingLayoutProperty(
   element: HTMLElement,
-  property: "offsetHeight" | "offsetWidth",
+  property: "offsetHeight" | "offsetWidth" | "scrollWidth" | "clientWidth",
 ): void {
   Object.defineProperty(element, property, {
     configurable: true,

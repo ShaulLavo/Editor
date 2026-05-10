@@ -47,6 +47,7 @@ class MinimapContribution implements EditorViewContribution {
   private appliedReservedWidth = 0;
   private verticalScrollbarWidth = -1;
   private horizontalScrollbarHeight = -1;
+  private scrollbarGutterSignature = "";
   private readonly scrollElementBorderMetrics: ScrollElementBorderMetrics;
   private disposed = false;
 
@@ -182,15 +183,18 @@ class MinimapContribution implements EditorViewContribution {
   }
 
   private updateNativeScrollbarGutter(): void {
-    const measuredGutter = nativeScrollbarGutter(
+    const signature = nativeScrollbarGutterSignature(
+      this.latestSnapshot.viewport,
+      this.reservedWidth,
+    );
+    if (signature === this.scrollbarGutterSignature) return;
+
+    this.scrollbarGutterSignature = signature;
+    const gutter = nativeScrollbarGutter(
       this.latestSnapshot.viewport,
       this.reservedWidth,
       this.scrollElementBorderMetrics,
     );
-    const gutter = {
-      vertical: measuredGutter.vertical,
-      horizontal: horizontalScrollbarGutter(this.context.scrollElement, measuredGutter.horizontal),
-    };
     if (
       gutter.vertical === this.verticalScrollbarWidth &&
       gutter.horizontal === this.horizontalScrollbarHeight
@@ -307,6 +311,21 @@ function nativeScrollbarGutter(
   return { vertical, horizontal };
 }
 
+function nativeScrollbarGutterSignature(
+  viewport: EditorViewSnapshot["viewport"],
+  reservedOverlayWidth: number,
+): string {
+  return [
+    viewport.clientHeight,
+    viewport.clientWidth,
+    viewport.scrollHeight,
+    viewport.scrollWidth,
+    viewport.borderBoxHeight ?? "",
+    viewport.borderBoxWidth ?? "",
+    reservedOverlayWidth,
+  ].join(":");
+}
+
 function measuredVerticalScrollbarGutter(
   viewport: EditorViewSnapshot["viewport"],
   borderWidth: number,
@@ -327,12 +346,6 @@ function measuredHorizontalScrollbarGutter(
 
   const borderBoxHeight = viewport.borderBoxHeight ?? viewport.clientHeight + borderWidth;
   return Math.max(0, borderBoxHeight - viewport.clientHeight - borderWidth);
-}
-
-function horizontalScrollbarGutter(element: HTMLElement, measuredGutter: number): number {
-  if (element.scrollWidth <= element.clientWidth) return measuredGutter;
-
-  return Math.max(measuredGutter, HORIZONTAL_SCROLLBAR_GUTTER_FALLBACK);
 }
 
 function readScrollElementBorderMetrics(element: HTMLElement): ScrollElementBorderMetrics {

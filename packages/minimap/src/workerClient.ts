@@ -50,6 +50,7 @@ export class MinimapWorkerClient {
   private latestSliderHeight = 0;
   private latestSliderNeeded = false;
   private latestBaseStylesSignature = "";
+  private latestLayoutSignature = "";
   private disposed = false;
 
   public constructor(options: MinimapWorkerClientOptions) {
@@ -110,6 +111,7 @@ export class MinimapWorkerClient {
       metrics: this.metrics(snapshot),
       viewport: this.viewport(snapshot),
     });
+    this.latestLayoutSignature = layoutSignature(snapshot);
     this.postRender(snapshot);
   }
 
@@ -131,12 +133,20 @@ export class MinimapWorkerClient {
 
     this.pendingUpdate = null;
     this.postUpdate(pending.snapshot, pending.kind, pending.change);
+    this.postLayoutIfNeeded(pending.snapshot);
+    this.postRender(pending.snapshot);
+  }
+
+  private postLayoutIfNeeded(snapshot: EditorViewSnapshot): void {
+    const signature = layoutSignature(snapshot);
+    if (signature === this.latestLayoutSignature) return;
+
+    this.latestLayoutSignature = signature;
     this.post({
       type: "updateLayout",
-      metrics: this.metrics(pending.snapshot),
-      viewport: this.viewport(pending.snapshot),
+      metrics: this.metrics(snapshot),
+      viewport: this.viewport(snapshot),
     });
-    this.postRender(pending.snapshot);
   }
 
   private postUpdate(
@@ -195,13 +205,16 @@ export class MinimapWorkerClient {
       this.latestSliderHeight,
       this.latestSliderNeeded,
     );
-    this.host.slider.style.display = slider.needed ? "block" : "none";
-    this.host.slider.style.transform = `translate3d(0, ${slider.top}px, 0)`;
-    this.host.slider.style.height = `${slider.height}px`;
-    this.host.sliderHorizontal.style.height = `${slider.height}px`;
-    this.host.shadow.className = shadowVisible(snapshot)
-      ? "editor-minimap-shadow editor-minimap-shadow-visible"
-      : "editor-minimap-shadow editor-minimap-shadow-hidden";
+    setStyleValue(this.host.slider, "display", slider.needed ? "block" : "none");
+    setStyleValue(this.host.slider, "transform", `translate3d(0, ${slider.top}px, 0)`);
+    setStyleValue(this.host.slider, "height", `${slider.height}px`);
+    setStyleValue(this.host.sliderHorizontal, "height", `${slider.height}px`);
+    setClassName(
+      this.host.shadow,
+      shadowVisible(snapshot)
+        ? "editor-minimap-shadow editor-minimap-shadow-visible"
+        : "editor-minimap-shadow editor-minimap-shadow-hidden",
+    );
   }
 
   private documentPayload(snapshot: EditorViewSnapshot): MinimapDocumentPayload {
@@ -280,8 +293,8 @@ export class MinimapWorkerClient {
 
   private sizeCanvasElements(snapshot: EditorViewSnapshot): void {
     const height = `${Math.max(0, snapshot.viewport.clientHeight)}px`;
-    this.host.mainCanvas.style.height = height;
-    this.host.decorationsCanvas.style.height = height;
+    setStyleValue(this.host.mainCanvas, "height", height);
+    setStyleValue(this.host.decorationsCanvas, "height", height);
   }
 
   private handleWorkerMessage = (event: MessageEvent<MinimapWorkerResponse>): void => {
@@ -305,11 +318,11 @@ export class MinimapWorkerClient {
 
   private applyLayout(width: number, canvasWidth: number, canvasHeight: number): void {
     this.onLayoutWidth(width);
-    this.host.root.style.width = `${width}px`;
-    this.host.mainCanvas.style.width = `${canvasWidth}px`;
-    this.host.decorationsCanvas.style.width = `${canvasWidth}px`;
-    this.host.mainCanvas.style.height = `${canvasHeight}px`;
-    this.host.decorationsCanvas.style.height = `${canvasHeight}px`;
+    setStyleValue(this.host.root, "width", `${width}px`);
+    setStyleValue(this.host.mainCanvas, "width", `${canvasWidth}px`);
+    setStyleValue(this.host.decorationsCanvas, "width", `${canvasWidth}px`);
+    setStyleValue(this.host.mainCanvas, "height", `${canvasHeight}px`);
+    setStyleValue(this.host.decorationsCanvas, "height", `${canvasHeight}px`);
   }
 
   private applyRenderedResponse(
@@ -320,13 +333,16 @@ export class MinimapWorkerClient {
     this.latestRenderedSequence = response.sequence;
     this.latestSliderHeight = response.sliderHeight;
     this.latestSliderNeeded = response.sliderNeeded;
-    this.host.slider.style.display = response.sliderNeeded ? "block" : "none";
-    this.host.slider.style.transform = `translate3d(0, ${response.sliderTop}px, 0)`;
-    this.host.slider.style.height = `${response.sliderHeight}px`;
-    this.host.sliderHorizontal.style.height = `${response.sliderHeight}px`;
-    this.host.shadow.className = response.shadowVisible
-      ? "editor-minimap-shadow editor-minimap-shadow-visible"
-      : "editor-minimap-shadow editor-minimap-shadow-hidden";
+    setStyleValue(this.host.slider, "display", response.sliderNeeded ? "block" : "none");
+    setStyleValue(this.host.slider, "transform", `translate3d(0, ${response.sliderTop}px, 0)`);
+    setStyleValue(this.host.slider, "height", `${response.sliderHeight}px`);
+    setStyleValue(this.host.sliderHorizontal, "height", `${response.sliderHeight}px`);
+    setClassName(
+      this.host.shadow,
+      response.shadowVisible
+        ? "editor-minimap-shadow editor-minimap-shadow-visible"
+        : "editor-minimap-shadow editor-minimap-shadow-hidden",
+    );
   }
 
   private handleWorkerError = (event: ErrorEvent): void => {
@@ -415,6 +431,18 @@ function baseStylesSignature(styles: MinimapBaseStyles): string {
   return JSON.stringify(styles);
 }
 
+function layoutSignature(snapshot: EditorViewSnapshot): string {
+  return [
+    snapshot.metrics.rowHeight,
+    snapshot.metrics.characterWidth,
+    globalThis.devicePixelRatio || 1,
+    snapshot.viewport.clientHeight,
+    snapshot.viewport.clientWidth,
+    snapshot.contentWidth,
+    snapshot.lineCount,
+  ].join(":");
+}
+
 function mergePendingUpdate(
   current: PendingMinimapUpdate | null,
   next: PendingMinimapUpdate,
@@ -444,6 +472,22 @@ function shouldRefreshColorCache(kind: string): boolean {
   if (kind === "document") return true;
   if (kind === "content") return true;
   return kind === "clear";
+}
+
+function setStyleValue(
+  element: HTMLElement,
+  property: "display" | "height" | "transform" | "width",
+  value: string,
+): void {
+  if (element.style[property] === value) return;
+
+  element.style[property] = value;
+}
+
+function setClassName(element: HTMLElement, className: string): void {
+  if (element.className === className) return;
+
+  element.className = className;
 }
 
 function requestFrame(callback: () => void): number {
