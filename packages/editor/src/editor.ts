@@ -28,6 +28,7 @@ export type {
   HighlightRegistry,
 } from "./editor/types";
 export type { EditorCommandContext, EditorCommandId } from "./editor/commands";
+export { defaultEditorKeyBindings } from "./editor/keymap";
 export type { EditorKeyBinding, EditorKeymapOptions } from "./editor/keymap";
 export type {
   EditorMergeConflictFeature,
