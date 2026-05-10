@@ -8,6 +8,7 @@ import type {
 import { RenderMinimap } from "./types";
 
 export const MINIMAP_GUTTER_WIDTH = 2;
+export const MINIMAP_RIGHT_GUTTER_WIDTH = 8;
 
 export type MinimapFrameLayout = {
   readonly scrollTop: number;
@@ -35,36 +36,40 @@ export function computeRenderLayout(options: {
     : Constants.BASE_CHAR_HEIGHT + 1;
   const configuredScale =
     pixelRatio >= 2 ? Math.round(options.minimap.scale * 2) : options.minimap.scale;
+  const baseCanvasInnerHeight = Math.floor(pixelRatio * height);
   const fitted = computeFittedScale({
     baseCharHeight,
+    canvasInnerHeight: baseCanvasInnerHeight,
     configuredScale,
     height,
     lineCount: options.lineCount,
     minimap: options.minimap,
+    pixelRatio,
     rowHeight: options.metrics.rowHeight,
   });
-  const charWidth = fitted.scale / pixelRatio / fitted.widthMultiplier;
+  const layoutCharWidth = fitted.scale / pixelRatio / fitted.widthMultiplier;
   const width = computeMinimapWidth({
-    charWidth,
+    charWidth: layoutCharWidth,
     maxColumn: options.minimap.maxColumn,
     viewportWidth: options.viewport.clientWidth,
     contentWidth: options.contentWidth,
     characterWidth: options.metrics.characterWidth,
   });
-  const canvasInnerWidth = Math.floor(pixelRatio * width * fitted.widthMultiplier);
+  const baseCanvasInnerWidth = Math.floor(pixelRatio * width);
+  const canvasInnerWidth = Math.floor(baseCanvasInnerWidth * fitted.widthMultiplier);
   const canvasInnerHeight = fitted.heightIsEditorHeight
-    ? Math.ceil(Math.max(height, fitted.documentMinimapHeight))
-    : Math.floor(pixelRatio * height);
+    ? Math.ceil(Math.max(baseCanvasInnerHeight, fitted.documentMinimapHeight))
+    : baseCanvasInnerHeight;
 
   return {
     width,
     height,
     canvasInnerWidth,
     canvasInnerHeight,
-    canvasOuterWidth: canvasInnerWidth / pixelRatio,
-    canvasOuterHeight: canvasInnerHeight / pixelRatio,
+    canvasOuterWidth: baseCanvasInnerWidth / pixelRatio,
+    canvasOuterHeight: baseCanvasInnerHeight / pixelRatio,
     lineHeight: fitted.lineHeight,
-    charWidth,
+    charWidth: Constants.BASE_CHAR_WIDTH * fitted.scale,
     scale: fitted.scale,
     isSampling: fitted.isSampling,
     heightIsEditorHeight: fitted.heightIsEditorHeight,
@@ -98,8 +103,10 @@ export function yForLineNumber(
 function computeFittedScale(options: {
   readonly minimap: ResolvedMinimapOptions;
   readonly baseCharHeight: number;
+  readonly canvasInnerHeight: number;
   readonly configuredScale: number;
   readonly height: number;
+  readonly pixelRatio: number;
   readonly rowHeight: number;
   readonly lineCount: number;
 }): {
@@ -115,30 +122,35 @@ function computeFittedScale(options: {
     return fittedScale(options.configuredScale, lineHeight, 1, false, false, 0);
   }
 
-  const desiredRatio = options.lineCount / Math.max(1, options.height);
-  if (desiredRatio > 1) return fittedScale(1, 1, 1, true, true, options.height);
+  const desiredRatio = options.lineCount / Math.max(1, options.canvasInnerHeight);
+  if (desiredRatio > 1) return fittedScale(1, 1, 1, true, true, options.canvasInnerHeight);
 
   if (options.minimap.size === "fit") {
     const documentHeight = Math.ceil(options.lineCount * lineHeight);
-    if (documentHeight <= options.height) {
+    if (documentHeight <= options.canvasInnerHeight) {
       return fittedScale(options.configuredScale, lineHeight, 1, false, false, documentHeight);
     }
   }
 
+  const maxScale = options.configuredScale + 1;
   const fillLineHeight = Math.min(
-    options.rowHeight,
-    Math.max(1, Math.floor(options.height / Math.max(1, options.lineCount))),
+    options.rowHeight * options.pixelRatio,
+    Math.max(1, Math.floor(1 / desiredRatio)),
   );
-  const scale = Math.max(1, Math.floor(fillLineHeight / options.baseCharHeight));
+  const scale = Math.min(
+    maxScale,
+    Math.max(1, Math.floor(fillLineHeight / options.baseCharHeight)),
+  );
   const widthMultiplier =
     scale > options.configuredScale ? Math.min(2, scale / options.configuredScale) : 1;
+  const typicalViewportLineCount = options.height / Math.max(1, options.rowHeight);
   return fittedScale(
     scale,
     fillLineHeight,
     widthMultiplier,
     false,
     true,
-    options.lineCount * fillLineHeight,
+    Math.ceil(Math.max(typicalViewportLineCount, options.lineCount) * fillLineHeight),
   );
 }
 
@@ -173,7 +185,10 @@ function computeMinimapWidth(options: {
   const proportionalWidth = Math.floor(
     ((textWidth - 2) * options.charWidth) / (options.characterWidth + options.charWidth),
   );
-  return Math.min(minimapMaxWidth, Math.max(0, proportionalWidth) + MINIMAP_GUTTER_WIDTH);
+  return Math.min(
+    minimapMaxWidth,
+    Math.max(0, proportionalWidth) + MINIMAP_GUTTER_WIDTH + MINIMAP_RIGHT_GUTTER_WIDTH,
+  );
 }
 
 function containedFrameLayout(options: {

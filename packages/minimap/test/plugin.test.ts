@@ -112,6 +112,110 @@ describe("createMinimapPlugin", () => {
       restoreRuntime();
     }
   });
+
+  it("uses the measured scrollbar dimensions before overlay fallback", () => {
+    const restoreRuntime = installMinimapRuntime();
+    const getComputedStyle = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((_element, pseudoElement) =>
+        mockComputedStyle(
+          pseudoElement === "::-webkit-scrollbar"
+            ? { height: "6px", width: "9px" }
+            : {
+                borderBottomWidth: "0px",
+                borderLeftWidth: "0px",
+                borderRightWidth: "0px",
+                borderTopWidth: "0px",
+              },
+        ),
+      );
+
+    try {
+      let registration: EditorViewContributionProvider | undefined;
+      const registerViewContribution: EditorPluginContext["registerViewContribution"] = (
+        provider,
+      ) => {
+        registration = provider;
+        return { dispose: vi.fn() };
+      };
+      const plugin = createMinimapPlugin({ enabled: true });
+
+      plugin.activate({
+        registerHighlighter: vi.fn(() => ({ dispose: vi.fn() })),
+        registerSyntaxProvider: vi.fn(() => ({ dispose: vi.fn() })),
+        registerViewContribution,
+        registerEditorFeatureContribution: vi.fn(() => ({ dispose: vi.fn() })),
+        registerGutterContribution: vi.fn(() => ({ dispose: vi.fn() })),
+      });
+
+      const hiddenNativeScrollSnapshot = {
+        ...snapshot({
+          borderBoxWidth: 80,
+          clientHeight: 20,
+          clientWidth: 80,
+          scrollWidth: 120,
+          scrollHeight: 20,
+        }),
+        totalHeight: 80,
+      };
+      const testContext = context(hiddenNativeScrollSnapshot);
+      const contribution = registration?.createContribution(testContext);
+      const host = testContext.container.querySelector<HTMLElement>(".editor-minimap-right");
+
+      expect(contribution).not.toBeNull();
+      expect(host?.style.bottom).toBe("6px");
+      expect(host?.style.right).toBe("9px");
+      expect(testContext.reserveOverlayWidth).toHaveBeenCalledWith("right", 9);
+
+      contribution?.dispose();
+    } finally {
+      getComputedStyle.mockRestore();
+      restoreRuntime();
+    }
+  });
+
+  it("reserves a smaller fallback vertical scrollbar lane for overlay scrollbars", () => {
+    const restoreRuntime = installMinimapRuntime();
+    try {
+      let registration: EditorViewContributionProvider | undefined;
+      const registerViewContribution: EditorPluginContext["registerViewContribution"] = (
+        provider,
+      ) => {
+        registration = provider;
+        return { dispose: vi.fn() };
+      };
+      const plugin = createMinimapPlugin({ enabled: true });
+
+      plugin.activate({
+        registerHighlighter: vi.fn(() => ({ dispose: vi.fn() })),
+        registerSyntaxProvider: vi.fn(() => ({ dispose: vi.fn() })),
+        registerViewContribution,
+        registerEditorFeatureContribution: vi.fn(() => ({ dispose: vi.fn() })),
+        registerGutterContribution: vi.fn(() => ({ dispose: vi.fn() })),
+      });
+
+      const hiddenNativeScrollSnapshot = {
+        ...snapshot({
+          borderBoxWidth: 80,
+          clientHeight: 20,
+          clientWidth: 80,
+          scrollHeight: 20,
+        }),
+        totalHeight: 80,
+      };
+      const testContext = context(hiddenNativeScrollSnapshot);
+      const contribution = registration?.createContribution(testContext);
+      const host = testContext.container.querySelector<HTMLElement>(".editor-minimap-right");
+
+      expect(contribution).not.toBeNull();
+      expect(host?.style.right).toBe("7px");
+      expect(testContext.reserveOverlayWidth).toHaveBeenCalledWith("right", 7);
+
+      contribution?.dispose();
+    } finally {
+      restoreRuntime();
+    }
+  });
 });
 
 function context(viewSnapshot = snapshot()): EditorViewContributionContext {
@@ -227,4 +331,11 @@ function restoreDescriptor(
   }
 
   Reflect.deleteProperty(target, property);
+}
+
+function mockComputedStyle(values: Record<string, string>): CSSStyleDeclaration {
+  return {
+    ...values,
+    getPropertyValue: (property: string) => values[property] ?? "",
+  } as CSSStyleDeclaration;
 }

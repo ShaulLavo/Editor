@@ -4,6 +4,7 @@ import {
   computeRenderLayout,
   type MinimapFrameLayout,
   MINIMAP_GUTTER_WIDTH,
+  MINIMAP_RIGHT_GUTTER_WIDTH,
   yForLineNumber,
 } from "./layout";
 import { MinimapCharRendererFactory } from "./minimapCharRendererFactory";
@@ -227,6 +228,7 @@ export class MinimapWorkerRenderer {
   private renderLine(options: RenderLineOptions): void {
     const state = this.requireState();
     const y = yForLineNumber(options.frame, options.line, options.layout.lineHeight);
+    const maxDx = maxTextX(options.layout);
     let dx = MINIMAP_GUTTER_WIDTH;
 
     for (const segment of tokenSegments(
@@ -235,8 +237,8 @@ export class MinimapWorkerRenderer {
       options.tokens,
       state.styles.foreground,
     )) {
-      dx = renderSegment({ ...options, text: segment.text, color: segment.color, dx, y });
-      if (dx > options.imageData.width - options.layout.charWidth) return;
+      dx = renderSegment({ ...options, text: segment.text, color: segment.color, dx, y, maxDx });
+      if (dx > maxDx) return;
     }
   }
 
@@ -390,12 +392,14 @@ function renderSegment(
   options: RenderLineOptions & {
     readonly text: string;
     readonly color: RGBA8;
+    readonly maxDx: number;
     dx: number;
     y: number;
   },
 ): number {
   let dx = options.dx;
   for (let index = 0; index < options.text.length; index += 1) {
+    if (dx > options.maxDx) return dx;
     dx = renderCharacter(options, dx, options.text.charCodeAt(index));
   }
   return dx;
@@ -437,6 +441,12 @@ function renderCharacter(
     options.layout.lineHeight === 1,
   );
   return dx + options.layout.charWidth;
+}
+
+function maxTextX(layout: MinimapRenderLayout): number {
+  const horizontalScale = layout.canvasInnerWidth / Math.max(1, layout.canvasOuterWidth);
+  const rightGutterWidth = MINIMAP_RIGHT_GUTTER_WIDTH * horizontalScale;
+  return layout.canvasInnerWidth - rightGutterWidth - layout.charWidth;
 }
 
 function tokenSegments(

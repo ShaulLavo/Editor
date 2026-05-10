@@ -10,7 +10,8 @@ import { resolveMinimapOptions } from "./options";
 import type { EditorMinimapOptions, ResolvedMinimapOptions } from "./types";
 import { canUseMinimapWorker, MinimapWorkerClient, type MinimapHost } from "./workerClient";
 
-const HORIZONTAL_SCROLLBAR_GUTTER_FALLBACK = 14;
+const OVERLAY_SCROLLBAR_GUTTER_FALLBACK = 7;
+const WEBKIT_SCROLLBAR_PSEUDO_ELEMENT = "::-webkit-scrollbar";
 
 export function createMinimapPlugin(options: EditorMinimapOptions = {}): EditorPlugin {
   const resolved = resolveMinimapOptions(options);
@@ -49,6 +50,7 @@ class MinimapContribution implements EditorViewContribution {
   private horizontalScrollbarHeight = -1;
   private scrollbarGutterSignature = "";
   private readonly scrollElementBorderMetrics: ScrollElementBorderMetrics;
+  private readonly scrollbarGutterFallback: ScrollbarGutterFallbackMetrics;
   private disposed = false;
 
   public constructor(context: EditorViewContributionContext, options: ResolvedMinimapOptions) {
@@ -57,6 +59,7 @@ class MinimapContribution implements EditorViewContribution {
     this.latestSnapshot = context.getSnapshot();
     this.host = createHost(context, options);
     this.scrollElementBorderMetrics = readScrollElementBorderMetrics(context.scrollElement);
+    this.scrollbarGutterFallback = measureScrollbarGutterFallback(context.scrollElement);
     this.updateNativeScrollbarGutter();
     this.client = new MinimapWorkerClient({
       host: this.host,
@@ -183,17 +186,21 @@ class MinimapContribution implements EditorViewContribution {
   }
 
   private updateNativeScrollbarGutter(): void {
+    const scrollElementScrollHeight = safeScrollHeight(this.context.scrollElement);
     const signature = nativeScrollbarGutterSignature(
-      this.latestSnapshot.viewport,
+      this.latestSnapshot,
       this.reservedWidth,
+      scrollElementScrollHeight,
     );
     if (signature === this.scrollbarGutterSignature) return;
 
     this.scrollbarGutterSignature = signature;
     const gutter = nativeScrollbarGutter(
-      this.latestSnapshot.viewport,
+      this.latestSnapshot,
       this.reservedWidth,
       this.scrollElementBorderMetrics,
+      this.scrollbarGutterFallback,
+      scrollElementScrollHeight,
     );
     if (
       gutter.vertical === this.verticalScrollbarWidth &&
@@ -236,6 +243,11 @@ type SliderDrag = {
 type ScrollElementBorderMetrics = {
   readonly x: number;
   readonly y: number;
+};
+
+type ScrollbarGutterFallbackMetrics = {
+  readonly vertical: number;
+  readonly horizontal: number;
 };
 
 function createHost(
@@ -287,34 +299,57 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function nativeScrollbarGutter(
-  viewport: EditorViewSnapshot["viewport"],
+  snapshot: EditorViewSnapshot,
   reservedOverlayWidth: number,
   border: ScrollElementBorderMetrics,
+  fallback: ScrollbarGutterFallbackMetrics,
+  scrollElementScrollHeight: number,
 ): {
   readonly vertical: number;
   readonly horizontal: number;
 } {
+  const viewport = snapshot.viewport;
   const hasVerticalScrollbar =
-    viewport.clientHeight > 0 && viewport.scrollHeight > viewport.clientHeight;
+    viewport.clientHeight > 0 &&
+    Math.max(viewport.scrollHeight, snapshot.totalHeight, scrollElementScrollHeight) >
+      viewport.clientHeight;
   const hasHorizontalScrollbar =
     viewport.clientWidth > 0 && viewport.scrollWidth > viewport.clientWidth;
   const vertical = hasVerticalScrollbar
-    ? measuredVerticalScrollbarGutter(viewport, border.x, reservedOverlayWidth)
+    ? scrollbarGutterOrFallback(
+        measuredVerticalScrollbarGutter(viewport, border.x, reservedOverlayWidth),
+        fallback.vertical,
+      )
     : 0;
   const horizontal = hasHorizontalScrollbar
-    ? Math.max(
+    ? scrollbarGutterOrFallback(
         measuredHorizontalScrollbarGutter(viewport, border.y),
-        HORIZONTAL_SCROLLBAR_GUTTER_FALLBACK,
+        fallback.horizontal,
       )
     : 0;
 
   return { vertical, horizontal };
 }
 
+function scrollbarGutterOrFallback(measured: number, fallback: number): number {
+  if (measured > 0) return measured;
+  return fallback;
+}
+
+function safeScrollHeight(element: HTMLElement): number {
+  try {
+    return element.scrollHeight;
+  } catch {
+    return 0;
+  }
+}
+
 function nativeScrollbarGutterSignature(
-  viewport: EditorViewSnapshot["viewport"],
+  snapshot: EditorViewSnapshot,
   reservedOverlayWidth: number,
+  scrollElementScrollHeight: number,
 ): string {
+  const viewport = snapshot.viewport;
   return [
     viewport.clientHeight,
     viewport.clientWidth,
@@ -322,6 +357,8 @@ function nativeScrollbarGutterSignature(
     viewport.scrollWidth,
     viewport.borderBoxHeight ?? "",
     viewport.borderBoxWidth ?? "",
+    snapshot.totalHeight,
+    scrollElementScrollHeight,
     reservedOverlayWidth,
   ].join(":");
 }
@@ -354,6 +391,51 @@ function readScrollElementBorderMetrics(element: HTMLElement): ScrollElementBord
     x: cssPixels(style?.borderLeftWidth) + cssPixels(style?.borderRightWidth),
     y: cssPixels(style?.borderTopWidth) + cssPixels(style?.borderBottomWidth),
   };
+}
+
+function measureScrollbarGutterFallback(element: HTMLElement): ScrollbarGutterFallbackMetrics {
+  const cssDimensions = readScrollbarCssDimensions(element);
+  const keywordWidth = readScrollbarWidthKeyword(element);
+
+  return {
+    vertical: cssDimensions.vertical ?? keywordWidth ?? OVERLAY_SCROLLBAR_GUTTER_FALLBACK,
+    horizontal: cssDimensions.horizontal ?? keywordWidth ?? OVERLAY_SCROLLBAR_GUTTER_FALLBACK,
+  };
+}
+
+function readScrollbarCssDimensions(element: HTMLElement): {
+  readonly vertical: number | null;
+  readonly horizontal: number | null;
+} {
+  const style = readComputedStyle(element, WEBKIT_SCROLLBAR_PSEUDO_ELEMENT);
+  return {
+    vertical: positiveCssPixels(style?.width),
+    horizontal: positiveCssPixels(style?.height),
+  };
+}
+
+function readScrollbarWidthKeyword(element: HTMLElement): number | null {
+  const value = readComputedStyle(element)?.getPropertyValue("scrollbar-width").trim();
+  if (value === "none") return 0;
+  if (value === "thin") return OVERLAY_SCROLLBAR_GUTTER_FALLBACK;
+  return null;
+}
+
+function readComputedStyle(
+  element: HTMLElement,
+  pseudoElement?: string,
+): CSSStyleDeclaration | undefined {
+  try {
+    return element.ownerDocument.defaultView?.getComputedStyle(element, pseudoElement);
+  } catch {
+    return undefined;
+  }
+}
+
+function positiveCssPixels(value: string | undefined): number | null {
+  const parsed = cssPixels(value);
+  if (parsed <= 0) return null;
+  return parsed;
 }
 
 function cssPixels(value: string | undefined): number {
