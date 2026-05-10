@@ -1,10 +1,10 @@
-import { bufferColumnToVisualColumn } from "../displayTransforms";
 import { setStyleValue } from "./virtualizedTextViewHelpers";
+import { rangeSegments } from "./virtualizedTextViewGeometry";
 import type {
   VirtualizedStoredSelection,
   VirtualizedTextViewInternal,
 } from "./virtualizedTextViewInternals";
-import type { MountedVirtualizedTextRow, VirtualizedTextChunk } from "./virtualizedTextViewTypes";
+import type { MountedVirtualizedTextRow } from "./virtualizedTextViewTypes";
 
 type SelectionSegment = {
   readonly start: number;
@@ -55,48 +55,57 @@ function selectionSegmentsForRow(
   if (row.kind !== "text") return [];
 
   const segments: SelectionSegment[] = [];
-  for (const chunk of row.chunks) {
-    appendSelectionSegmentsForChunk(segments, view, row, chunk);
-  }
+  for (const selection of view.selections)
+    appendSelectionSegmentForRange(segments, view, row, selection);
 
   return mergeSelectionSegments(segments);
-}
-
-function appendSelectionSegmentsForChunk(
-  segments: SelectionSegment[],
-  view: VirtualizedTextViewInternal,
-  row: MountedVirtualizedTextRow,
-  chunk: VirtualizedTextChunk,
-): void {
-  for (const selection of view.selections) {
-    appendSelectionSegmentForRange(segments, view, row, chunk, selection);
-  }
 }
 
 function appendSelectionSegmentForRange(
   segments: SelectionSegment[],
   view: VirtualizedTextViewInternal,
   row: MountedVirtualizedTextRow,
-  chunk: VirtualizedTextChunk,
   selection: VirtualizedStoredSelection,
 ): void {
-  if (selection.end <= chunk.startOffset || selection.start >= chunk.endOffset) return;
+  const emptyRowSegment = emptyRowSelectionSegment(view, row, selection);
+  if (emptyRowSegment) {
+    segments.push(emptyRowSegment);
+    return;
+  }
 
-  const localStart = Math.max(selection.start, chunk.startOffset) - row.startOffset;
-  const localEnd = Math.min(selection.end, chunk.endOffset) - row.startOffset;
-  const startColumn = bufferColumnToVisualColumn(row.text, localStart, view.tabSize);
-  const endColumn = bufferColumnToVisualColumn(row.text, localEnd, view.tabSize);
-  const charWidth = characterCellWidth(view);
-  segments.push({
-    start: row.startOffset + localStart,
-    end: row.startOffset + localEnd,
-    left: startColumn * charWidth,
-    width: Math.max(0, endColumn - startColumn) * charWidth,
-  });
+  segments.push(...rangeSegments(view, row, selection.start, selection.end));
 }
 
-function characterCellWidth(view: VirtualizedTextViewInternal): number {
-  return Math.max(1, view.metrics.characterWidth);
+function emptyRowSelectionSegment(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
+  selection: VirtualizedStoredSelection,
+): SelectionSegment | null {
+  const offset = emptyRowSelectionOffset(view, row);
+  if (offset === null) return null;
+  if (!selectionIncludesOffset(selection, offset)) return null;
+
+  return {
+    start: row.startOffset,
+    end: row.endOffset,
+    left: 0,
+    width: Math.max(1, view.metrics.characterWidth),
+  };
+}
+
+function emptyRowSelectionOffset(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
+): number | null {
+  if (row.text.length !== 0) return null;
+  if (row.startOffset < view.text.length) return row.startOffset;
+  if (row.startOffset === 0) return null;
+  if (view.text[row.startOffset - 1] !== "\n") return null;
+  return row.startOffset - 1;
+}
+
+function selectionIncludesOffset(selection: VirtualizedStoredSelection, offset: number): boolean {
+  return selection.start <= offset && offset < selection.end;
 }
 
 function mergeSelectionSegments(

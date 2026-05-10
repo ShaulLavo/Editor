@@ -15,6 +15,11 @@ import type {
   VirtualizedTextChunk,
   VirtualizedTextRow,
 } from "./virtualizedTextViewTypes";
+import {
+  chunkContainsDomBoundary,
+  clearRowGeometryCache,
+  createDomRangeForChunkRange,
+} from "./virtualizedTextViewGeometry";
 
 export const DEFAULT_ROW_HEIGHT = 24;
 export const DEFAULT_OVERSCAN = 12;
@@ -268,8 +273,7 @@ export function rowChunkFromDomBoundary(
   node: Node,
 ): VirtualizedTextChunk | null {
   for (const chunk of row.chunks) {
-    if (node === chunk.textNode || node === chunk.element) return chunk;
-    if (chunk.element?.contains(node)) return chunk;
+    if (chunkContainsDomBoundary(chunk, node)) return chunk;
   }
 
   return null;
@@ -381,11 +385,9 @@ export function addTokenRangeToChunk(
   start: number,
   end: number,
 ): Range | null {
-  if (end <= chunk.startOffset || start >= chunk.endOffset) return null;
+  const range = createDomRangeForChunkRange(document, chunk, start, end);
+  if (!range) return null;
 
-  const range = document.createRange();
-  range.setStart(chunk.textNode, clamp(start - chunk.startOffset, 0, chunk.textNode.length));
-  range.setEnd(chunk.textNode, clamp(end - chunk.startOffset, 0, chunk.textNode.length));
   highlight.add(range);
   return range;
 }
@@ -553,6 +555,7 @@ export function updateMutableRow(
   mutable.foldMarkerKey = values.foldMarkerKey;
   mutable.foldCollapsed = values.foldCollapsed;
   mutable.displayKind = values.displayKind;
+  clearRowGeometryCache(row);
 }
 
 export function updateMutableRowChunks(
@@ -562,6 +565,7 @@ export function updateMutableRowChunks(
   const mutable = row as { chunks: readonly VirtualizedTextChunk[]; textNode: Text };
   mutable.chunks = chunks;
   mutable.textNode = chunks[0]?.textNode ?? row.textNode;
+  clearRowGeometryCache(row);
 }
 
 export function retireRowElements(rows: readonly MountedVirtualizedTextRow[]): void {
@@ -603,6 +607,7 @@ function markRowRetired(row: MountedVirtualizedTextRow): void {
   };
   mutable.index = -1;
   mutable.textRevision = -1;
+  clearRowGeometryCache(row);
 }
 
 export function scrollElementPadding(element: HTMLElement): {

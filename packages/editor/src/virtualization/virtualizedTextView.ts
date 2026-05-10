@@ -63,6 +63,7 @@ import {
   visibleLineCount,
   visualColumnForOffset,
 } from "./virtualizedTextViewLayout";
+import { clearRowGeometryCaches, xToOffset } from "./virtualizedTextViewGeometry";
 import {
   applyRowHeight,
   disposeGutterCells,
@@ -97,7 +98,6 @@ import type {
   VirtualizedTextViewInternal,
 } from "./virtualizedTextViewInternals";
 import type {
-  DocumentWithCaretHitTesting,
   EditorCursorLineHighlightOptions,
   HiddenCharactersMode,
   NativeGeometryValidation,
@@ -319,6 +319,7 @@ export class VirtualizedTextView {
   private applyMetrics(metrics: BrowserTextMetrics): void {
     const view = this.view;
     view.metrics = metrics;
+    clearRowGeometryCaches(view);
     const rowHeightValue = metrics.rowHeight;
     applyRowHeight(view, rowHeightValue);
     view.gutterWidthDirty = true;
@@ -394,6 +395,7 @@ export class VirtualizedTextView {
     if (!setWrapEnabledLayout(view, enabled, horizontalViewportColumns(view))) return;
 
     resetContentWidthScan(view);
+    clearRowGeometryCaches(view);
     view.lastRenderedRowsKey = "";
     updateVirtualizerRows(view);
   }
@@ -411,6 +413,7 @@ export class VirtualizedTextView {
     const view = this.view;
     setBlockRowsLayout(view, blockRows, horizontalViewportColumns(view));
     resetContentWidthScan(view);
+    clearRowGeometryCaches(view);
     view.lastRenderedRowsKey = "";
     updateVirtualizerRows(view);
   }
@@ -418,6 +421,7 @@ export class VirtualizedTextView {
   public setRowDecorations(decorations: ReadonlyMap<number, VirtualizedTextRowDecoration>): void {
     const view = this.view;
     view.rowDecorations = decorations;
+    clearRowGeometryCaches(view);
     view.lastRenderedRowsKey = "";
     this.renderSnapshot(view.virtualizer.getSnapshot());
   }
@@ -542,13 +546,7 @@ export class VirtualizedTextView {
   }
 
   public textOffsetFromPoint(clientX: number, clientY: number): number | null {
-    const documentWithCaret = this.scrollElement.ownerDocument as DocumentWithCaretHitTesting;
-    const position = documentWithCaret.caretPositionFromPoint?.(clientX, clientY);
-    if (position) return this.textOffsetFromDomBoundary(position.offsetNode, position.offset);
-
-    const range = documentWithCaret.caretRangeFromPoint?.(clientX, clientY);
-    if (!range) return null;
-    return this.textOffsetFromDomBoundary(range.startContainer, range.startOffset);
+    return this.textOffsetFromViewportPoint(clientX, clientY);
   }
 
   public textOffsetFromViewportPoint(clientX: number, clientY: number): number {
@@ -559,6 +557,9 @@ export class VirtualizedTextView {
     if (metrics.verticalDirection > 0) return lineEndOffset(view, rowForViewportY(view, metrics.y));
 
     const row = rowForViewportY(view, metrics.y);
+    const mounted = view.rowElements.get(row);
+    if (mounted?.kind === "text") return xToOffset(view, mounted, metrics.x);
+
     const column = Math.floor(metrics.x / Math.max(1, view.metrics.characterWidth));
     return offsetForViewportColumn(view, row, column);
   }
@@ -618,6 +619,7 @@ export class VirtualizedTextView {
     rebuildDisplayRows(view, horizontalViewportColumns(view));
     clampStoredSelection(view);
     resetContentWidthScan(view);
+    clearRowGeometryCaches(view);
     updateContentWidth(view, snapshot.virtualItems);
     updateMountedRowsAfterSameLineEdit(view, snapshot.virtualItems, patch, snapshot);
     renderHiddenCharacters(view);

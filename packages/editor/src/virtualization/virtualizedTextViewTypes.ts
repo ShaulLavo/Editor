@@ -67,6 +67,26 @@ export type VirtualizedTextChunk = {
   readonly text: string;
   readonly element: HTMLSpanElement | null;
   readonly textNode: Text;
+  readonly parts: readonly VirtualizedTextChunkPart[];
+};
+
+export type VirtualizedTextChunkPart =
+  | VirtualizedTextChunkTextPart
+  | VirtualizedTextChunkControlPart;
+
+export type VirtualizedTextChunkTextPart = {
+  readonly kind: "text";
+  readonly localStart: number;
+  readonly localEnd: number;
+  readonly node: Text;
+};
+
+export type VirtualizedTextChunkControlPart = {
+  readonly kind: "control";
+  readonly localStart: number;
+  readonly localEnd: number;
+  readonly element: HTMLSpanElement;
+  readonly widthCells: number;
 };
 
 export type VirtualizedFoldMarker = {
@@ -158,6 +178,7 @@ export type MountedVirtualizedTextRow = VirtualizedTextRow & {
   readonly foldMarkerKey: string;
   readonly foldCollapsed: boolean;
   readonly displayKind: "text" | "block";
+  readonly geometryCache: unknown | null;
 };
 
 export type SameLineEditPatch = {

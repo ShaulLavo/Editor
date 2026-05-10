@@ -30,6 +30,7 @@ import {
 } from "./virtualizedTextViewRows";
 import { renderHiddenCharacters } from "./virtualizedTextViewHiddenCharacters";
 import { clearSelectionLayer, renderSelectionLayer } from "./virtualizedTextViewSelectionLayer";
+import { createDomRangeForChunkRange } from "./virtualizedTextViewGeometry";
 import type {
   MountedVirtualizedTextRow,
   TokenGroup,
@@ -712,14 +713,14 @@ function addRangeHighlightToChunk(
   chunk: VirtualizedTextChunk,
   range: VirtualizedTextHighlightRange,
 ): void {
-  if (range.end <= chunk.startOffset || range.start >= chunk.endOffset) return;
-
-  const domRange = view.scrollElement.ownerDocument.createRange();
-  domRange.setStart(
-    chunk.textNode,
-    clamp(range.start - chunk.startOffset, 0, chunk.textNode.length),
+  const domRange = createDomRangeForChunkRange(
+    view.scrollElement.ownerDocument,
+    chunk,
+    range.start,
+    range.end,
   );
-  domRange.setEnd(chunk.textNode, clamp(range.end - chunk.startOffset, 0, chunk.textNode.length));
+  if (!domRange) return;
+
   group.highlight.add(domRange);
 }
 
@@ -874,8 +875,8 @@ function selectionChunkSignature(
 ): string | null {
   if (end <= chunk.startOffset || start >= chunk.endOffset) return null;
 
-  const localStart = clamp(start - chunk.startOffset, 0, chunk.textNode.length);
-  const localEnd = clamp(end - chunk.startOffset, 0, chunk.textNode.length);
+  const localStart = clamp(start - chunk.startOffset, 0, chunk.text.length);
+  const localEnd = clamp(end - chunk.startOffset, 0, chunk.text.length);
   return `${row.index}:${chunk.localStart}:${chunk.startOffset}:${localStart}:${localEnd}`;
 }
 

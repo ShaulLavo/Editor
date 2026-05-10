@@ -1489,40 +1489,19 @@ describe("Editor", () => {
       const session = createDocumentSession("abcdef");
       session.setSelection(1);
       editor.attachSession(session);
-      const textNode = rowTextNode();
-      const originalCaretRangeFromPoint = (
-        document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
-      ).caretRangeFromPoint;
-      Object.defineProperty(document, "caretRangeFromPoint", {
-        configurable: true,
-        value: () => {
-          const range = document.createRange();
-          range.setStart(textNode, 4);
-          range.setEnd(textNode, 4);
-          return range;
-        },
-      });
+      mockEditorViewport(editorRoot(), 120, 40);
 
-      try {
-        editorRoot().dispatchEvent(
-          new MouseEvent("mousedown", {
-            altKey: true,
-            bubbles: true,
-            cancelable: true,
-            detail: 1,
-          }),
-        );
-        editorRoot().dispatchEvent(createInsertEvent("X"));
-      } finally {
-        if (originalCaretRangeFromPoint) {
-          Object.defineProperty(document, "caretRangeFromPoint", {
-            configurable: true,
-            value: originalCaretRangeFromPoint,
-          });
-        } else {
-          Reflect.deleteProperty(document, "caretRangeFromPoint");
-        }
-      }
+      editorRoot().dispatchEvent(
+        new MouseEvent("mousedown", {
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+          clientX: 34,
+          clientY: 10,
+          detail: 1,
+        }),
+      );
+      editorRoot().dispatchEvent(createInsertEvent("X"));
 
       expect(session.getSelections().selections).toHaveLength(2);
       expect(editor.getText()).toBe("aXbcdXef");
@@ -1730,29 +1709,19 @@ describe("Editor", () => {
     it("updates custom selection immediately while dragging", () => {
       const session = createDocumentSession("abcd");
       editor.attachSession(session);
-      const textNode = rowTextNode();
-      const originalCaretRangeFromPoint = (
-        document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
-      ).caretRangeFromPoint;
-      Object.defineProperty(document, "caretRangeFromPoint", {
-        configurable: true,
-        value: (x: number) => {
-          const range = document.createRange();
-          const offset = x < 20 ? 1 : 3;
-          range.setStart(textNode, offset);
-          range.setEnd(textNode, offset);
-          return range;
-        },
-      });
+      mockEditorViewport(editorRoot(), 120, 40);
 
       const mouseDown = new MouseEvent("mousedown", {
         bubbles: true,
         cancelable: true,
         clientX: 10,
+        clientY: 10,
         detail: 1,
       });
       editorRoot().dispatchEvent(mouseDown);
-      document.dispatchEvent(new MouseEvent("mousemove", { cancelable: true, clientX: 30 }));
+      document.dispatchEvent(
+        new MouseEvent("mousemove", { cancelable: true, clientX: 30, clientY: 10 }),
+      );
 
       expect(mouseDown.defaultPrevented).toBe(true);
       expect(selectionRanges()).toHaveLength(1);
@@ -1764,16 +1733,9 @@ describe("Editor", () => {
       expect(resolved.startOffset).toBe(1);
       expect(resolved.endOffset).toBe(3);
 
-      document.dispatchEvent(new MouseEvent("mouseup", { cancelable: true, clientX: 30 }));
-
-      if (originalCaretRangeFromPoint) {
-        Object.defineProperty(document, "caretRangeFromPoint", {
-          configurable: true,
-          value: originalCaretRangeFromPoint,
-        });
-      } else {
-        Reflect.deleteProperty(document, "caretRangeFromPoint");
-      }
+      document.dispatchEvent(
+        new MouseEvent("mouseup", { cancelable: true, clientX: 30, clientY: 10 }),
+      );
 
       resolved = resolveSelection(session.getSnapshot(), session.getSelections().selections[0]!);
       expect(resolved.startOffset).toBe(1);
@@ -2002,36 +1964,17 @@ describe("Editor", () => {
     it("selects the current line on triple click", () => {
       const session = createDocumentSession("one\ntwo\nthree");
       editor.attachSession(session);
-
-      const textNode = rowTextNode(1);
-      const range = document.createRange();
-      range.setStart(textNode, 1);
-      range.setEnd(textNode, 1);
-      const originalCaretRangeFromPoint = (
-        document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
-      ).caretRangeFromPoint;
-      Object.defineProperty(document, "caretRangeFromPoint", {
-        configurable: true,
-        value: () => range,
-      });
+      mockEditorViewport(editorRoot(), 120, 80);
 
       editorRoot().dispatchEvent(
         new MouseEvent("mousedown", {
           bubbles: true,
           cancelable: true,
           clientX: 10,
-          clientY: 10,
+          clientY: 30,
           detail: 3,
         }),
       );
-      if (originalCaretRangeFromPoint) {
-        Object.defineProperty(document, "caretRangeFromPoint", {
-          configurable: true,
-          value: originalCaretRangeFromPoint,
-        });
-      } else {
-        Reflect.deleteProperty(document, "caretRangeFromPoint");
-      }
 
       const resolved = resolveSelection(
         session.getSnapshot(),

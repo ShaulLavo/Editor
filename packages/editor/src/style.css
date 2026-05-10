@@ -153,6 +153,17 @@
   white-space: pre;
 }
 
+.editor-virtualized-control-character {
+  color: var(--editor-hidden-character-foreground);
+  display: inline-block;
+  font: inherit;
+  line-height: inherit;
+  overflow: hidden;
+  text-align: center;
+  vertical-align: top;
+  white-space: pre;
+}
+
 .editor-virtualized-row-spacer {
   display: inline-block;
   height: 1px;

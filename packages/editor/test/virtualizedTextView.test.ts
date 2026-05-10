@@ -1166,6 +1166,116 @@ describe("VirtualizedTextView", () => {
     expect(selectionRanges(container)).toHaveLength(0);
   });
 
+  it("paints selected empty rows as an invisible character", () => {
+    view.setText("a\n\nb");
+    view.setScrollMetrics(0, 80);
+    view.setSelection(0, 3);
+
+    const ranges = selectionRanges(container);
+    const emptyRowRange = ranges.find((range) => range.dataset.editorSelectionStart === "2");
+    const characterWidth = view.getState().metrics.characterWidth;
+
+    expect(ranges).toHaveLength(2);
+    expect(emptyRowRange).toBeDefined();
+    expect(emptyRowRange?.dataset.editorSelectionEnd).toBe("2");
+    expect(Number.parseFloat(emptyRowRange!.style.left)).toBe(0);
+    expect(Number.parseFloat(emptyRowRange!.style.width)).toBeCloseTo(characterWidth);
+  });
+
+  it("paints a selected trailing empty row", () => {
+    view.setText("a\n");
+    view.setScrollMetrics(0, 60);
+    view.setSelection(0, 2);
+
+    const ranges = selectionRanges(container);
+    const trailingRowRange = ranges.find((range) => range.dataset.editorSelectionStart === "2");
+
+    expect(ranges).toHaveLength(2);
+    expect(trailingRowRange).toBeDefined();
+    expect(trailingRowRange?.dataset.editorSelectionEnd).toBe("2");
+  });
+
+  it("renders control characters as visible cells with selection geometry", () => {
+    view.setText("\u0000PNG\u0000\uFFFD");
+    view.setScrollMetrics(0, 20);
+    view.setSelection(0, 6);
+
+    const range = selectionRanges(container)[0]!;
+    const characterWidth = view.getState().metrics.characterWidth;
+
+    expect(view.scrollElement.textContent).toContain("\u2400PNG\u2400\uFFFD");
+    expect(range.dataset.editorSelectionStart).toBe("0");
+    expect(range.dataset.editorSelectionEnd).toBe("6");
+    expect(Number.parseFloat(range.style.width)).toBeGreaterThan(0);
+
+    view.setSelection(1, 1);
+
+    const caret = container.querySelector(".editor-virtualized-caret") as HTMLElement;
+    expect(caret.style.transform).toBe(`translate(${characterWidth}px, 0px)`);
+  });
+
+  it("does not measure complex rows during scroll rendering", () => {
+    view.setText("\u0000PNG\u0000\uFFFD\n\u4E2D\uD83D\uDE00");
+
+    withThrowingRenderLayoutReads(view.scrollElement, () => {
+      view.setScrollMetrics(0, 20, 80);
+      view.setScrollMetrics(20, 20, 80);
+    });
+
+    expect(container.querySelectorAll("[data-editor-control-character]")).toHaveLength(0);
+  });
+
+  it("uses placeholder spans only for multi-cell C1 controls", () => {
+    view.setText("\u0000\u007F\u0081");
+    view.setScrollMetrics(0, 20);
+
+    const controls = container.querySelectorAll<HTMLElement>("[data-editor-control-character]");
+
+    expect(view.scrollElement.textContent).toContain("\u2400\u2421[U+0081]");
+    expect(controls).toHaveLength(1);
+    expect(controls[0]?.dataset.editorControlCharacter).toBe("U+0081");
+  });
+
+  it("clears rendered complex row parts when reused for simple text", () => {
+    view.setText("\u0000PNG\u0081tail");
+    view.setScrollMetrics(0, 20);
+
+    expect(container.querySelectorAll("[data-editor-control-character]")).toHaveLength(1);
+
+    view.setText('{"name":"platform","private":true}');
+    view.setScrollMetrics(0, 20);
+
+    const row = container.querySelector('[data-editor-virtual-row="0"]') as HTMLDivElement;
+    expect(row.childNodes).toHaveLength(1);
+    expect(row.textContent).toBe('{"name":"platform","private":true}');
+    expect(container.querySelectorAll("[data-editor-control-character]")).toHaveLength(0);
+    expect(view.scrollElement.textContent).not.toContain("[U+0081]");
+  });
+
+  it("hit-tests complex rows without native caret APIs", () => {
+    view.setText("\u0000PNG");
+    view.setScrollMetrics(0, 20);
+    mockViewport(view.scrollElement, 160, 20);
+
+    withThrowingNativeCaretApis(document, () => {
+      expect(view.textOffsetFromPoint(12, 10)).toBe(1);
+    });
+  });
+
+  it("keeps emoji, combining marks, and CJK hit-testing on rendered boundaries", () => {
+    view.setText("a\uD83D\uDE00e\u0301\u4E2D");
+    view.setScrollMetrics(0, 20);
+    mockViewport(view.scrollElement, 200, 20);
+
+    const characterWidth = view.getState().metrics.characterWidth;
+    const emojiOffset = view.textOffsetFromPoint(characterWidth * 2, 10);
+    const combiningOffset = view.textOffsetFromPoint(characterWidth * 3.5, 10);
+
+    expect(emojiOffset).not.toBe(2);
+    expect(combiningOffset).not.toBe(4);
+    expect(view.getState().contentWidth).toBeGreaterThanOrEqual(characterWidth * 6);
+  });
+
   it("uses FoldMap to mount folded virtual rows without changing buffer offsets", () => {
     view.dispose();
     view = new VirtualizedTextView(container, {
@@ -1591,6 +1701,43 @@ function withThrowingRenderLayoutReads(element: HTMLElement, callback: () => voi
     restorePropertyDescriptor(element, "clientHeight", clientHeight);
     HTMLElement.prototype.getBoundingClientRect = getBoundingClientRect;
   }
+}
+
+function withThrowingNativeCaretApis(document: Document, callback: () => void): void {
+  const caretPosition = Object.getOwnPropertyDescriptor(document, "caretPositionFromPoint");
+  const caretRange = Object.getOwnPropertyDescriptor(document, "caretRangeFromPoint");
+  Object.defineProperty(document, "caretPositionFromPoint", {
+    configurable: true,
+    value: () => {
+      throw new Error("unexpected native caretPositionFromPoint");
+    },
+  });
+  Object.defineProperty(document, "caretRangeFromPoint", {
+    configurable: true,
+    value: () => {
+      throw new Error("unexpected native caretRangeFromPoint");
+    },
+  });
+
+  try {
+    callback();
+  } finally {
+    restoreDocumentProperty(document, "caretPositionFromPoint", caretPosition);
+    restoreDocumentProperty(document, "caretRangeFromPoint", caretRange);
+  }
+}
+
+function restoreDocumentProperty(
+  document: Document,
+  property: "caretPositionFromPoint" | "caretRangeFromPoint",
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor) {
+    Object.defineProperty(document, property, descriptor);
+    return;
+  }
+
+  Reflect.deleteProperty(document, property);
 }
 
 function restoreScrollLeft(element: HTMLElement, descriptor: PropertyDescriptor | undefined): void {

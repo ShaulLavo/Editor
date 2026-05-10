@@ -51,6 +51,24 @@ describe.skipIf(typeof globalThis.Highlight === "undefined")(
       expect(validation.selectionChecks).toBeGreaterThan(0);
     });
 
+    it("paints decoded-binary-like controls without native caret hit-testing", () => {
+      view!.setText("\u0000PNG\u0000\uFFFD");
+      view!.setScrollMetrics(0, 20);
+      view!.setSelection(0, 6);
+
+      const row = view!.getState().mountedRows[0]!;
+      const selection = container.querySelector<HTMLElement>(".editor-virtualized-selection-range");
+      const rowRect = row.element.getBoundingClientRect();
+
+      expect(view!.scrollElement.textContent).toContain("\u2400PNG\u2400\uFFFD");
+      expect(selection).not.toBeNull();
+      expect(Number.parseFloat(selection!.style.width)).toBeGreaterThan(0);
+
+      withThrowingNativeCaretApis(document, () => {
+        expect(view!.textOffsetFromPoint(rowRect.left + 8, rowRect.top + 10)).not.toBeNull();
+      });
+    });
+
     it("sets deterministic gutter CSS variables without marker measurement", () => {
       view?.dispose();
       view = new VirtualizedTextView(container, {
@@ -149,3 +167,40 @@ describe.skipIf(typeof globalThis.Highlight === "undefined")(
     });
   },
 );
+
+function withThrowingNativeCaretApis(document: Document, callback: () => void): void {
+  const caretPosition = Object.getOwnPropertyDescriptor(document, "caretPositionFromPoint");
+  const caretRange = Object.getOwnPropertyDescriptor(document, "caretRangeFromPoint");
+  Object.defineProperty(document, "caretPositionFromPoint", {
+    configurable: true,
+    value: () => {
+      throw new Error("unexpected native caretPositionFromPoint");
+    },
+  });
+  Object.defineProperty(document, "caretRangeFromPoint", {
+    configurable: true,
+    value: () => {
+      throw new Error("unexpected native caretRangeFromPoint");
+    },
+  });
+
+  try {
+    callback();
+  } finally {
+    restoreDocumentProperty(document, "caretPositionFromPoint", caretPosition);
+    restoreDocumentProperty(document, "caretRangeFromPoint", caretRange);
+  }
+}
+
+function restoreDocumentProperty(
+  document: Document,
+  property: "caretPositionFromPoint" | "caretRangeFromPoint",
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor) {
+    Object.defineProperty(document, property, descriptor);
+    return;
+  }
+
+  Reflect.deleteProperty(document, property);
+}

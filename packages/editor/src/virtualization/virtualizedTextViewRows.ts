@@ -1,8 +1,4 @@
-import {
-  bufferColumnToVisualColumn,
-  visualColumnLength,
-  visualColumnToBufferColumn,
-} from "../displayTransforms";
+import { bufferColumnToVisualColumn, visualColumnToBufferColumn } from "../displayTransforms";
 import { clamp } from "../style-utils";
 import type {
   EditorGutterContribution,
@@ -14,11 +10,9 @@ import {
   alignChunkEnd,
   alignChunkStart,
   hideFoldPlaceholder,
-  mountedChunkForOffset,
   rangesIntersectInclusive,
   restoreRowElements,
   retireRowElements,
-  rowChunkFromDomBoundary,
   rowElementFromNode,
   scrollElementPadding,
   setStyleValue,
@@ -47,9 +41,20 @@ import type {
   SameLineEditPatch,
   VirtualizedFoldMarker,
   VirtualizedTextChunk,
-  VirtualizedTextRow,
+  VirtualizedTextChunkPart,
 } from "./virtualizedTextViewTypes";
 import type { VirtualizedTextViewInternal } from "./virtualizedTextViewInternals";
+import {
+  createRenderedChunkParts,
+  createTextChunkParts,
+  domBoundaryForOffset,
+  estimatedColumnToBufferColumn,
+  estimatedDisplayCells,
+  estimatedDisplayCellForColumn,
+  offsetFromDomBoundary,
+  offsetToX,
+  isSimpleRowText,
+} from "./virtualizedTextViewGeometry";
 import {
   clearHiddenCharactersForRow,
   renderHiddenCharacters,
@@ -160,6 +165,7 @@ function createRow(view: VirtualizedTextViewInternal): MountedVirtualizedTextRow
     textNode,
     selectionLayerKey: "",
     hiddenCharactersKey: "",
+    geometryCache: null,
   };
 }
 
@@ -478,25 +484,53 @@ function updateRowTextChunks(
   snapshot = view.virtualizer.getSnapshot(),
 ): void {
   if (!shouldChunkLine(view, text)) {
-    setDirectRowText(row, text, startOffset);
+    setDirectRowText(view, row, text, startOffset);
     return;
   }
 
   setChunkedRowText(view, row, text, startOffset, snapshot);
 }
 
-function setDirectRowText(row: MountedVirtualizedTextRow, text: string, startOffset: number): void {
-  if (row.element.firstChild !== row.textNode) {
+function setDirectRowText(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
+  text: string,
+  startOffset: number,
+): void {
+  if (!isSimpleRowText(text)) {
+    setRenderedDirectRowText(view, row, text, startOffset);
+    return;
+  }
+
+  if (row.element.firstChild !== row.textNode || row.element.childNodes.length !== 1) {
     row.element.replaceChildren(row.textNode);
   }
   if (row.textNode.data !== text) row.textNode.data = text;
   syncDirectRowChunk(row, text, startOffset);
 }
 
+function setRenderedDirectRowText(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
+  text: string,
+  startOffset: number,
+): void {
+  const rendered = createRenderedChunkParts(
+    row.element.ownerDocument,
+    text,
+    0,
+    characterWidth(view),
+  );
+  row.element.replaceChildren(...rendered.nodes);
+  syncDirectRowChunk(row, text, startOffset, rendered.parts, rendered.textNode);
+}
+
 function syncDirectRowChunk(
   row: MountedVirtualizedTextRow,
   text: string,
   startOffset: number,
+  parts: readonly VirtualizedTextChunkPart[] = createTextChunkParts(row.textNode, 0, text.length),
+  textNode = row.textNode,
 ): void {
   const chunk = {
     startOffset,
@@ -505,7 +539,8 @@ function syncDirectRowChunk(
     localEnd: text.length,
     text,
     element: null,
-    textNode: row.textNode,
+    textNode,
+    parts,
   };
   updateMutableRowChunks(row, [chunk]);
 }
@@ -529,7 +564,7 @@ function setChunkedRowText(
     .map((chunk) => chunk.element)
     .filter((element): element is HTMLSpanElement => element !== null);
   row.leftSpacerElement.style.width = `${Math.round(
-    visualColumnLength(text.slice(0, window.start), view.tabSize) * characterWidth(view),
+    estimatedDisplayCellForColumn(text, window.start, view.tabSize) * characterWidth(view),
   )}px`;
   row.element.replaceChildren(row.leftSpacerElement, ...elements);
   updateMutableRowChunks(row, chunks);
@@ -563,22 +598,30 @@ function createRowChunk(
 ): VirtualizedTextChunk {
   const localEnd = Math.min(localStart + view.longLineChunkSize, windowEnd);
   const element = view.scrollElement.ownerDocument.createElement("span");
-  const textNode = view.scrollElement.ownerDocument.createTextNode(
-    text.slice(localStart, localEnd),
-  );
+  const chunkText = text.slice(localStart, localEnd);
+  const rendered = isSimpleRowText(chunkText)
+    ? null
+    : createRenderedChunkParts(
+        view.scrollElement.ownerDocument,
+        chunkText,
+        localStart,
+        characterWidth(view),
+      );
+  const textNode = rendered?.textNode ?? view.scrollElement.ownerDocument.createTextNode(chunkText);
 
   element.className = "editor-virtualized-row-chunk";
   element.dataset.editorVirtualChunkStart = String(localStart);
-  element.appendChild(textNode);
+  element.append(...(rendered?.nodes ?? [textNode]));
 
   return {
     startOffset: startOffset + localStart,
     endOffset: startOffset + localEnd,
     localStart,
     localEnd,
-    text: textNode.data,
+    text: chunkText,
     element,
     textNode,
+    parts: rendered?.parts ?? createTextChunkParts(textNode, localStart, localEnd),
   };
 }
 
@@ -610,12 +653,27 @@ export function horizontalChunkWindow(
   );
   const startColumn = Math.max(0, leftColumn - view.horizontalOverscanColumns);
   const endColumn = leftColumn + viewportColumns + view.horizontalOverscanColumns;
-  const startBufferColumn = visualColumnToBufferColumn(text, startColumn, "before", view.tabSize);
-  const endBufferColumn = visualColumnToBufferColumn(text, endColumn, "after", view.tabSize);
+  const startBufferColumn = bufferColumnForEstimatedColumn(
+    text,
+    startColumn,
+    "before",
+    view.tabSize,
+  );
+  const endBufferColumn = bufferColumnForEstimatedColumn(text, endColumn, "after", view.tabSize);
   const start = alignChunkStart(startBufferColumn, view.longLineChunkSize);
   const end = alignChunkEnd(Math.min(text.length, endBufferColumn), view.longLineChunkSize);
 
   return { start, end: clamp(end, start, text.length) };
+}
+
+function bufferColumnForEstimatedColumn(
+  text: string,
+  visualColumn: number,
+  bias: "before" | "after",
+  tabSize: number,
+): number {
+  if (isSimpleRowText(text)) return visualColumnToBufferColumn(text, visualColumn, bias, tabSize);
+  return estimatedColumnToBufferColumn(text, visualColumn, bias, tabSize);
 }
 
 export function horizontalViewportColumns(
@@ -1113,7 +1171,7 @@ function scanVisualColumns(
   for (let row = startIndex; row <= endIndex; row += 1) {
     view.maxVisualColumnsSeen = Math.max(
       view.maxVisualColumnsSeen,
-      visualColumnLength(lineText(view, row), view.tabSize),
+      estimatedDisplayCells(lineText(view, row), view.tabSize),
     );
   }
 }
@@ -1168,9 +1226,8 @@ export function textOffsetFromDomBoundary(
 ): number | null {
   const row = rowFromDomBoundary(view, node);
   if (!row) return null;
-  if (node === row.element) return rowElementBoundaryToOffset(row, offset);
-  const chunk = rowChunkFromDomBoundary(row, node);
-  if (chunk) return rowChunkBoundaryToOffset(chunk, node, offset);
+  const mapped = offsetFromDomBoundary(row, node, offset);
+  if (mapped !== null) return mapped;
   if (!row.element.contains(node)) return null;
   return row.endOffset;
 }
@@ -1178,31 +1235,13 @@ export function textOffsetFromDomBoundary(
 function rowFromDomBoundary(
   view: VirtualizedTextViewInternal,
   node: Node,
-): VirtualizedTextRow | null {
+): MountedVirtualizedTextRow | null {
   const element = rowElementFromNode(node, view.scrollElement);
   if (!element) return null;
 
   const rowIndex = Number(element.dataset.editorVirtualRow);
   if (!Number.isInteger(rowIndex)) return null;
   return view.rowElements.get(rowIndex) ?? null;
-}
-
-function rowElementBoundaryToOffset(row: VirtualizedTextRow, offset: number): number {
-  if (offset <= 0) return row.startOffset;
-  if (offset >= row.element.childNodes.length) return row.endOffset;
-
-  const child = row.element.childNodes.item(offset);
-  const chunk = child ? rowChunkFromDomBoundary(row, child) : null;
-  if (chunk) return chunk.startOffset;
-  return row.endOffset;
-}
-
-function rowChunkBoundaryToOffset(chunk: VirtualizedTextChunk, node: Node, offset: number): number {
-  if (node === chunk.textNode) {
-    return chunk.startOffset + clamp(offset, 0, chunk.textNode.length);
-  }
-  if (offset <= 0) return chunk.startOffset;
-  return chunk.endOffset;
 }
 
 export function ensureOffsetMounted(view: VirtualizedTextViewInternal, offset: number): void {
@@ -1225,10 +1264,7 @@ function scrollHorizontallyToOffset(
   if (!shouldChunkLine(view, text)) return;
 
   const snapshot = view.virtualizer.getSnapshot();
-  const localOffset = clamp(offset - lineStartOffset(view, row), 0, text.length);
-  const targetLeft =
-    gutterWidth(view) +
-    bufferColumnToVisualColumn(text, localOffset, view.tabSize) * characterWidth(view);
+  const targetLeft = gutterWidth(view) + rowTextLeftForOffset(view, row, offset);
   const viewportRight = snapshot.scrollLeft + snapshot.viewportWidth;
   if (targetLeft >= snapshot.scrollLeft && targetLeft <= viewportRight) return;
 
@@ -1323,11 +1359,7 @@ function scrollLeftForVisibleOffset(
   offset: number,
   snapshot: FixedRowVirtualizerSnapshot,
 ): number {
-  const text = lineText(view, row);
-  const localOffset = clamp(offset - lineStartOffset(view, row), 0, text.length);
-  const caretLeft =
-    gutterWidth(view) +
-    bufferColumnToVisualColumn(text, localOffset, view.tabSize) * characterWidth(view);
+  const caretLeft = gutterWidth(view) + rowTextLeftForOffset(view, row, offset);
   const viewportLeft = snapshot.scrollLeft + gutterWidth(view);
   const viewportRight = snapshot.scrollLeft + snapshot.viewportWidth;
   if (caretLeft < viewportLeft) return Math.max(0, caretLeft - gutterWidth(view));
@@ -1335,21 +1367,32 @@ function scrollLeftForVisibleOffset(
   return snapshot.scrollLeft;
 }
 
+function rowTextLeftForOffset(
+  view: VirtualizedTextViewInternal,
+  rowIndex: number,
+  offset: number,
+): number {
+  const mounted = view.rowElements.get(rowIndex);
+  if (mounted?.kind === "text") return offsetToX(view, mounted, offset);
+
+  const text = lineText(view, rowIndex);
+  const localOffset = clamp(offset - lineStartOffset(view, rowIndex), 0, text.length);
+  const column = isSimpleRowText(text)
+    ? bufferColumnToVisualColumn(text, localOffset, view.tabSize)
+    : estimatedDisplayCellForColumn(text, localOffset, view.tabSize);
+  return column * characterWidth(view);
+}
+
 export function resolveMountedOffset(
   view: VirtualizedTextViewInternal,
   offset: number,
-): { readonly node: Text; readonly offset: number } | null {
+): { readonly node: Node; readonly offset: number } | null {
   const clamped = clamp(offset, 0, view.text.length);
   const targetRow = rowForOffset(view, clamped);
   for (const row of getMountedRows(view)) {
     if (row.index !== targetRow) continue;
     const rowOffset = clamp(clamped, row.startOffset, row.endOffset);
-    const chunk = mountedChunkForOffset(row, rowOffset);
-    if (!chunk) return null;
-    return {
-      node: chunk.textNode,
-      offset: clamp(rowOffset - chunk.startOffset, 0, chunk.textNode.length),
-    };
+    return domBoundaryForOffset(row, rowOffset);
   }
 
   return null;
@@ -1418,9 +1461,8 @@ export function caretPosition(
   const row = view.rowElements.get(rowIndex);
   if (!row) return null;
 
-  const columnText = view.text.slice(row.startOffset, offset);
   return {
-    left: gutterWidth(view) + visualColumnLength(columnText, view.tabSize) * characterWidth(view),
+    left: gutterWidth(view) + offsetToX(view, row, offset),
     top: row.top,
     height: row.height,
   };

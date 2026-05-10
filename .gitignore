@@ -35,3 +35,6 @@ playwright-report/
 
 # opensrc - source code for packages
 opensrc/
+
+# Local reference checkouts
+references/

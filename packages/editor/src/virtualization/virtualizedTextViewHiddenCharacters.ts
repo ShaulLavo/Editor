@@ -1,5 +1,5 @@
-import { visualColumnLength } from "../displayTransforms";
 import { setStyleValue } from "./virtualizedTextViewHelpers";
+import { offsetToX } from "./virtualizedTextViewGeometry";
 import type {
   VirtualizedStoredSelection,
   VirtualizedTextViewInternal,
@@ -78,23 +78,9 @@ function appendHiddenCharacterMarkersForChunk(
   row: MountedVirtualizedTextRow,
   chunk: VirtualizedTextChunk,
 ): void {
-  const charWidth = hiddenCharacterCellWidth(view);
-  let visualColumn = visualColumnLength(row.text.slice(0, chunk.localStart), view.tabSize);
-
   for (let index = chunk.localStart; index < chunk.localEnd; index += 1) {
     const char = row.text[index]!;
-    const widthColumns = hiddenCharacterVisualWidth(char, visualColumn, view.tabSize);
-    appendHiddenCharacterMarker(
-      markers,
-      view,
-      row,
-      char,
-      index,
-      visualColumn,
-      widthColumns,
-      charWidth,
-    );
-    visualColumn += widthColumns;
+    appendHiddenCharacterMarker(markers, view, row, char, index);
   }
 }
 
@@ -104,9 +90,6 @@ function appendHiddenCharacterMarker(
   row: MountedVirtualizedTextRow,
   char: string,
   localIndex: number,
-  visualColumn: number,
-  widthColumns: number,
-  charWidth: number,
 ): void {
   const kind = hiddenCharacterKind(char);
   if (!kind) return;
@@ -114,11 +97,13 @@ function appendHiddenCharacterMarker(
   const offset = row.startOffset + localIndex;
   if (!shouldShowHiddenCharacterAtOffset(view, offset)) return;
 
+  const left = offsetToX(view, row, offset);
+  const right = offsetToX(view, row, offset + 1);
   markers.push({
     kind,
     offset,
-    left: visualColumn * charWidth,
-    width: widthColumns * charWidth,
+    left: Math.min(left, right),
+    width: Math.abs(right - left),
   });
 }
 
@@ -126,15 +111,6 @@ function hiddenCharacterKind(char: string): HiddenCharacterKind | null {
   if (char === " ") return "space";
   if (char === "\t") return "tab";
   return null;
-}
-
-function hiddenCharacterVisualWidth(char: string, visualColumn: number, tabSize: number): number {
-  if (char !== "\t") return 1;
-  return tabSize - (visualColumn % tabSize);
-}
-
-function hiddenCharacterCellWidth(view: VirtualizedTextViewInternal): number {
-  return Math.max(1, view.metrics.characterWidth);
 }
 
 function shouldShowHiddenCharacterAtOffset(
