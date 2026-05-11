@@ -6,6 +6,7 @@ import {
   elementBoundaryToTextOffset,
 } from "../src/editor/domBoundary";
 import { EditorFoldState } from "../src/editor/foldState";
+import { defaultEditorKeyBindings } from "../src/editor/keymap";
 import {
   foldMarkerFromRange,
   foldRangeKey,
@@ -111,6 +112,22 @@ describe("navigation helpers", () => {
     expect(nextWordOffset(text, 0)).toBe(6);
     expect(nextWordOffset(text, 6)).toBe(9);
     expect(previousWordOffset(text, text.length)).toBe(9);
+  });
+});
+
+describe("default editor keybindings", () => {
+  it("does not bind advanced edit actions by default", () => {
+    const commands = defaultEditorKeyBindings().map((binding) => binding.command);
+
+    expect(commands).not.toContain("deleteWordLeft");
+    expect(commands).not.toContain("deleteWordRight");
+    expect(commands).not.toContain("editor.action.deleteLines");
+    expect(commands).not.toContain("editor.action.copyLinesUpAction");
+    expect(commands).not.toContain("editor.action.copyLinesDownAction");
+    expect(commands).not.toContain("editor.action.moveLinesUpAction");
+    expect(commands).not.toContain("editor.action.moveLinesDownAction");
+    expect(commands).not.toContain("editor.action.insertLineBefore");
+    expect(commands).not.toContain("editor.action.insertLineAfter");
   });
 });
 

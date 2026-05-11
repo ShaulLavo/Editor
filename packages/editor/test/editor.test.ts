@@ -1185,6 +1185,92 @@ describe("Editor", () => {
       expect(editor.getText()).toBe("ab");
     });
 
+    it("deletes words through explicit editor commands", () => {
+      const session = createDocumentSession("alpha beta gamma");
+      session.setSelection(11);
+      editor.attachSession(session);
+
+      expect(editor.dispatchCommand("deleteWordLeft")).toBe(true);
+      expect(session.getText()).toBe("alpha gamma");
+      expect(resolvedSelectionRanges(session)).toEqual([
+        { anchor: 6, head: 6, start: 6, end: 6 },
+      ]);
+
+      expect(editor.dispatchCommand("deleteWordRight")).toBe(true);
+      expect(session.getText()).toBe("alpha ");
+    });
+
+    it("deletes, copies, and moves touched lines through explicit editor commands", () => {
+      const deleteSession = createDocumentSession("a\nb\nc");
+      deleteSession.setSelection(3);
+      editor.attachSession(deleteSession);
+
+      expect(editor.dispatchCommand("editor.action.deleteLines")).toBe(true);
+      expect(deleteSession.getText()).toBe("a\nc");
+
+      const copyUpSession = createDocumentSession("a\nb\nc");
+      copyUpSession.setSelection(3);
+      editor.attachSession(copyUpSession);
+
+      expect(editor.dispatchCommand("editor.action.copyLinesUpAction")).toBe(true);
+      expect(copyUpSession.getText()).toBe("a\nb\nb\nc");
+      expect(resolvedSelectionRanges(copyUpSession)).toEqual([
+        { anchor: 3, head: 3, start: 3, end: 3 },
+      ]);
+
+      const copyDownSession = createDocumentSession("a\nb\nc");
+      copyDownSession.setSelection(3);
+      editor.attachSession(copyDownSession);
+
+      expect(editor.dispatchCommand("editor.action.copyLinesDownAction")).toBe(true);
+      expect(copyDownSession.getText()).toBe("a\nb\nb\nc");
+      expect(resolvedSelectionRanges(copyDownSession)).toEqual([
+        { anchor: 5, head: 5, start: 5, end: 5 },
+      ]);
+
+      const moveUpSession = createDocumentSession("a\nb\nc");
+      moveUpSession.setSelection(5);
+      editor.attachSession(moveUpSession);
+
+      expect(editor.dispatchCommand("editor.action.moveLinesUpAction")).toBe(true);
+      expect(moveUpSession.getText()).toBe("a\nc\nb");
+      expect(resolvedSelectionRanges(moveUpSession)).toEqual([
+        { anchor: 3, head: 3, start: 3, end: 3 },
+      ]);
+
+      const moveDownSession = createDocumentSession("a\nb\nc");
+      moveDownSession.setSelection(3);
+      editor.attachSession(moveDownSession);
+
+      expect(editor.dispatchCommand("editor.action.moveLinesDownAction")).toBe(true);
+      expect(moveDownSession.getText()).toBe("a\nc\nb");
+      expect(resolvedSelectionRanges(moveDownSession)).toEqual([
+        { anchor: 5, head: 5, start: 5, end: 5 },
+      ]);
+    });
+
+    it("inserts lines before and after through explicit editor commands", () => {
+      const beforeSession = createDocumentSession("a\nb\nc");
+      beforeSession.setSelection(3);
+      editor.attachSession(beforeSession);
+
+      expect(editor.dispatchCommand("editor.action.insertLineBefore")).toBe(true);
+      expect(beforeSession.getText()).toBe("a\n\nb\nc");
+      expect(resolvedSelectionRanges(beforeSession)).toEqual([
+        { anchor: 2, head: 2, start: 2, end: 2 },
+      ]);
+
+      const afterSession = createDocumentSession("a\nb\nc");
+      afterSession.setSelection(3);
+      editor.attachSession(afterSession);
+
+      expect(editor.dispatchCommand("editor.action.insertLineAfter")).toBe(true);
+      expect(afterSession.getText()).toBe("a\nb\n\nc");
+      expect(resolvedSelectionRanges(afterSession)).toEqual([
+        { anchor: 4, head: 4, start: 4, end: 4 },
+      ]);
+    });
+
     it("selects the full document with Mod+A", () => {
       const session = createDocumentSession("abc");
       editor.attachSession(session);

@@ -5,6 +5,7 @@ import { projectSyntaxFoldsThroughLineEdit } from "./folds";
 import { EditorFoldState } from "./foldState";
 import { keyboardFallbackText } from "./input";
 import { EditorKeymapController } from "./keymap";
+import { editActionForCommand, isEditorEditActionCommand } from "./editActions";
 import { LatestAsyncRequest } from "./latestAsyncRequest";
 import {
   cancelFrame,
@@ -465,6 +466,7 @@ export class Editor {
     if (command === "clearSecondarySelections") return this.applyClearSecondarySelections(context);
     if (command === "deleteBackward") return this.applyDeleteCommand("backward", context);
     if (command === "deleteForward") return this.applyDeleteCommand("forward", context);
+    if (isEditorEditActionCommand(command)) return this.applyEditActionCommand(command, context);
     if (command === "indentSelection") return this.applyIndentCommand("indent", context);
     if (command === "outdentSelection") return this.applyIndentCommand("outdent", context);
     return this.applyNavigationCommand(command, context);
@@ -1328,6 +1330,28 @@ export class Editor {
     const merged = mergeChangeTimings(change, selectionChange);
     this.applySessionChange(merged, indentTimingName(direction), start, {
       revealOffset: this.primarySelectionHeadOffset(merged),
+    });
+    return true;
+  }
+
+  private applyEditActionCommand(
+    command: Parameters<typeof editActionForCommand>[0],
+    context: EditorCommandContext,
+  ): boolean {
+    if (!this.session) return false;
+
+    const start = context.event ? eventStartMs(context.event) : nowMs();
+    const selectionChange = this.selectionChangeBeforeEdit();
+    const snapshot = this.session.getSnapshot();
+    const selections = this.session
+      .getSelections()
+      .selections.map((selection) => resolveSelection(snapshot, selection));
+    const action = editActionForCommand(command, this.session.getText(), selections);
+    const change = this.session.applyEdits(action.edits, {
+      selections: action.selections,
+    });
+    this.applySessionChange(mergeChangeTimings(change, selectionChange), action.timingName, start, {
+      revealOffset: action.revealOffset,
     });
     return true;
   }

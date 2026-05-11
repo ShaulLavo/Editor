@@ -101,6 +101,7 @@ export type DocumentSessionEditSelection = DocumentSessionSelectionRange;
 export type DocumentSessionApplyEditsOptions = {
   readonly history?: DocumentSessionEditHistoryMode;
   readonly selection?: DocumentSessionEditSelection;
+  readonly selections?: readonly DocumentSessionEditSelection[];
 };
 
 type CommitEditOptions = {
@@ -184,7 +185,11 @@ class PieceTableDocumentSession implements DocumentSession {
       return appendTiming(this.createChange("none", []), "session.applyEdits", start);
     }
 
-    const selections = this.selectionsAfterProgrammaticEdit(nextSnapshot, options.selection);
+    const selections = this.selectionsAfterProgrammaticEdit(
+      nextSnapshot,
+      options.selection,
+      options.selections,
+    );
     return appendTiming(
       this.commitEdit(nextSnapshot, selections, effectiveEdits, {
         history: options.history ?? "record",
@@ -368,7 +373,10 @@ class PieceTableDocumentSession implements DocumentSession {
   private selectionsAfterProgrammaticEdit(
     snapshot: PieceTableSnapshot,
     selection: DocumentSessionEditSelection | undefined,
+    selections: readonly DocumentSessionEditSelection[] | undefined,
   ): SelectionSet<PieceTableAnchor> {
+    if (selections) return this.createNormalizedSelectionSetForSnapshot(snapshot, selections, {});
+
     if (selection) {
       const anchor = selection.anchor;
       const head = selection.head ?? selection.anchor;
@@ -390,6 +398,21 @@ class PieceTableDocumentSession implements DocumentSession {
     });
     const set = createSelectionSet(anchorSelections);
     return normalizeSelectionSet(this.history.current, set);
+  }
+
+  private createNormalizedSelectionSetForSnapshot(
+    snapshot: PieceTableSnapshot,
+    selections: readonly DocumentSessionSelectionRange[],
+    options: DocumentSessionSelectionOptions,
+  ): SelectionSet<PieceTableAnchor> {
+    const anchorSelections = selections.map((selection) => {
+      const head = selection.head ?? selection.anchor;
+      return createAnchorSelection(snapshot, selection.anchor, head, {
+        goal: selection.goal ?? options.goal,
+      });
+    });
+    const set = createSelectionSet(anchorSelections);
+    return normalizeSelectionSet(snapshot, set);
   }
 
   private createSelection(
