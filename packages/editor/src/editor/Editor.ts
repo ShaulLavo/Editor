@@ -68,7 +68,12 @@ import {
   type EditorViewContributionUpdateKind,
   type EditorViewSnapshot,
 } from "../plugins";
-import { SelectionGoal, resolveSelection, type ResolvedSelection } from "../selections";
+import {
+  SelectionGoal,
+  resolveSelection,
+  type ResolvedSelection,
+  type SelectionGoal as SelectionGoalValue,
+} from "../selections";
 import {
   type EditorSyntaxLanguageId,
   type EditorSyntaxResult,
@@ -464,6 +469,14 @@ export class Editor {
     if (command === "selectAll") return this.applySelectAllCommand(context);
     if (command === "addNextOccurrence") return this.applyAddNextOccurrenceCommand(context);
     if (command === "clearSecondarySelections") return this.applyClearSecondarySelections(context);
+    if (command === "editor.action.insertCursorAbove")
+      return this.applyInsertCursorCommand("above", context);
+    if (command === "editor.action.insertCursorBelow")
+      return this.applyInsertCursorCommand("below", context);
+    if (command === "editor.action.selectHighlights" || command === "editor.action.changeAll")
+      return this.applySelectExactOccurrencesCommand(command, context);
+    if (command === "editor.action.moveSelectionToNextFindMatch")
+      return this.applyMoveSelectionToNextOccurrenceCommand(context);
     if (command === "deleteBackward") return this.applyDeleteCommand("backward", context);
     if (command === "deleteForward") return this.applyDeleteCommand("forward", context);
     if (isEditorEditActionCommand(command)) return this.applyEditActionCommand(command, context);
@@ -1346,7 +1359,10 @@ export class Editor {
     const selections = this.session
       .getSelections()
       .selections.map((selection) => resolveSelection(snapshot, selection));
-    const action = editActionForCommand(command, this.session.getText(), selections);
+    const action = editActionForCommand(command, this.session.getText(), selections, {
+      languageId: this.languageId,
+      tabSize: this.tabSize,
+    });
     const change = this.session.applyEdits(action.edits, {
       selections: action.selections,
     });
@@ -1394,6 +1410,122 @@ export class Editor {
     return true;
   }
 
+  private applyInsertCursorCommand(
+    direction: "above" | "below",
+    context: EditorCommandContext,
+  ): boolean {
+    if (!this.session) return false;
+
+    const resolved = this.resolvedSelections();
+    const rowDelta = direction === "above" ? -1 : 1;
+    const inserted = resolved
+      .map((selection) => this.cursorSelectionByDisplayRows(selection, rowDelta))
+      .filter((selection) => selection.anchor !== selection.sourceHead);
+    if (inserted.length === 0) return false;
+
+    const selections = [
+      ...resolved.map((selection) => ({
+        anchor: selection.anchorOffset,
+        head: selection.headOffset,
+        goal: selection.goal,
+      })),
+      ...inserted.map((selection) => ({
+        anchor: selection.anchor,
+        head: selection.anchor,
+        goal: selection.goal,
+      })),
+    ];
+    const start = context.event ? eventStartMs(context.event) : nowMs();
+    const change = this.session.setSelections(selections);
+    this.syncSessionSelectionHighlight();
+    this.useSessionSelectionForNextInput = true;
+    this.applySessionChange(change, `input.insertCursor${capitalize(direction)}`, start, {
+      revealOffset: inserted[0]?.anchor,
+      syncDomSelection: false,
+    });
+    return true;
+  }
+
+  private cursorSelectionByDisplayRows(
+    selection: ResolvedSelection,
+    rowDelta: -1 | 1,
+  ): {
+    readonly anchor: number;
+    readonly goal: SelectionGoalValue;
+    readonly sourceHead: number;
+  } {
+    const visualColumn = selectionGoalColumn(selection, this.view);
+    return {
+      anchor: this.view.offsetByDisplayRows(selection.headOffset, rowDelta, visualColumn),
+      goal: SelectionGoal.horizontal(visualColumn),
+      sourceHead: selection.headOffset,
+    };
+  }
+
+  private applySelectExactOccurrencesCommand(
+    command: "editor.action.selectHighlights" | "editor.action.changeAll",
+    context: EditorCommandContext,
+  ): boolean {
+    if (!this.session) return false;
+
+    const text = this.session.getText();
+    const query = this.occurrenceQueryForCurrentSelection(text);
+    if (!query) return false;
+
+    const ranges = findAllExactOccurrences(text, query.query);
+    if (ranges.length === 0) return false;
+
+    const selections = ranges.map((range) => ({ anchor: range.start, head: range.end }));
+    const start = context.event ? eventStartMs(context.event) : nowMs();
+    const change = this.session.setSelections(selections);
+    this.syncSessionSelectionHighlight();
+    this.useSessionSelectionForNextInput = true;
+    this.applySessionChange(change, occurrenceSelectTimingName(command), start, {
+      revealOffset: query.range.end,
+      syncDomSelection: false,
+    });
+    return true;
+  }
+
+  private applyMoveSelectionToNextOccurrenceCommand(context: EditorCommandContext): boolean {
+    if (!this.session) return false;
+
+    const text = this.session.getText();
+    const resolved = this.resolvedSelections();
+    const source = resolved.at(-1);
+    if (!source) return false;
+
+    const query = occurrenceQueryForSelection(text, source);
+    if (!query) return false;
+
+    const keptSelections = resolved.slice(0, -1);
+    const selected = keptSelections.map((selection) => ({
+      start: selection.startOffset,
+      end: selection.endOffset,
+    }));
+    const next = findNextExactOccurrenceFromRange(text, query.query, selected, query.range);
+    if (!next) return false;
+    if (next.start === query.range.start && next.end === query.range.end) return false;
+
+    const selections = [
+      ...keptSelections.map((selection) => ({
+        anchor: selection.anchorOffset,
+        head: selection.headOffset,
+        goal: selection.goal,
+      })),
+      { anchor: next.start, head: next.end },
+    ];
+    const start = context.event ? eventStartMs(context.event) : nowMs();
+    const change = this.session.setSelections(selections);
+    this.syncSessionSelectionHighlight();
+    this.useSessionSelectionForNextInput = true;
+    this.applySessionChange(change, "input.moveSelectionToNextFindMatch", start, {
+      revealOffset: next.end,
+      syncDomSelection: false,
+    });
+    return true;
+  }
+
   private applyAddNextOccurrenceCommand(context: EditorCommandContext): boolean {
     if (!this.session) return false;
 
@@ -1410,14 +1542,20 @@ export class Editor {
     return true;
   }
 
+  private resolvedSelections(): readonly ResolvedSelection[] {
+    if (!this.session) return [];
+
+    const snapshot = this.session.getSnapshot();
+    return this.session
+      .getSelections()
+      .selections.map((selection) => resolveSelection(snapshot, selection));
+  }
+
   private addNextExactOccurrence(): OccurrenceSelectionChange | null {
     if (!this.session) return null;
 
-    const snapshot = this.session.getSnapshot();
     const text = this.session.getText();
-    const resolved = this.session
-      .getSelections()
-      .selections.map((selection) => resolveSelection(snapshot, selection));
+    const resolved = this.resolvedSelections();
     const primary = resolved[0];
     if (!primary) return null;
 
@@ -1442,6 +1580,16 @@ export class Editor {
       change: this.session.setSelections(selections),
       revealOffset: range.end,
     };
+  }
+
+  private occurrenceQueryForCurrentSelection(text: string): OccurrenceQuery | null {
+    const resolved = this.resolvedSelections();
+    const selected = resolved.find((selection) => !selection.collapsed);
+    if (selected) return occurrenceQueryForSelection(text, selected);
+
+    const primary = resolved[0];
+    if (!primary) return null;
+    return occurrenceQueryForSelection(text, primary);
   }
 
   private selectCurrentWordForOccurrence(
@@ -1974,11 +2122,43 @@ type OccurrenceSelectionChange = {
   readonly revealOffset: number;
 };
 
+type OccurrenceQuery = {
+  readonly query: string;
+  readonly range: ExactOccurrenceRange;
+};
+
 function getOccurrenceQuery(text: string, selections: readonly ResolvedSelection[]): string | null {
   const selection = selections.find((candidate) => !candidate.collapsed);
   if (!selection) return null;
 
   return text.slice(selection.startOffset, selection.endOffset);
+}
+
+function occurrenceQueryForSelection(
+  text: string,
+  selection: ResolvedSelection,
+): OccurrenceQuery | null {
+  if (!selection.collapsed) {
+    const query = text.slice(selection.startOffset, selection.endOffset);
+    if (query.length === 0) return null;
+    return { query, range: { start: selection.startOffset, end: selection.endOffset } };
+  }
+
+  const range = wordRangeAtOffset(text, selection.headOffset);
+  if (range.start === range.end) return null;
+  return { query: text.slice(range.start, range.end), range };
+}
+
+function findAllExactOccurrences(text: string, query: string): readonly ExactOccurrenceRange[] {
+  if (query.length === 0) return [];
+
+  const ranges: ExactOccurrenceRange[] = [];
+  let index = text.indexOf(query);
+  while (index !== -1) {
+    ranges.push({ start: index, end: index + query.length });
+    index = text.indexOf(query, index + query.length);
+  }
+  return ranges;
 }
 
 function findNextExactOccurrence(
@@ -1996,6 +2176,20 @@ function findNextExactOccurrence(
   return (
     findExactOccurrenceFrom(text, query, selected, searchStart) ??
     findExactOccurrenceFrom(text, query, selected, 0, searchStart)
+  );
+}
+
+function findNextExactOccurrenceFromRange(
+  text: string,
+  query: string,
+  selected: readonly ExactOccurrenceRange[],
+  range: ExactOccurrenceRange,
+): ExactOccurrenceRange | null {
+  if (query.length === 0) return null;
+
+  return (
+    findExactOccurrenceFrom(text, query, selected, range.end) ??
+    findExactOccurrenceFrom(text, query, selected, 0, range.end)
   );
 }
 
@@ -2019,4 +2213,25 @@ function findExactOccurrenceFrom(
 
 function rangesOverlap(left: ExactOccurrenceRange, right: ExactOccurrenceRange): boolean {
   return left.start < right.end && right.start < left.end;
+}
+
+type VisualColumnView = {
+  visualColumnForOffset(offset: number): number;
+};
+
+function selectionGoalColumn(selection: ResolvedSelection, view: VisualColumnView): number {
+  if (selection.goal.kind === "horizontal") return selection.goal.x;
+  if (selection.goal.kind === "horizontalRange") return selection.goal.headX;
+  return view.visualColumnForOffset(selection.headOffset);
+}
+
+function occurrenceSelectTimingName(
+  command: "editor.action.selectHighlights" | "editor.action.changeAll",
+): string {
+  if (command === "editor.action.selectHighlights") return "input.selectHighlights";
+  return "input.changeAll";
+}
+
+function capitalize(value: string): string {
+  return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
 }

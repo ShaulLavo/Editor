@@ -121,6 +121,10 @@ describe("default editor keybindings", () => {
 
     expect(commands).not.toContain("deleteWordLeft");
     expect(commands).not.toContain("deleteWordRight");
+    expect(commands).not.toContain("editor.action.commentLine");
+    expect(commands).not.toContain("editor.action.blockComment");
+    expect(commands).not.toContain("editor.action.indentLines");
+    expect(commands).not.toContain("editor.action.outdentLines");
     expect(commands).not.toContain("editor.action.deleteLines");
     expect(commands).not.toContain("editor.action.copyLinesUpAction");
     expect(commands).not.toContain("editor.action.copyLinesDownAction");

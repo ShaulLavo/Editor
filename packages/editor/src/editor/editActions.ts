@@ -1,4 +1,5 @@
 import type { DocumentSessionEditSelection } from "../documentSession";
+import { normalizeTabSize } from "../displayTransforms";
 import type { ResolvedSelection } from "../selections";
 import type { TextEdit } from "../tokens";
 import type { EditorCommandId } from "./commands";
@@ -7,6 +8,10 @@ import { nextWordOffset, previousWordOffset } from "./navigation";
 export type EditorEditActionCommandId =
   | "deleteWordLeft"
   | "deleteWordRight"
+  | "editor.action.commentLine"
+  | "editor.action.blockComment"
+  | "editor.action.indentLines"
+  | "editor.action.outdentLines"
   | "editor.action.deleteLines"
   | "editor.action.copyLinesUpAction"
   | "editor.action.copyLinesDownAction"
@@ -22,9 +27,30 @@ export type EditorEditActionResult = {
   readonly timingName: string;
 };
 
+export type EditorEditActionOptions = {
+  readonly languageId?: string | null;
+  readonly tabSize?: number;
+  readonly indentText?: string;
+};
+
 type OffsetRange = {
   readonly start: number;
   readonly end: number;
+};
+
+type BlockCommentTokens = {
+  readonly open: string;
+  readonly close: string;
+};
+
+type CommentTokens = {
+  readonly line?: string;
+  readonly block?: BlockCommentTokens;
+};
+
+type BlockUncommentParts = {
+  readonly open: OffsetRange;
+  readonly close: OffsetRange;
 };
 
 type RowGroup = {
@@ -48,12 +74,42 @@ type LineSelectionDescriptor = {
   readonly head: RelativePoint;
 };
 
+const DEFAULT_COMMENT_TOKENS: CommentTokens = {
+  line: "//",
+  block: { open: "/*", close: "*/" },
+};
+
+const HTML_COMMENT_TOKENS: CommentTokens = {
+  block: { open: "<!--", close: "-->" },
+};
+
+const COMMENT_TOKENS_BY_LANGUAGE: Record<string, CommentTokens> = {
+  css: { block: { open: "/*", close: "*/" } },
+  html: HTML_COMMENT_TOKENS,
+  javascript: DEFAULT_COMMENT_TOKENS,
+  javascriptreact: DEFAULT_COMMENT_TOKENS,
+  json: DEFAULT_COMMENT_TOKENS,
+  jsonc: DEFAULT_COMMENT_TOKENS,
+  jsx: DEFAULT_COMMENT_TOKENS,
+  markdown: HTML_COMMENT_TOKENS,
+  md: HTML_COMMENT_TOKENS,
+  scss: DEFAULT_COMMENT_TOKENS,
+  ts: DEFAULT_COMMENT_TOKENS,
+  tsx: DEFAULT_COMMENT_TOKENS,
+  typescript: DEFAULT_COMMENT_TOKENS,
+  typescriptreact: DEFAULT_COMMENT_TOKENS,
+};
+
 export function isEditorEditActionCommand(
   command: EditorCommandId,
 ): command is EditorEditActionCommandId {
   return (
     command === "deleteWordLeft" ||
     command === "deleteWordRight" ||
+    command === "editor.action.commentLine" ||
+    command === "editor.action.blockComment" ||
+    command === "editor.action.indentLines" ||
+    command === "editor.action.outdentLines" ||
     command === "editor.action.deleteLines" ||
     command === "editor.action.copyLinesUpAction" ||
     command === "editor.action.copyLinesDownAction" ||
@@ -68,9 +124,20 @@ export function editActionForCommand(
   command: EditorEditActionCommandId,
   text: string,
   selections: readonly ResolvedSelection[],
+  options: EditorEditActionOptions = {},
 ): EditorEditActionResult {
   if (command === "deleteWordLeft") return deleteWordAction(text, selections, "left");
   if (command === "deleteWordRight") return deleteWordAction(text, selections, "right");
+  if (command === "editor.action.commentLine") return commentLineAction(text, selections, options);
+  if (command === "editor.action.blockComment") {
+    return blockCommentAction(text, selections, options);
+  }
+  if (command === "editor.action.indentLines") {
+    return indentLinesAction(text, selections, "indent", options);
+  }
+  if (command === "editor.action.outdentLines") {
+    return indentLinesAction(text, selections, "outdent", options);
+  }
   if (command === "editor.action.deleteLines") return deleteLinesAction(text, selections);
   if (command === "editor.action.copyLinesUpAction") return copyLinesAction(text, selections, "up");
   if (command === "editor.action.copyLinesDownAction") {
@@ -192,6 +259,49 @@ function insertLineAction(
   };
 }
 
+function commentLineAction(
+  text: string,
+  selections: readonly ResolvedSelection[],
+  options: EditorEditActionOptions,
+): EditorEditActionResult {
+  const tokens = commentTokensForLanguage(options.languageId);
+  if (!tokens.line && tokens.block) return blockCommentLinesAction(text, selections, tokens.block);
+
+  const map = createLineMap(text);
+  const rows = rowsForSelections(map, selections);
+  const lineToken = tokens.line ?? DEFAULT_COMMENT_TOKENS.line!;
+  const edits = lineCommentEdits(map, rows, lineToken);
+  return editActionResultFromEdits(selections, edits, "input.commentLine");
+}
+
+function blockCommentAction(
+  text: string,
+  selections: readonly ResolvedSelection[],
+  options: EditorEditActionOptions,
+): EditorEditActionResult {
+  const tokens =
+    commentTokensForLanguage(options.languageId).block ?? DEFAULT_COMMENT_TOKENS.block!;
+  const map = createLineMap(text);
+  const ranges = selections.map((selection) => blockCommentRangeForSelection(map, selection));
+  return blockCommentRangesAction(text, selections, ranges, tokens, "input.blockComment");
+}
+
+function indentLinesAction(
+  text: string,
+  selections: readonly ResolvedSelection[],
+  direction: "indent" | "outdent",
+  options: EditorEditActionOptions,
+): EditorEditActionResult {
+  const map = createLineMap(text);
+  const rows = rowsForSelections(map, selections);
+  const edits =
+    direction === "indent"
+      ? indentLineEdits(map, rows, options.indentText ?? "\t")
+      : outdentLineEdits(map, rows, normalizeTabSize(options.tabSize));
+  const timingName = direction === "indent" ? "input.indentLines" : "input.outdentLines";
+  return editActionResultFromEdits(selections, edits, timingName);
+}
+
 function wordDeleteRange(
   text: string,
   selection: ResolvedSelection,
@@ -231,6 +341,23 @@ function rowGroupsForSelections(
   return mergeRowGroups(selections.map((selection) => rowGroupForSelection(map, selection)));
 }
 
+function rowsForSelections(
+  map: LineMap,
+  selections: readonly ResolvedSelection[],
+): readonly number[] {
+  return rowsForGroups(rowGroupsForSelections(map, selections));
+}
+
+function rowsForGroups(groups: readonly RowGroup[]): readonly number[] {
+  const rows: number[] = [];
+
+  for (const group of groups) {
+    for (let row = group.startRow; row <= group.endRow; row += 1) rows.push(row);
+  }
+
+  return rows;
+}
+
 function rowGroupForSelection(map: LineMap, selection: ResolvedSelection): RowGroup {
   const startRow = rowAtOffset(map, selection.startOffset);
   if (selection.collapsed) return { startRow, endRow: startRow };
@@ -239,11 +366,7 @@ function rowGroupForSelection(map: LineMap, selection: ResolvedSelection): RowGr
   return { startRow, endRow };
 }
 
-function endRowForSelection(
-  map: LineMap,
-  selection: ResolvedSelection,
-  startRow: number,
-): number {
+function endRowForSelection(map: LineMap, selection: ResolvedSelection, startRow: number): number {
   const endRow = rowAtOffset(map, selection.endOffset);
   if (endRow <= startRow) return endRow;
   if (selection.endOffset !== lineStart(map, endRow)) return endRow;
@@ -268,6 +391,293 @@ function mergeRowGroups(groups: readonly RowGroup[]): readonly RowGroup[] {
   }
 
   return merged;
+}
+
+function lineCommentEdits(
+  map: LineMap,
+  rows: readonly number[],
+  lineToken: string,
+): readonly TextEdit[] {
+  if (shouldUncommentLineComments(map, rows, lineToken)) {
+    return rows
+      .map((row) => lineCommentDeleteRange(map, row, lineToken))
+      .filter((range): range is OffsetRange => range !== null)
+      .map((range) => rangeToEdit(range, ""));
+  }
+
+  return rows.map((row) => {
+    const offset = firstNonWhitespaceOffset(map, row);
+    return { from: offset, to: offset, text: `${lineToken} ` };
+  });
+}
+
+function shouldUncommentLineComments(
+  map: LineMap,
+  rows: readonly number[],
+  lineToken: string,
+): boolean {
+  const contentRows = rows.filter((row) => !isBlankLine(map, row));
+  if (contentRows.length === 0) return false;
+  return contentRows.every((row) => lineCommentDeleteRange(map, row, lineToken) !== null);
+}
+
+function lineCommentDeleteRange(map: LineMap, row: number, lineToken: string): OffsetRange | null {
+  const start = firstNonWhitespaceOffset(map, row);
+  if (!map.text.startsWith(lineToken, start)) return null;
+
+  const tokenEnd = start + lineToken.length;
+  const end = map.text[tokenEnd] === " " ? tokenEnd + 1 : tokenEnd;
+  return { start, end };
+}
+
+function blockCommentLinesAction(
+  text: string,
+  selections: readonly ResolvedSelection[],
+  tokens: BlockCommentTokens,
+): EditorEditActionResult {
+  const map = createLineMap(text);
+  const ranges = rowsForSelections(map, selections).map((row) => lineContentRange(map, row));
+  const uncommentParts = ranges.map((range) => blockUncommentParts(text, range, tokens));
+  const edits = shouldUncommentBlockRanges(uncommentParts)
+    ? uncommentParts
+        .filter((part): part is BlockUncommentParts => part !== null)
+        .flatMap((part) => [rangeToEdit(part.open, ""), rangeToEdit(part.close, "")])
+    : ranges.flatMap((range) => blockCommentEditsForRange(range, tokens));
+  return editActionResultFromEdits(selections, edits, "input.commentLine");
+}
+
+function blockCommentRangesAction(
+  text: string,
+  selections: readonly ResolvedSelection[],
+  ranges: readonly OffsetRange[],
+  tokens: BlockCommentTokens,
+  timingName: string,
+): EditorEditActionResult {
+  const uncommentParts = ranges.map((range) => blockUncommentParts(text, range, tokens));
+  if (shouldUncommentBlockRanges(uncommentParts)) {
+    return uncommentBlockRangesAction(selections, ranges, uncommentParts, timingName);
+  }
+
+  return commentBlockRangesAction(selections, ranges, tokens, timingName);
+}
+
+function shouldUncommentBlockRanges(parts: readonly (BlockUncommentParts | null)[]): boolean {
+  if (parts.length === 0) return false;
+  return parts.every((part) => part !== null);
+}
+
+function commentBlockRangesAction(
+  selections: readonly ResolvedSelection[],
+  ranges: readonly OffsetRange[],
+  tokens: BlockCommentTokens,
+  timingName: string,
+): EditorEditActionResult {
+  const edits = ranges.flatMap((range) => blockCommentEditsForRange(range, tokens));
+  const nextSelections = blockCommentSelectionsAfterAdd(selections, ranges, edits, tokens);
+
+  return {
+    edits,
+    selections: nextSelections,
+    revealOffset: nextSelections[0]?.head,
+    timingName,
+  };
+}
+
+function uncommentBlockRangesAction(
+  selections: readonly ResolvedSelection[],
+  ranges: readonly OffsetRange[],
+  parts: readonly (BlockUncommentParts | null)[],
+  timingName: string,
+): EditorEditActionResult {
+  const uncommentParts = parts.filter((part): part is BlockUncommentParts => part !== null);
+  const edits = uncommentParts.flatMap((part) => [
+    rangeToEdit(part.open, ""),
+    rangeToEdit(part.close, ""),
+  ]);
+  const nextSelections = blockCommentSelectionsAfterRemove(selections, ranges, edits);
+
+  return {
+    edits,
+    selections: nextSelections,
+    revealOffset: nextSelections[0]?.head,
+    timingName,
+  };
+}
+
+function blockCommentEditsForRange(
+  range: OffsetRange,
+  tokens: BlockCommentTokens,
+): readonly TextEdit[] {
+  const openText = blockCommentOpenText(tokens);
+  const closeText = blockCommentCloseText(tokens);
+  if (range.start === range.end) {
+    return [{ from: range.start, to: range.start, text: `${openText}${closeText}` }];
+  }
+
+  return [
+    { from: range.start, to: range.start, text: openText },
+    { from: range.end, to: range.end, text: closeText },
+  ];
+}
+
+function blockUncommentParts(
+  text: string,
+  range: OffsetRange,
+  tokens: BlockCommentTokens,
+): BlockUncommentParts | null {
+  return (
+    blockUncommentPartsInsideRange(text, range, tokens) ??
+    blockUncommentPartsAroundRange(text, range, tokens)
+  );
+}
+
+function blockUncommentPartsInsideRange(
+  text: string,
+  range: OffsetRange,
+  tokens: BlockCommentTokens,
+): BlockUncommentParts | null {
+  if (!text.startsWith(tokens.open, range.start)) return null;
+
+  const closeStart = range.end - tokens.close.length;
+  if (closeStart < range.start + tokens.open.length) return null;
+  if (!text.startsWith(tokens.close, closeStart)) return null;
+
+  const openEnd = range.start + tokens.open.length;
+  const openDeleteEnd = text[openEnd] === " " ? openEnd + 1 : openEnd;
+  const closeDeleteStart = blockCloseDeleteStart(text, closeStart, openDeleteEnd);
+  return {
+    open: { start: range.start, end: openDeleteEnd },
+    close: { start: closeDeleteStart, end: range.end },
+  };
+}
+
+function blockUncommentPartsAroundRange(
+  text: string,
+  range: OffsetRange,
+  tokens: BlockCommentTokens,
+): BlockUncommentParts | null {
+  const openText = blockCommentOpenText(tokens);
+  const closeText = blockCommentCloseText(tokens);
+  const openStart = range.start - openText.length;
+  if (openStart < 0) return null;
+  if (!text.startsWith(openText, openStart)) return null;
+  if (!text.startsWith(closeText, range.end)) return null;
+
+  return {
+    open: { start: openStart, end: range.start },
+    close: { start: range.end, end: range.end + closeText.length },
+  };
+}
+
+function blockCloseDeleteStart(text: string, closeStart: number, openDeleteEnd: number): number {
+  if (closeStart <= openDeleteEnd) return closeStart;
+  if (text[closeStart - 1] === " ") return closeStart - 1;
+  return closeStart;
+}
+
+function blockCommentSelectionsAfterAdd(
+  selections: readonly ResolvedSelection[],
+  ranges: readonly OffsetRange[],
+  edits: readonly TextEdit[],
+  tokens: BlockCommentTokens,
+): readonly DocumentSessionEditSelection[] {
+  const openLength = blockCommentOpenText(tokens).length;
+  return selections.map((selection, index) => {
+    const range = ranges[index] ?? { start: selection.startOffset, end: selection.endOffset };
+    const start = range.start + editDeltaBeforeOffset(edits, range.start) + openLength;
+    const end =
+      range.start === range.end ? start : range.end + editDeltaBeforeOffset(edits, range.end);
+    return selectionForRange(selection, start, end);
+  });
+}
+
+function blockCommentSelectionsAfterRemove(
+  selections: readonly ResolvedSelection[],
+  ranges: readonly OffsetRange[],
+  edits: readonly TextEdit[],
+): readonly DocumentSessionEditSelection[] {
+  return selections.map((selection, index) => {
+    if (selection.collapsed) {
+      const offset = offsetAfterEdits(selection.headOffset, edits);
+      return { anchor: offset, head: offset };
+    }
+
+    const range = ranges[index] ?? { start: selection.startOffset, end: selection.endOffset };
+    const start = range.start + editDeltaBeforeOffset(edits, range.start);
+    const end = range.end + editDeltaBeforeOffset(edits, range.end);
+    return selectionForRange(selection, start, end);
+  });
+}
+
+function selectionForRange(
+  selection: ResolvedSelection,
+  start: number,
+  end: number,
+): DocumentSessionEditSelection {
+  if (selection.reversed) return { anchor: end, head: start };
+  return { anchor: start, head: end };
+}
+
+function blockCommentRangeForSelection(map: LineMap, selection: ResolvedSelection): OffsetRange {
+  if (!selection.collapsed) return { start: selection.startOffset, end: selection.endOffset };
+
+  const row = rowAtOffset(map, selection.headOffset);
+  return lineContentRange(map, row);
+}
+
+function lineContentRange(map: LineMap, row: number): OffsetRange {
+  return { start: firstNonWhitespaceOffset(map, row), end: lineEnd(map, row) };
+}
+
+function blockCommentOpenText(tokens: BlockCommentTokens): string {
+  if (tokens.open === "<!--") return "<!-- ";
+  return `${tokens.open} `;
+}
+
+function blockCommentCloseText(tokens: BlockCommentTokens): string {
+  if (tokens.close === "-->") return " -->";
+  return ` ${tokens.close}`;
+}
+
+function indentLineEdits(
+  map: LineMap,
+  rows: readonly number[],
+  indentText: string,
+): readonly TextEdit[] {
+  if (indentText.length === 0) return [];
+  return rows.map((row) => {
+    const start = lineStart(map, row);
+    return { from: start, to: start, text: indentText };
+  });
+}
+
+function outdentLineEdits(
+  map: LineMap,
+  rows: readonly number[],
+  tabSize: number,
+): readonly TextEdit[] {
+  return rows
+    .map((row) => outdentLineEdit(map, row, tabSize))
+    .filter((edit): edit is TextEdit => edit !== null);
+}
+
+function outdentLineEdit(map: LineMap, row: number, tabSize: number): TextEdit | null {
+  const start = lineStart(map, row);
+  const end = lineEnd(map, row);
+  if (start >= end) return null;
+
+  const prefix = map.text.slice(start, Math.min(end, start + tabSize));
+  const length = outdentLength(prefix, tabSize);
+  if (length === 0) return null;
+  return { from: start, to: start + length, text: "" };
+}
+
+function outdentLength(text: string, tabSize: number): number {
+  if (text[0] === "\t") return 1;
+
+  let spaces = 0;
+  while (spaces < text.length && spaces < tabSize && text[spaces] === " ") spaces += 1;
+  return spaces;
 }
 
 function deleteRangeForGroup(map: LineMap, group: RowGroup): OffsetRange {
@@ -364,11 +774,7 @@ function moveDownReplacementText(map: LineMap, group: RowGroup, nextRow: number)
   return `${lineContentText(map, nextRow)}\n${blockContentText(map, group)}`;
 }
 
-function insertLineEdit(
-  map: LineMap,
-  group: RowGroup,
-  direction: "before" | "after",
-): TextEdit {
+function insertLineEdit(map: LineMap, group: RowGroup, direction: "before" | "after"): TextEdit {
   const offset =
     direction === "before" ? lineStart(map, group.startRow) : lineEnd(map, group.endRow);
   return { from: offset, to: offset, text: "\n" };
@@ -513,6 +919,62 @@ function applyTextEdits(text: string, edits: readonly TextEdit[]): string {
   return next;
 }
 
+function editActionResultFromEdits(
+  selections: readonly ResolvedSelection[],
+  edits: readonly TextEdit[],
+  timingName: string,
+): EditorEditActionResult {
+  const nextSelections = selectionsAfterEdits(selections, edits);
+
+  return {
+    edits,
+    selections: nextSelections,
+    revealOffset: nextSelections[0]?.head,
+    timingName,
+  };
+}
+
+function selectionsAfterEdits(
+  selections: readonly ResolvedSelection[],
+  edits: readonly TextEdit[],
+): readonly DocumentSessionEditSelection[] {
+  return selections.map((selection) => ({
+    anchor: offsetAfterEdits(selection.anchorOffset, edits),
+    head: offsetAfterEdits(selection.headOffset, edits),
+  }));
+}
+
+function offsetAfterEdits(offset: number, edits: readonly TextEdit[]): number {
+  let delta = 0;
+  const sorted = edits.toSorted((left, right) => left.from - right.from || left.to - right.to);
+
+  for (const edit of sorted) {
+    if (offset < edit.from) break;
+    if (offset <= edit.to && edit.from !== edit.to) return edit.from + delta;
+    delta += edit.text.length - (edit.to - edit.from);
+  }
+
+  return offset + delta;
+}
+
+function editDeltaBeforeOffset(edits: readonly TextEdit[], offset: number): number {
+  let delta = 0;
+
+  for (const edit of edits) {
+    if (edit.from >= offset) continue;
+    delta += edit.text.length - (edit.to - edit.from);
+  }
+
+  return delta;
+}
+
+function commentTokensForLanguage(languageId: string | null | undefined): CommentTokens {
+  if (!languageId) return DEFAULT_COMMENT_TOKENS;
+
+  const normalized = languageId.trim().toLowerCase();
+  return COMMENT_TOKENS_BY_LANGUAGE[normalized] ?? DEFAULT_COMMENT_TOKENS;
+}
+
 function rowAtOffset(map: LineMap, offset: number): number {
   const clamped = clamp(offset, 0, map.text.length);
   let row = 0;
@@ -550,6 +1012,21 @@ function lineText(map: LineMap, row: number): string {
 
 function lineContentText(map: LineMap, row: number): string {
   return map.text.slice(lineStart(map, row), lineEnd(map, row));
+}
+
+function firstNonWhitespaceOffset(map: LineMap, row: number): number {
+  const end = lineEnd(map, row);
+
+  for (let offset = lineStart(map, row); offset < end; offset += 1) {
+    const char = map.text[offset];
+    if (char !== " " && char !== "\t") return offset;
+  }
+
+  return end;
+}
+
+function isBlankLine(map: LineMap, row: number): boolean {
+  return firstNonWhitespaceOffset(map, row) === lineEnd(map, row);
 }
 
 function blockStart(map: LineMap, group: RowGroup): number {

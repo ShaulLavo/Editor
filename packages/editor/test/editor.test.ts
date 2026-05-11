@@ -1192,9 +1192,7 @@ describe("Editor", () => {
 
       expect(editor.dispatchCommand("deleteWordLeft")).toBe(true);
       expect(session.getText()).toBe("alpha gamma");
-      expect(resolvedSelectionRanges(session)).toEqual([
-        { anchor: 6, head: 6, start: 6, end: 6 },
-      ]);
+      expect(resolvedSelectionRanges(session)).toEqual([{ anchor: 6, head: 6, start: 6, end: 6 }]);
 
       expect(editor.dispatchCommand("deleteWordRight")).toBe(true);
       expect(session.getText()).toBe("alpha ");
@@ -1268,6 +1266,60 @@ describe("Editor", () => {
       expect(afterSession.getText()).toBe("a\nb\n\nc");
       expect(resolvedSelectionRanges(afterSession)).toEqual([
         { anchor: 4, head: 4, start: 4, end: 4 },
+      ]);
+    });
+
+    it("toggles line comments through explicit editor commands", () => {
+      const text = "const a = 1;\n  const b = 2;\nconst c = 3;";
+      const session = createDocumentSession(text);
+      session.setSelection(0, text.indexOf("const c"));
+      editor.attachSession(session, { languageId: "typescript" });
+
+      expect(editor.dispatchCommand("editor.action.commentLine")).toBe(true);
+      expect(session.getText()).toBe("// const a = 1;\n  // const b = 2;\nconst c = 3;");
+
+      expect(editor.dispatchCommand("editor.action.commentLine")).toBe(true);
+      expect(session.getText()).toBe(text);
+    });
+
+    it("toggles block comments through explicit editor commands", () => {
+      const text = "const value = 1;";
+      const start = text.indexOf("value");
+      const end = start + "value".length;
+      const session = createDocumentSession(text);
+      session.setSelection(start, end);
+      editor.attachSession(session, { languageId: "typescript" });
+
+      expect(editor.dispatchCommand("editor.action.blockComment")).toBe(true);
+      expect(session.getText()).toBe("const /* value */ = 1;");
+      expect(resolvedSelectionRanges(session)).toEqual([
+        { anchor: start + 3, head: end + 3, start: start + 3, end: end + 3 },
+      ]);
+
+      expect(editor.dispatchCommand("editor.action.blockComment")).toBe(true);
+      expect(session.getText()).toBe(text);
+      expect(resolvedSelectionRanges(session)).toEqual([{ anchor: start, head: end, start, end }]);
+    });
+
+    it("indents and outdents whole lines through explicit editor commands", () => {
+      const indentSession = createDocumentSession("abc");
+      indentSession.setSelection(1);
+      editor.attachSession(indentSession);
+
+      expect(editor.dispatchCommand("editor.action.indentLines")).toBe(true);
+      expect(indentSession.getText()).toBe("\tabc");
+      expect(resolvedSelectionRanges(indentSession)).toEqual([
+        { anchor: 2, head: 2, start: 2, end: 2 },
+      ]);
+
+      const outdentSession = createDocumentSession("    abc");
+      outdentSession.setSelection(5);
+      editor.attachSession(outdentSession);
+
+      expect(editor.dispatchCommand("editor.action.outdentLines")).toBe(true);
+      expect(outdentSession.getText()).toBe("abc");
+      expect(resolvedSelectionRanges(outdentSession)).toEqual([
+        { anchor: 1, head: 1, start: 1, end: 1 },
       ]);
     });
 
@@ -1606,6 +1658,31 @@ describe("Editor", () => {
       expect(container.querySelectorAll(".editor-virtualized-caret:not([hidden])")).toHaveLength(1);
     });
 
+    it("inserts cursors above and below through explicit editor commands", () => {
+      const belowSession = createDocumentSession("abc\ndef\nghi");
+      belowSession.setSelection(5);
+      editor.attachSession(belowSession);
+      mockEditorViewport(editorRoot(), 80, 60);
+
+      expect(editor.dispatchCommand("editor.action.insertCursorBelow")).toBe(true);
+      expect(resolvedSelectionRanges(belowSession)).toEqual([
+        { anchor: 5, head: 5, start: 5, end: 5 },
+        { anchor: 9, head: 9, start: 9, end: 9 },
+      ]);
+
+      const aboveSession = createDocumentSession("abc\ndef\nghi");
+      aboveSession.setSelections([{ anchor: 5 }, { anchor: 9 }]);
+      editor.attachSession(aboveSession);
+      mockEditorViewport(editorRoot(), 80, 60);
+
+      expect(editor.dispatchCommand("editor.action.insertCursorAbove")).toBe(true);
+      expect(resolvedSelectionRanges(aboveSession)).toEqual([
+        { anchor: 1, head: 1, start: 1, end: 1 },
+        { anchor: 5, head: 5, start: 5, end: 5 },
+        { anchor: 9, head: 9, start: 9, end: 9 },
+      ]);
+    });
+
     it("selects the current word then adds the next exact occurrence with Mod+D", () => {
       const session = createDocumentSession("foo bar foo");
       session.setSelection(1);
@@ -1630,6 +1707,51 @@ describe("Editor", () => {
         { start: 8, end: 11 },
       ]);
       expect(container.querySelectorAll(".editor-virtualized-caret")).toHaveLength(2);
+    });
+
+    it("selects all exact occurrences with VS Code occurrence command ids", () => {
+      const highlightsSession = createDocumentSession("foo bar foo foo");
+      highlightsSession.setSelection(1);
+      editor.attachSession(highlightsSession);
+
+      expect(editor.dispatchCommand("editor.action.selectHighlights")).toBe(true);
+      expect(resolvedSelectionRanges(highlightsSession)).toEqual([
+        { anchor: 0, head: 3, start: 0, end: 3 },
+        { anchor: 8, head: 11, start: 8, end: 11 },
+        { anchor: 12, head: 15, start: 12, end: 15 },
+      ]);
+
+      const changeAllSession = createDocumentSession("foo bar foo bar");
+      changeAllSession.setSelection(4, 7);
+      editor.attachSession(changeAllSession);
+
+      expect(editor.dispatchCommand("editor.action.changeAll")).toBe(true);
+      expect(resolvedSelectionRanges(changeAllSession)).toEqual([
+        { anchor: 4, head: 7, start: 4, end: 7 },
+        { anchor: 12, head: 15, start: 12, end: 15 },
+      ]);
+    });
+
+    it("moves the last selection to the next exact occurrence", () => {
+      const session = createDocumentSession("foo bar foo foo");
+      session.setSelection(1);
+      editor.attachSession(session);
+
+      expect(editor.dispatchCommand("editor.action.moveSelectionToNextFindMatch")).toBe(true);
+      expect(resolvedSelectionRanges(session)).toEqual([
+        { anchor: 8, head: 11, start: 8, end: 11 },
+      ]);
+
+      session.setSelections([
+        { anchor: 0, head: 3 },
+        { anchor: 8, head: 11 },
+      ]);
+
+      expect(editor.dispatchCommand("editor.action.moveSelectionToNextFindMatch")).toBe(true);
+      expect(resolvedSelectionRanges(session)).toEqual([
+        { anchor: 0, head: 3, start: 0, end: 3 },
+        { anchor: 12, head: 15, start: 12, end: 15 },
+      ]);
     });
 
     it("reveals the wrapped occurrence when Mod+D loops to the top", () => {
