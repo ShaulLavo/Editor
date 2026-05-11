@@ -2808,6 +2808,105 @@ describe("Editor", () => {
       expect(editorRoot().textContent).toContain("  y();");
     });
 
+    it("folds, unfolds, and toggles syntax folds through the editor API", async () => {
+      const text = "if (x) {\n  y();\n}\nz();";
+      const foldEnd = text.indexOf("\nz();");
+      editor.dispose();
+      editor = new Editor(container, { plugins: withTestGutterPlugins() });
+      setEditorSyntaxSessionFactory(() =>
+        createMockSyntaxSession({
+          refresh: async () =>
+            createSyntaxResult(
+              [],
+              [
+                {
+                  startIndex: 0,
+                  endIndex: foldEnd,
+                  startLine: 0,
+                  endLine: 2,
+                  type: "statement_block",
+                  languageId: "typescript",
+                },
+              ],
+            ),
+        }),
+      );
+
+      editor.openDocument({ documentId: "main.ts", languageId: "typescript", text });
+      await flushMicrotasks();
+
+      expect(editor.fold(0)).toBe(true);
+      expect(foldToggle().dataset.editorFoldState).toBe("collapsed");
+      expect(editorRoot().textContent).not.toContain("  y();");
+
+      expect(editor.fold(0)).toBe(false);
+      expect(editor.unfold(0)).toBe(true);
+      expect(foldToggle().dataset.editorFoldState).toBe("expanded");
+      expect(editorRoot().textContent).toContain("  y();");
+
+      editor.setSelection(0);
+      expect(editor.toggleFold()).toBe(true);
+      expect(foldToggle().dataset.editorFoldState).toBe("collapsed");
+      expect(editor.toggleFold()).toBe(true);
+      expect(foldToggle().dataset.editorFoldState).toBe("expanded");
+    });
+
+    it("folds and unfolds all syntax folds through the editor API", async () => {
+      const text = "if (x) {\n  y();\n}\nwhile (z) {\n  q();\n}\n";
+      const secondStart = text.indexOf("while");
+      const events: ViewContributionEvent[] = [];
+      editor.dispose();
+      editor = new Editor(container, {
+        plugins: withTestGutterPlugins(createViewContributionPlugin(events)),
+      });
+      setEditorSyntaxSessionFactory(() =>
+        createMockSyntaxSession({
+          refresh: async () =>
+            createSyntaxResult(
+              [],
+              [
+                {
+                  startIndex: 0,
+                  endIndex: secondStart - 1,
+                  startLine: 0,
+                  endLine: 2,
+                  type: "statement_block",
+                  languageId: "typescript",
+                },
+                {
+                  startIndex: secondStart,
+                  endIndex: text.length,
+                  startLine: 3,
+                  endLine: 5,
+                  type: "statement_block",
+                  languageId: "typescript",
+                },
+              ],
+            ),
+        }),
+      );
+
+      editor.openDocument({ documentId: "main.ts", languageId: "typescript", text });
+      await flushMicrotasks();
+
+      expect(editor.foldAll()).toBe(true);
+      expect(events.at(-1)?.snapshot?.foldMarkers.map((marker) => marker.collapsed)).toEqual([
+        true,
+        true,
+      ]);
+      expect(editorRoot().textContent).not.toContain("  y();");
+      expect(editor.foldAll()).toBe(false);
+
+      expect(editor.unfoldAll()).toBe(true);
+      expect(events.at(-1)?.snapshot?.foldMarkers.map((marker) => marker.collapsed)).toEqual([
+        false,
+        false,
+      ]);
+      expect(editorRoot().textContent).toContain("  y();");
+      expect(editorRoot().textContent).toContain("  q();");
+      expect(editor.unfoldAll()).toBe(false);
+    });
+
     it("hides fold controls on rows without fold candidates", async () => {
       const text = "if (x) {\n  y();\n}\nz();";
       const foldEnd = text.indexOf("\nz();");

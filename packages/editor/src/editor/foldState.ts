@@ -52,15 +52,62 @@ export class EditorFoldState {
     this.setSyntaxFolds(projection.folds);
   }
 
-  public toggle(marker: VirtualizedFoldMarker): void {
-    if (this.collapsedFoldKeys.has(marker.key)) {
-      this.collapsedFoldKeys.delete(marker.key);
+  public toggle(marker: VirtualizedFoldMarker): boolean {
+    return this.toggleKey(marker.key);
+  }
+
+  public toggleFold(fold: FoldRange): boolean {
+    return this.toggleKey(foldRangeKey(fold));
+  }
+
+  public fold(fold: FoldRange): boolean {
+    const key = foldRangeKey(fold);
+    if (this.collapsedFoldKeys.has(key)) return false;
+
+    this.collapsedFoldKeys.add(key);
+    this.syncFoldView();
+    return true;
+  }
+
+  public unfold(fold: FoldRange): boolean {
+    const key = foldRangeKey(fold);
+    if (!this.collapsedFoldKeys.delete(key)) return false;
+
+    this.syncFoldView();
+    return true;
+  }
+
+  public foldAll(): boolean {
+    const nextKeys = new Set(this.syntaxFolds.map((fold) => foldRangeKey(fold)));
+    if (setsEqual(this.collapsedFoldKeys, nextKeys)) return false;
+
+    this.collapsedFoldKeys = nextKeys;
+    this.syncFoldView();
+    return true;
+  }
+
+  public unfoldAll(): boolean {
+    if (this.collapsedFoldKeys.size === 0) return false;
+
+    this.collapsedFoldKeys.clear();
+    this.syncFoldView();
+    return true;
+  }
+
+  public isCollapsed(fold: FoldRange): boolean {
+    return this.collapsedFoldKeys.has(foldRangeKey(fold));
+  }
+
+  private toggleKey(key: string): boolean {
+    if (this.collapsedFoldKeys.has(key)) {
+      this.collapsedFoldKeys.delete(key);
       this.syncFoldView();
-      return;
+      return true;
     }
 
-    this.collapsedFoldKeys.add(marker.key);
+    this.collapsedFoldKeys.add(key);
     this.syncFoldView();
+    return true;
   }
 
   private remapCollapsedFoldKeys(keyMap: ReadonlyMap<string, string>): void {
@@ -99,4 +146,15 @@ export class EditorFoldState {
     const foldMap = collapsedFolds.length > 0 ? createFoldMap(snapshot, collapsedFolds) : null;
     this.view.setFoldState(markers, foldMap);
   }
+}
+
+function setsEqual(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  if (left.size !== right.size) return false;
+
+  for (const value of left) {
+    if (right.has(value)) continue;
+    return false;
+  }
+
+  return true;
 }
