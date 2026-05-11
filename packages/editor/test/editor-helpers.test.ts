@@ -116,22 +116,58 @@ describe("navigation helpers", () => {
 });
 
 describe("default editor keybindings", () => {
-  it("does not bind advanced edit actions by default", () => {
-    const commands = defaultEditorKeyBindings().map((binding) => binding.command);
+  it("binds VS Code edit actions by default", () => {
+    const commands = defaultEditorKeyBindings("mac").map((binding) => binding.command);
 
-    expect(commands).not.toContain("deleteWordLeft");
-    expect(commands).not.toContain("deleteWordRight");
-    expect(commands).not.toContain("editor.action.commentLine");
-    expect(commands).not.toContain("editor.action.blockComment");
-    expect(commands).not.toContain("editor.action.indentLines");
-    expect(commands).not.toContain("editor.action.outdentLines");
-    expect(commands).not.toContain("editor.action.deleteLines");
-    expect(commands).not.toContain("editor.action.copyLinesUpAction");
-    expect(commands).not.toContain("editor.action.copyLinesDownAction");
-    expect(commands).not.toContain("editor.action.moveLinesUpAction");
-    expect(commands).not.toContain("editor.action.moveLinesDownAction");
-    expect(commands).not.toContain("editor.action.insertLineBefore");
-    expect(commands).not.toContain("editor.action.insertLineAfter");
+    expect(commands).toContain("deleteWordLeft");
+    expect(commands).toContain("deleteWordRight");
+    expect(commands).toContain("editor.action.commentLine");
+    expect(commands).toContain("editor.action.blockComment");
+    expect(commands).toContain("editor.action.indentLines");
+    expect(commands).toContain("editor.action.outdentLines");
+    expect(commands).toContain("editor.action.deleteLines");
+    expect(commands).toContain("editor.action.copyLinesUpAction");
+    expect(commands).toContain("editor.action.copyLinesDownAction");
+    expect(commands).toContain("editor.action.moveLinesUpAction");
+    expect(commands).toContain("editor.action.moveLinesDownAction");
+    expect(commands).toContain("editor.action.insertLineBefore");
+    expect(commands).toContain("editor.action.insertLineAfter");
+  });
+
+  it("binds VS Code multi-cursor actions without chord-only commands", () => {
+    const commands = defaultEditorKeyBindings("linux").map((binding) => binding.command);
+
+    expect(commands).toContain("editor.action.insertCursorAbove");
+    expect(commands).toContain("editor.action.insertCursorBelow");
+    expect(commands).toContain("editor.action.selectHighlights");
+    expect(commands).toContain("editor.action.changeAll");
+    expect(commands).not.toContain("editor.action.moveSelectionToNextFindMatch");
+  });
+
+  it("uses VS Code platform-specific edit shortcut shapes", () => {
+    expect(defaultEditorKeyBindings("mac")).toContainEqual(
+      expect.objectContaining({
+        command: "deleteWordLeft",
+        hotkey: expect.objectContaining({ alt: true, key: "Backspace" }),
+      }),
+    );
+    expect(defaultEditorKeyBindings("linux")).toContainEqual(
+      expect.objectContaining({
+        command: "editor.action.copyLinesUpAction",
+        hotkey: expect.objectContaining({
+          alt: true,
+          key: "ArrowUp",
+          mod: true,
+          shift: true,
+        }),
+      }),
+    );
+    expect(defaultEditorKeyBindings("windows")).toContainEqual(
+      expect.objectContaining({
+        command: "editor.action.blockComment",
+        hotkey: expect.objectContaining({ alt: true, key: "A", shift: true }),
+      }),
+    );
   });
 });
 

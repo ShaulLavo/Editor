@@ -115,7 +115,70 @@ function editingBindings(platform: EditorPlatform): readonly EditorKeyBinding[] 
     { hotkey: key("Enter", { mod: true, alt: true }), command: "replaceAll" },
     { hotkey: key("Z", { mod: true }), command: "undo" },
     { hotkey: key("Z", { mod: true, shift: true }), command: "redo" },
+    ...advancedEditingBindings(platform),
     ...platformBindings,
+  ];
+}
+
+function advancedEditingBindings(platform: EditorPlatform): readonly EditorKeyBinding[] {
+  const copyLineModifier =
+    platform === "linux" ? { mod: true, alt: true, shift: true } : { alt: true, shift: true };
+  const blockCommentModifier =
+    platform === "linux" ? { mod: true, shift: true } : { alt: true, shift: true };
+  const wordDeleteModifier = platform === "mac" ? { alt: true } : { ctrl: true };
+  return [
+    { hotkey: key("Backspace", wordDeleteModifier), command: "deleteWordLeft" },
+    { hotkey: key("Delete", wordDeleteModifier), command: "deleteWordRight" },
+    { hotkey: key("K", { mod: true, shift: true }), command: "editor.action.deleteLines" },
+    { hotkey: key("ArrowUp", copyLineModifier), command: "editor.action.copyLinesUpAction" },
+    { hotkey: key("ArrowDown", copyLineModifier), command: "editor.action.copyLinesDownAction" },
+    { hotkey: key("ArrowUp", { alt: true }), command: "editor.action.moveLinesUpAction" },
+    { hotkey: key("ArrowDown", { alt: true }), command: "editor.action.moveLinesDownAction" },
+    { hotkey: key("Enter", { mod: true, shift: true }), command: "editor.action.insertLineBefore" },
+    { hotkey: key("Enter", { mod: true }), command: "editor.action.insertLineAfter" },
+    { hotkey: key("/", { mod: true }), command: "editor.action.commentLine" },
+    { hotkey: key("A", blockCommentModifier), command: "editor.action.blockComment" },
+    { hotkey: key("]", { mod: true }), command: "editor.action.indentLines" },
+    { hotkey: key("[", { mod: true }), command: "editor.action.outdentLines" },
+    ...multiCursorBindings(platform),
+  ];
+}
+
+function multiCursorBindings(platform: EditorPlatform): readonly EditorKeyBinding[] {
+  if (platform === "linux") {
+    return [
+      {
+        hotkey: key("ArrowUp", { alt: true, shift: true }),
+        command: "editor.action.insertCursorAbove",
+      },
+      {
+        hotkey: key("ArrowDown", { alt: true, shift: true }),
+        command: "editor.action.insertCursorBelow",
+      },
+      {
+        hotkey: key("ArrowUp", { mod: true, shift: true }),
+        command: "editor.action.insertCursorAbove",
+      },
+      {
+        hotkey: key("ArrowDown", { mod: true, shift: true }),
+        command: "editor.action.insertCursorBelow",
+      },
+      { hotkey: key("L", { mod: true, shift: true }), command: "editor.action.selectHighlights" },
+      { hotkey: key("F2", { mod: true }), command: "editor.action.changeAll" },
+    ];
+  }
+
+  return [
+    {
+      hotkey: key("ArrowUp", { mod: true, alt: true }),
+      command: "editor.action.insertCursorAbove",
+    },
+    {
+      hotkey: key("ArrowDown", { mod: true, alt: true }),
+      command: "editor.action.insertCursorBelow",
+    },
+    { hotkey: key("L", { mod: true, shift: true }), command: "editor.action.selectHighlights" },
+    { hotkey: key("F2", { mod: true }), command: "editor.action.changeAll" },
   ];
 }
 
