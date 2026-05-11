@@ -11,16 +11,6 @@ export type DiffFileChangeType = "change" | "add" | "delete" | "rename" | "renam
 
 export type DiffLineType = "context" | "addition" | "deletion";
 
-export type DiffHunkLocation = {
-  readonly path: string;
-  readonly fileIndex: number;
-  readonly hunkIndex: number;
-};
-
-export type DiffHunkNavigationOptions = {
-  readonly wrap?: boolean;
-};
-
 export type DiffRenderRowType =
   | "context"
   | "addition"
@@ -50,6 +40,13 @@ export type DiffHunk = {
   readonly newLines: number;
   readonly header: string;
   readonly lines: readonly DiffHunkLine[];
+};
+
+export type DiffHunkLocation = {
+  readonly index: number;
+  readonly row: number;
+  readonly path: string;
+  readonly hunk: DiffHunk;
 };
 
 export type DiffFile = {
@@ -94,6 +91,9 @@ export type DiffRenderRow = {
   readonly oldLineNumber?: number;
   readonly newLineNumber?: number;
   readonly hunkIndex?: number;
+  readonly expanded?: boolean;
+  readonly expandable?: boolean;
+  readonly skippedLines?: number;
   readonly inlineRanges?: readonly DiffInlineRange[];
 };
 
@@ -119,8 +119,10 @@ export type DiffSplitPaneOptions = {
 export type DiffViewOptions = {
   readonly mode?: DiffViewMode;
   readonly lineHeight?: number;
+  readonly overscan?: number;
   readonly tabSize?: number;
   readonly syntaxHighlight?: boolean;
   readonly theme?: string;
+  readonly showFileList?: boolean;
   readonly splitPane?: DiffSplitPaneOptions;
 };

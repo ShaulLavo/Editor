@@ -26,7 +26,6 @@ import {
   bufferRowForVirtualRow,
   displayRowKind,
   getRowHeight,
-  lineEndOffset,
   lineStartOffset,
   lineText,
   rowForOffset,
@@ -42,6 +41,8 @@ import type {
   VirtualizedFoldMarker,
   VirtualizedTextChunk,
   VirtualizedTextChunkPart,
+  VirtualizedTextRowDecoration,
+  VirtualizedTextRenderMode,
 } from "./virtualizedTextViewTypes";
 import type { VirtualizedTextViewInternal } from "./virtualizedTextViewInternals";
 import {
@@ -61,6 +62,22 @@ import {
 } from "./virtualizedTextViewHiddenCharacters";
 
 const GUTTER_CELL_CLASS = "editor-virtualized-gutter-cell";
+const CURSOR_LINE_ROW_CLASS = "editor-virtualized-cursor-line-row";
+const CURSOR_LINE_GUTTER_CLASS = "editor-virtualized-cursor-line-gutter";
+const gutterCursorLineStates = new WeakMap<HTMLElement, boolean>();
+
+type RowUpdatePass = {
+  readonly cursorBufferRow: number | null;
+  readonly cursorVirtualRow: number | null;
+  readonly cursorLineHighlight: VirtualizedTextViewInternal["cursorLineHighlight"];
+  readonly foldMarkersAvailable: boolean;
+  readonly lineCount: number;
+  readonly toggleFold: EditorGutterRowContext["toggleFold"];
+};
+
+type RowUpdateState = EditorGutterRowContext & {
+  readonly cursorVirtualLine: boolean;
+};
 
 export function rowsKey(
   view: VirtualizedTextViewInternal,
@@ -74,9 +91,10 @@ export function renderRows(
   snapshot: FixedRowVirtualizerSnapshot,
   onRemoveSlot: (rowSlotId: number) => void,
 ): void {
+  const updatePass = createRowUpdatePass(view);
   applyTotalHeight(view, snapshot);
   updateContentWidth(view, snapshot.virtualItems);
-  reconcileRows(view, snapshot.virtualItems, snapshot, onRemoveSlot);
+  reconcileRows(view, snapshot.virtualItems, snapshot, updatePass, onRemoveSlot);
   renderHiddenCharacters(view);
 }
 
@@ -84,11 +102,12 @@ export function reconcileRows(
   view: VirtualizedTextViewInternal,
   items: readonly FixedRowVirtualItem[],
   snapshot: FixedRowVirtualizerSnapshot,
+  updatePass: RowUpdatePass,
   onRemoveSlot: (rowSlotId: number) => void,
 ): void {
   const reusableRows = releaseRowsOutside(view, items);
   for (const item of items) {
-    mountOrUpdateRow(view, item, reusableRows, snapshot);
+    mountOrUpdateRow(view, item, reusableRows, snapshot, updatePass);
   }
 
   removeReusableRows(view, reusableRows, onRemoveSlot);
@@ -99,17 +118,18 @@ function mountOrUpdateRow(
   item: FixedRowVirtualItem,
   reusableRows: MountedVirtualizedTextRow[],
   snapshot: FixedRowVirtualizerSnapshot,
+  updatePass: RowUpdatePass,
 ): void {
   const existing = view.rowElements.get(item.index);
   if (existing) {
-    updateRow(view, existing, item, snapshot);
+    updateRow(view, existing, item, snapshot, updatePass);
     return;
   }
 
   const row = reusableRows.pop() ?? view.rowPool.pop() ?? createRow(view);
   const gutterParent = view.gutterContributions.length > 0 ? view.gutterElement : null;
   restoreRowElements(row, view.spacer, gutterParent);
-  updateRow(view, row, item, snapshot);
+  updateRow(view, row, item, snapshot, updatePass);
   view.rowElements.set(item.index, row);
 }
 
@@ -158,6 +178,7 @@ function createRow(view: VirtualizedTextViewInternal): MountedVirtualizedTextRow
     element,
     gutterElement,
     gutterCells,
+    gutterCellList: [...gutterCells.values()],
     leftSpacerElement,
     selectionLayerElement,
     foldPlaceholderElement,
@@ -165,6 +186,11 @@ function createRow(view: VirtualizedTextViewInternal): MountedVirtualizedTextRow
     textNode,
     selectionLayerKey: "",
     hiddenCharactersKey: "",
+    rowDecorationClassName: "",
+    rowDecorationGutterClassName: "",
+    rowDecorationKey: "",
+    cursorLineContentActive: false,
+    textRenderMode: "simple",
     geometryCache: null,
   };
 }
@@ -175,17 +201,22 @@ function createGutterCells(
 ): Map<string, HTMLElement> {
   const cells = new Map<string, HTMLElement>();
   for (const contribution of view.gutterContributions) {
-    cells.set(contribution.id, createGutterCell(contribution, document));
+    cells.set(contribution.id, createGutterCell(view, contribution, document));
   }
 
   return cells;
 }
 
-function createGutterCell(contribution: EditorGutterContribution, document: Document): HTMLElement {
+function createGutterCell(
+  view: VirtualizedTextViewInternal,
+  contribution: EditorGutterContribution,
+  document: Document,
+): HTMLElement {
   const cell = contribution.createCell(document);
   cell.classList.add(GUTTER_CELL_CLASS);
   if (contribution.className) cell.classList.add(contribution.className);
   cell.dataset.editorGutterContribution = contribution.id;
+  setCachedGutterCellWidth(view, cell, contribution.id);
   return cell;
 }
 
@@ -218,6 +249,7 @@ function disposeRowGutterCells(
     if (cell) contribution.disposeCell?.(cell);
   }
   row.gutterCells.clear();
+  setGutterCellList(row, []);
 }
 
 function sameGutterContributions(
@@ -236,7 +268,7 @@ function contributionMap(
 }
 
 function syncGutterHostElement(view: VirtualizedTextViewInternal): void {
-  if (view.gutterContributions.length === 0) {
+  if (!gutterHostEnabled(view)) {
     view.gutterElement.remove();
     return;
   }
@@ -244,6 +276,10 @@ function syncGutterHostElement(view: VirtualizedTextViewInternal): void {
   if (view.gutterElement.isConnected) return;
 
   view.spacer.insertBefore(view.gutterElement, view.caretLayerElement);
+}
+
+function gutterHostEnabled(view: VirtualizedTextViewInternal): boolean {
+  return view.gutterContributions.length > 0 || view.gutterWidthProvider !== null;
 }
 
 function syncGutterRows(
@@ -287,11 +323,15 @@ function addCurrentGutterCells(
   row: MountedVirtualizedTextRow,
 ): void {
   const document = view.scrollElement.ownerDocument;
+  const cells: HTMLElement[] = [];
   for (const contribution of view.gutterContributions) {
-    const cell = row.gutterCells.get(contribution.id) ?? createGutterCell(contribution, document);
+    const cell =
+      row.gutterCells.get(contribution.id) ?? createGutterCell(view, contribution, document);
     row.gutterCells.set(contribution.id, cell);
     row.gutterElement.appendChild(cell);
+    cells.push(cell);
   }
+  setGutterCellList(row, cells);
 }
 
 function syncGutterRowElement(
@@ -308,39 +348,110 @@ function syncGutterRowElement(
   view.gutterElement.appendChild(row.gutterElement);
 }
 
+const noopToggleFold: EditorGutterRowContext["toggleFold"] = () => {};
+
+function createRowUpdatePass(view: VirtualizedTextViewInternal): RowUpdatePass {
+  return {
+    cursorBufferRow: cursorLineBufferRow(view),
+    cursorVirtualRow: cursorLineVirtualRow(view),
+    cursorLineHighlight: view.cursorLineHighlight,
+    foldMarkersAvailable: view.foldMarkerByStartRow.size > 0,
+    lineCount: view.lineStarts.length,
+    toggleFold: view.onFoldToggle ?? noopToggleFold,
+  };
+}
+
+function rowUpdateState(
+  view: VirtualizedTextViewInternal,
+  index: number,
+  updatePass: RowUpdatePass,
+): RowUpdateState {
+  const displayRow = view.displayRows[index];
+  const bufferRow = bufferRowForDisplayRow(view, index);
+  const primaryText = displayRow?.kind === "text" && displayRow.sourceStartColumn === 0;
+
+  return {
+    index,
+    bufferRow,
+    startOffset: displayRow?.startOffset ?? view.text.length,
+    endOffset: displayRow?.endOffset ?? view.text.length,
+    text: displayRow?.text ?? "",
+    kind: displayRow?.kind ?? "text",
+    primaryText,
+    cursorLine: primaryText && bufferRow === updatePass.cursorBufferRow,
+    cursorLineHighlight: updatePass.cursorLineHighlight,
+    cursorVirtualLine: index === updatePass.cursorVirtualRow,
+    foldMarker:
+      primaryText && updatePass.foldMarkersAvailable
+        ? (view.foldMarkerByStartRow.get(bufferRow) ?? null)
+        : null,
+    lineCount: updatePass.lineCount,
+    toggleFold: updatePass.toggleFold,
+  };
+}
+
+function mountedRowUpdateState(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
+  updatePass: RowUpdatePass,
+): RowUpdateState {
+  const primaryText = isPrimaryTextRow(view, row.index);
+  return {
+    index: row.index,
+    bufferRow: row.bufferRow,
+    startOffset: row.startOffset,
+    endOffset: row.endOffset,
+    text: row.text,
+    kind: row.kind,
+    primaryText,
+    cursorLine: primaryText && row.bufferRow === updatePass.cursorBufferRow,
+    cursorLineHighlight: updatePass.cursorLineHighlight,
+    cursorVirtualLine: row.index === updatePass.cursorVirtualRow,
+    foldMarker:
+      primaryText && updatePass.foldMarkersAvailable
+        ? (view.foldMarkerByStartRow.get(row.bufferRow) ?? null)
+        : null,
+    lineCount: updatePass.lineCount,
+    toggleFold: updatePass.toggleFold,
+  };
+}
+
+function bufferRowForDisplayRow(view: VirtualizedTextViewInternal, index: number): number {
+  const displayRow = view.displayRows[index];
+  if (displayRow?.kind === "text") return displayRow.bufferRow;
+  if (displayRow?.kind === "block") return displayRow.anchorBufferRow;
+  return bufferRowForVirtualRow(view, index);
+}
+
 function updateRow(
   view: VirtualizedTextViewInternal,
   row: MountedVirtualizedTextRow,
   item: FixedRowVirtualItem,
   snapshot: FixedRowVirtualizerSnapshot,
+  updatePass: RowUpdatePass,
 ): void {
   if (isRowCurrent(view, row, item, snapshot)) {
-    updateGutterRowElement(view, row, item);
+    updateGutterRowElement(view, row, item, mountedRowUpdateState(view, row, updatePass));
     return;
   }
 
-  const bufferRow = bufferRowForVirtualRow(view, item.index);
-  const text = lineText(view, item.index);
-  const startOffset = lineStartOffset(view, item.index);
-  const endOffset = lineEndOffset(view, item.index);
-  const foldMarker = foldMarkerForVirtualRow(view, item.index);
-  const rowKind = displayRowKind(view, item.index);
+  const state = rowUpdateState(view, item.index, updatePass);
 
-  updateRowElement(view, row, item, text, startOffset, snapshot);
+  updateRowElement(view, row, item, state, snapshot);
   updateMutableRow(row, {
-    bufferRow,
-    endOffset,
-    kind: rowKind,
-    foldCollapsed: foldMarker?.collapsed ?? false,
-    foldMarkerKey: foldMarker?.key ?? "",
+    bufferRow: state.bufferRow,
+    endOffset: state.endOffset,
+    kind: state.kind,
+    foldCollapsed: state.foldMarker?.collapsed ?? false,
+    foldMarkerKey: state.foldMarker?.key ?? "",
     height: item.size,
     index: item.index,
-    startOffset,
-    text,
+    startOffset: state.startOffset,
+    text: state.text,
     textRevision: view.textRevision,
     top: item.start,
-    chunkKey: rowChunkKey(view, text, snapshot),
-    displayKind: rowKind,
+    chunkKey: rowChunkKey(view, state.text, snapshot),
+    displayKind: state.kind,
   });
 }
 
@@ -348,25 +459,24 @@ function updateRowElement(
   view: VirtualizedTextViewInternal,
   row: MountedVirtualizedTextRow,
   item: FixedRowVirtualItem,
-  text: string,
-  startOffset: number,
+  state: RowUpdateState,
   snapshot: FixedRowVirtualizerSnapshot,
 ): void {
   if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
-  applyRowDecoration(view, row, item.index);
-  updateCursorLineContentClass(view, row.element, isCursorLineVirtualRow(view, item.index));
-  updateGutterRowElement(view, row, item);
+  applyRowDecoration(view, row, state.bufferRow);
+  updateCursorLineContentClass(view, row, state.cursorVirtualLine);
+  updateGutterRowElement(view, row, item, state);
   if (row.top !== item.start) {
-    row.element.style.transform = `translate3d(0, ${item.start}px, 0)`;
+    row.element.style.transform = rowTranslateY(item.start);
   }
-  if (displayRowKind(view, item.index) === "block") {
-    setBlockRowText(row, text, startOffset);
-    updateRowFoldPresentation(view, row, item);
+  if (state.kind === "block") {
+    setBlockRowText(row, state.text, state.startOffset);
+    updateRowFoldPresentation(row, state.foldMarker);
     return;
   }
 
-  updateRowTextChunks(view, row, text, startOffset, snapshot);
-  updateRowFoldPresentation(view, row, item);
+  updateRowTextChunks(view, row, state.text, state.startOffset, snapshot);
+  updateRowFoldPresentation(row, state.foldMarker);
 }
 
 export function updateMountedRowsAfterSameLineEdit(
@@ -375,10 +485,11 @@ export function updateMountedRowsAfterSameLineEdit(
   patch: SameLineEditPatch,
   snapshot: FixedRowVirtualizerSnapshot,
 ): void {
+  const updatePass = createRowUpdatePass(view);
   for (const item of items) {
     const row = view.rowElements.get(item.index);
     if (!row) continue;
-    updateRowAfterSameLineEdit(view, row, item, patch, snapshot);
+    updateRowAfterSameLineEdit(view, row, item, patch, snapshot, updatePass);
   }
 }
 
@@ -388,28 +499,25 @@ function updateRowAfterSameLineEdit(
   item: FixedRowVirtualItem,
   patch: SameLineEditPatch,
   snapshot: FixedRowVirtualizerSnapshot,
+  updatePass: RowUpdatePass,
 ): void {
-  const text = lineText(view, item.index);
-  const startOffset = lineStartOffset(view, item.index);
-  const endOffset = lineEndOffset(view, item.index);
-  const foldMarker = foldMarkerForVirtualRow(view, item.index);
-  const rowKind = displayRowKind(view, item.index);
+  const state = rowUpdateState(view, item.index, updatePass);
 
-  updateRowElementForSameLineEdit(view, row, item, text, patch, startOffset, snapshot);
+  updateRowElementForSameLineEdit(view, row, item, state, patch, snapshot);
   updateMutableRow(row, {
-    bufferRow: bufferRowForVirtualRow(view, item.index),
-    endOffset,
-    kind: rowKind,
-    foldCollapsed: foldMarker?.collapsed ?? false,
-    foldMarkerKey: foldMarker?.key ?? "",
+    bufferRow: state.bufferRow,
+    endOffset: state.endOffset,
+    kind: state.kind,
+    foldCollapsed: state.foldMarker?.collapsed ?? false,
+    foldMarkerKey: state.foldMarker?.key ?? "",
     height: item.size,
     index: item.index,
-    startOffset,
-    text,
+    startOffset: state.startOffset,
+    text: state.text,
     textRevision: view.textRevision,
     top: item.start,
-    chunkKey: rowChunkKey(view, text, snapshot),
-    displayKind: rowKind,
+    chunkKey: rowChunkKey(view, state.text, snapshot),
+    displayKind: state.kind,
   });
 }
 
@@ -417,25 +525,24 @@ function updateRowElementForSameLineEdit(
   view: VirtualizedTextViewInternal,
   row: MountedVirtualizedTextRow,
   item: FixedRowVirtualItem,
-  text: string,
+  state: RowUpdateState,
   patch: SameLineEditPatch,
-  startOffset: number,
   snapshot: FixedRowVirtualizerSnapshot,
 ): void {
   if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
-  applyRowDecoration(view, row, item.index);
-  updateGutterRowElement(view, row, item);
+  applyRowDecoration(view, row, state.bufferRow);
+  updateGutterRowElement(view, row, item, state);
   if (row.top !== item.start) {
-    row.element.style.transform = `translate3d(0, ${item.start}px, 0)`;
+    row.element.style.transform = rowTranslateY(item.start);
   }
-  if (displayRowKind(view, item.index) === "block") {
-    setBlockRowText(row, text, startOffset);
-    updateRowFoldPresentation(view, row, item);
+  if (state.kind === "block") {
+    setBlockRowText(row, state.text, state.startOffset);
+    updateRowFoldPresentation(row, state.foldMarker);
     return;
   }
 
-  updateRowTextForSameLineEdit(view, row, item, text, patch, startOffset, snapshot);
-  updateRowFoldPresentation(view, row, item);
+  updateRowTextForSameLineEdit(view, row, item, state.text, patch, state.startOffset, snapshot);
+  updateRowFoldPresentation(row, state.foldMarker);
 }
 
 function updateRowTextForSameLineEdit(
@@ -464,6 +571,11 @@ function updateRowTextForSameLineEdit(
   }
 
   row.textNode.replaceData(patch.localFrom, patch.deleteLength, patch.text);
+  if (row.textRenderMode === "simple") {
+    syncSimpleDirectRowChunk(row, text, startOffset);
+    return;
+  }
+
   syncDirectRowChunk(row, text, startOffset);
 }
 
@@ -502,11 +614,12 @@ function setDirectRowText(
     return;
   }
 
-  if (row.element.firstChild !== row.textNode || row.element.childNodes.length !== 1) {
+  if (row.textRenderMode !== "simple" || rowHasInlineAttachments(row)) {
     row.element.replaceChildren(row.textNode);
+    setTextRenderMode(row, "simple");
   }
   if (row.textNode.data !== text) row.textNode.data = text;
-  syncDirectRowChunk(row, text, startOffset);
+  syncSimpleDirectRowChunk(row, text, startOffset);
 }
 
 function setRenderedDirectRowText(
@@ -522,6 +635,7 @@ function setRenderedDirectRowText(
     characterWidth(view),
   );
   row.element.replaceChildren(...rendered.nodes);
+  setTextRenderMode(row, "rendered");
   syncDirectRowChunk(row, text, startOffset, rendered.parts, rendered.textNode);
 }
 
@@ -545,10 +659,58 @@ function syncDirectRowChunk(
   updateMutableRowChunks(row, [chunk]);
 }
 
+function syncSimpleDirectRowChunk(
+  row: MountedVirtualizedTextRow,
+  text: string,
+  startOffset: number,
+): void {
+  const chunk = row.chunks[0];
+  if (!isReusableSimpleDirectChunk(row, chunk)) {
+    syncDirectRowChunk(row, text, startOffset);
+    return;
+  }
+
+  const mutableChunk = chunk as {
+    startOffset: number;
+    endOffset: number;
+    localEnd: number;
+    text: string;
+  };
+  mutableChunk.startOffset = startOffset;
+  mutableChunk.endOffset = startOffset + text.length;
+  mutableChunk.localEnd = text.length;
+  mutableChunk.text = text;
+
+  const part = chunk.parts[0] as { localEnd: number };
+  part.localEnd = text.length;
+  updateMutableRowChunks(row, row.chunks);
+}
+
+function isReusableSimpleDirectChunk(
+  row: MountedVirtualizedTextRow,
+  chunk: VirtualizedTextChunk | undefined,
+): chunk is VirtualizedTextChunk {
+  if (!chunk) return false;
+  if (row.chunks.length !== 1) return false;
+  if (chunk.element !== null || chunk.textNode !== row.textNode) return false;
+
+  const part = chunk.parts[0];
+  if (chunk.parts.length !== 1 || !part) return false;
+  return part.kind === "text" && part.localStart === 0 && part.node === row.textNode;
+}
+
+function rowHasInlineAttachments(row: MountedVirtualizedTextRow): boolean {
+  if (row.foldCollapsed) return true;
+  return row.hiddenCharactersKey.length > 0;
+}
+
 function setBlockRowText(row: MountedVirtualizedTextRow, text: string, startOffset: number): void {
-  row.element.replaceChildren(row.textNode);
+  if (row.textRenderMode !== "simple" || rowHasInlineAttachments(row)) {
+    row.element.replaceChildren(row.textNode);
+    setTextRenderMode(row, "simple");
+  }
   if (row.textNode.data !== text) row.textNode.data = text;
-  syncDirectRowChunk(row, text, startOffset);
+  syncSimpleDirectRowChunk(row, text, startOffset);
 }
 
 function setChunkedRowText(
@@ -567,6 +729,7 @@ function setChunkedRowText(
     estimatedDisplayCellForColumn(text, window.start, view.tabSize) * characterWidth(view),
   )}px`;
   row.element.replaceChildren(row.leftSpacerElement, ...elements);
+  setTextRenderMode(row, "chunked");
   updateMutableRowChunks(row, chunks);
 }
 
@@ -714,11 +877,9 @@ function hasHorizontalChunkedRows(
 }
 
 function updateRowFoldPresentation(
-  view: VirtualizedTextViewInternal,
   row: MountedVirtualizedTextRow,
-  item: FixedRowVirtualItem,
+  marker: VirtualizedFoldMarker | null,
 ): void {
-  const marker = foldMarkerForVirtualRow(view, item.index);
   updateFoldPlaceholder(row, marker);
 }
 
@@ -741,6 +902,7 @@ function updateGutterRowElement(
   view: VirtualizedTextViewInternal,
   row: MountedVirtualizedTextRow,
   item: FixedRowVirtualItem,
+  state: RowUpdateState,
 ): void {
   if (view.gutterContributions.length === 0) return;
 
@@ -748,50 +910,43 @@ function updateGutterRowElement(
     row.gutterElement.dataset.editorVirtualGutterRow = String(item.index);
   }
   if (row.top !== item.start) {
-    row.gutterElement.style.transform = `translate3d(0, ${item.start}px, 0)`;
+    row.gutterElement.style.transform = rowTranslateY(item.start);
   }
 
-  updateGutterContributionCells(view, row, item);
+  updateGutterContributionCells(view, row, state);
+}
+
+function rowTranslateY(top: number): string {
+  return `translateY(${top}px)`;
 }
 
 function updateGutterContributionCells(
   view: VirtualizedTextViewInternal,
   row: MountedVirtualizedTextRow,
-  item: FixedRowVirtualItem,
+  state: RowUpdateState,
 ): void {
-  const context = createGutterRowContext(view, item);
-  const widthContext = gutterWidthContext(view);
-  for (const contribution of view.gutterContributions) {
-    const cell = row.gutterCells.get(contribution.id);
+  const contributions = view.gutterContributions;
+  const cells = row.gutterCellList;
+
+  for (let index = 0; index < contributions.length; index += 1) {
+    const contribution = contributions[index]!;
+    const cell = cells[index] ?? row.gutterCells.get(contribution.id);
     if (!cell) continue;
 
-    setStyleValue(cell, "width", `${gutterContributionWidth(contribution, widthContext)}px`);
-    contribution.updateCell(cell, context);
-    updateCursorLineGutterCellClass(view, cell, contribution.id, context.cursorLine);
+    contribution.updateCell(cell, state);
+    updateCursorLineGutterCellClass(view, cell, contribution.id, state.cursorLine);
   }
 }
 
-function createGutterRowContext(
+function setCachedGutterCellWidth(
   view: VirtualizedTextViewInternal,
-  item: FixedRowVirtualItem,
-): EditorGutterRowContext {
-  const index = item.index;
-  const bufferRow = bufferRowForVirtualRow(view, index);
+  cell: HTMLElement,
+  contributionId: string,
+): void {
+  const width = view.gutterContributionWidths.get(contributionId);
+  if (width === undefined) return;
 
-  return {
-    index,
-    bufferRow,
-    startOffset: lineStartOffset(view, index),
-    endOffset: lineEndOffset(view, index),
-    text: lineText(view, index),
-    kind: displayRowKind(view, index),
-    primaryText: isPrimaryTextRow(view, index),
-    cursorLine: isCursorLineGutterRow(view, index, bufferRow),
-    cursorLineHighlight: view.cursorLineHighlight,
-    foldMarker: foldMarkerForVirtualRow(view, index),
-    lineCount: view.lineStarts.length,
-    toggleFold: (marker) => view.onFoldToggle?.(marker),
-  };
+  setStyleValue(cell, "width", `${width}px`);
 }
 
 export function cursorLineBufferRow(view: VirtualizedTextViewInternal): number | null {
@@ -822,6 +977,7 @@ export function refreshCursorLineRows(
   const nextVirtualRow = cursorLineVirtualRow(view);
   if (previousBufferRow === nextBufferRow && previousVirtualRow === nextVirtualRow) return;
 
+  const updatePass = createRowUpdatePass(view);
   for (const row of view.rowElements.values()) {
     if (
       !shouldRefreshCursorLineRow(
@@ -835,8 +991,8 @@ export function refreshCursorLineRows(
       continue;
     }
 
-    updateCursorLineContentClass(view, row.element, row.index === nextVirtualRow);
-    refreshCursorLineGutterCells(view, row);
+    updateCursorLineContentClass(view, row, row.index === nextVirtualRow);
+    refreshCursorLineGutterCells(view, row, updatePass);
   }
 }
 
@@ -855,25 +1011,23 @@ function shouldRefreshCursorLineRow(
 function refreshCursorLineGutterCells(
   view: VirtualizedTextViewInternal,
   row: MountedVirtualizedTextRow,
+  updatePass = createRowUpdatePass(view),
 ): void {
   if (view.gutterContributions.length === 0) return;
 
-  updateGutterContributionCells(view, row, {
-    index: row.index,
-    size: row.height,
-    start: row.top,
-  });
+  updateGutterContributionCells(view, row, mountedRowUpdateState(view, row, updatePass));
 }
 
 function updateCursorLineContentClass(
   view: VirtualizedTextViewInternal,
-  element: HTMLElement,
+  row: MountedVirtualizedTextRow,
   active: boolean,
 ): void {
-  element.classList.toggle(
-    "editor-virtualized-cursor-line-row",
-    view.cursorLineHighlight.rowBackground && active,
-  );
+  const enabled = view.cursorLineHighlight.rowBackground && active;
+  if (row.cursorLineContentActive === enabled) return;
+
+  setCursorLineContentActive(row, enabled);
+  row.element.classList.toggle(CURSOR_LINE_ROW_CLASS, enabled);
 }
 
 function updateCursorLineGutterCellClass(
@@ -882,10 +1036,11 @@ function updateCursorLineGutterCellClass(
   contributionId: string,
   active: boolean,
 ): void {
-  element.classList.toggle(
-    "editor-virtualized-cursor-line-gutter",
-    cursorLineGutterBackgroundEnabled(view, contributionId) && active,
-  );
+  const enabled = active && cursorLineGutterBackgroundEnabled(view, contributionId);
+  if ((gutterCursorLineStates.get(element) ?? false) === enabled) return;
+
+  gutterCursorLineStates.set(element, enabled);
+  element.classList.toggle(CURSOR_LINE_GUTTER_CLASS, enabled);
 }
 
 function cursorLineGutterBackgroundEnabled(
@@ -896,22 +1051,6 @@ function cursorLineGutterBackgroundEnabled(
   if (typeof setting === "boolean") return setting;
 
   return setting.includes(contributionId);
-}
-
-function isCursorLineGutterRow(
-  view: VirtualizedTextViewInternal,
-  row: number,
-  bufferRow: number,
-): boolean {
-  const cursorBufferRow = cursorLineBufferRow(view);
-  if (cursorBufferRow === null) return false;
-  if (!isPrimaryTextRow(view, row)) return false;
-
-  return bufferRow === cursorBufferRow;
-}
-
-function isCursorLineVirtualRow(view: VirtualizedTextViewInternal, row: number): boolean {
-  return cursorLineVirtualRow(view) === row;
 }
 
 export function foldMarkerForVirtualRow(
@@ -950,9 +1089,7 @@ function isRowCurrent(
   const text = lineText(view, item.index);
   if (row.text !== text) return false;
   if (row.chunkKey !== rowChunkKey(view, text, snapshot)) return false;
-  if ((row.element.dataset.editorRowDecorationKey ?? "") !== rowDecorationKey(view, item.index)) {
-    return false;
-  }
+  if (row.rowDecorationKey !== rowDecorationKey(view, item.index)) return false;
 
   const foldMarker = foldMarkerForVirtualRow(view, item.index);
   if (row.foldMarkerKey !== (foldMarker?.key ?? "")) return false;
@@ -962,62 +1099,101 @@ function isRowCurrent(
 function applyRowDecoration(
   view: VirtualizedTextViewInternal,
   row: MountedVirtualizedTextRow,
-  virtualRow: number,
+  bufferRow: number,
 ): void {
-  const decoration = rowDecorationForVirtualRow(view, virtualRow);
-  setDecorationClass(row.element, "editorRowDecorationClass", decoration?.className ?? "");
-  setDecorationClass(
-    row.gutterElement,
-    "editorRowDecorationGutterClass",
-    decoration?.gutterClassName ?? "",
-  );
-  setDecorationKey(row.element, rowDecorationKey(view, virtualRow));
-}
+  if (view.rowDecorations.size === 0) {
+    clearRowDecoration(row);
+    return;
+  }
 
-function rowDecorationForVirtualRow(view: VirtualizedTextViewInternal, virtualRow: number) {
-  return view.rowDecorations.get(bufferRowForVirtualRow(view, virtualRow));
+  const decoration = view.rowDecorations.get(bufferRow);
+  setRowDecorationClass(row, decoration?.className ?? "");
+  setRowDecorationGutterClass(row, decoration?.gutterClassName ?? "");
+  setRowDecorationKey(row, rowDecorationKeyForDecoration(decoration));
 }
 
 function rowDecorationKey(view: VirtualizedTextViewInternal, virtualRow: number): string {
-  const decoration = rowDecorationForVirtualRow(view, virtualRow);
+  if (view.rowDecorations.size === 0) return "";
+
+  const decoration = view.rowDecorations.get(bufferRowForVirtualRow(view, virtualRow));
+  return rowDecorationKeyForDecoration(decoration);
+}
+
+function rowDecorationKeyForDecoration(
+  decoration: VirtualizedTextRowDecoration | undefined,
+): string {
   if (!decoration) return "";
 
   return `${decoration.className ?? ""}|${decoration.gutterClassName ?? ""}`;
 }
 
-function setDecorationClass(
-  element: HTMLElement,
-  dataKey: "editorRowDecorationClass" | "editorRowDecorationGutterClass",
-  className: string,
-): void {
-  const previous = element.dataset[dataKey] ?? "";
-  if (previous === className) return;
+function clearRowDecoration(row: MountedVirtualizedTextRow): void {
+  if (row.rowDecorationKey === "") return;
 
-  removeClassNames(element, previous);
-  addClassNames(element, className);
-  setStoredDecorationClass(element, dataKey, className);
+  setRowDecorationClass(row, "");
+  setRowDecorationGutterClass(row, "");
+  setRowDecorationKey(row, "");
 }
 
-function setStoredDecorationClass(
-  element: HTMLElement,
-  dataKey: "editorRowDecorationClass" | "editorRowDecorationGutterClass",
-  className: string,
-): void {
-  if (className.length > 0) {
-    element.dataset[dataKey] = className;
-    return;
-  }
+function setRowDecorationClass(row: MountedVirtualizedTextRow, className: string): void {
+  if (row.rowDecorationClassName === className) return;
 
-  delete element.dataset[dataKey];
+  removeClassNames(row.element, row.rowDecorationClassName);
+  addClassNames(row.element, className);
+  setRowDecorationClassName(row, className);
 }
 
-function setDecorationKey(element: HTMLElement, key: string): void {
-  if (key.length > 0) {
-    element.dataset.editorRowDecorationKey = key;
-    return;
-  }
+function setRowDecorationGutterClass(row: MountedVirtualizedTextRow, className: string): void {
+  if (row.rowDecorationGutterClassName === className) return;
 
-  delete element.dataset.editorRowDecorationKey;
+  removeClassNames(row.gutterElement, row.rowDecorationGutterClassName);
+  addClassNames(row.gutterElement, className);
+  setRowDecorationGutterClassName(row, className);
+}
+
+function setGutterCellList(
+  row: MountedVirtualizedTextRow,
+  gutterCellList: readonly HTMLElement[],
+): void {
+  const mutable = row as { gutterCellList: readonly HTMLElement[] };
+  mutable.gutterCellList = gutterCellList;
+}
+
+function setTextRenderMode(
+  row: MountedVirtualizedTextRow,
+  textRenderMode: VirtualizedTextRenderMode,
+): void {
+  const mutable = row as { textRenderMode: VirtualizedTextRenderMode };
+  mutable.textRenderMode = textRenderMode;
+}
+
+function setCursorLineContentActive(
+  row: MountedVirtualizedTextRow,
+  cursorLineContentActive: boolean,
+): void {
+  const mutable = row as { cursorLineContentActive: boolean };
+  mutable.cursorLineContentActive = cursorLineContentActive;
+}
+
+function setRowDecorationClassName(
+  row: MountedVirtualizedTextRow,
+  rowDecorationClassName: string,
+): void {
+  const mutable = row as { rowDecorationClassName: string };
+  mutable.rowDecorationClassName = rowDecorationClassName;
+}
+
+function setRowDecorationGutterClassName(
+  row: MountedVirtualizedTextRow,
+  rowDecorationGutterClassName: string,
+): void {
+  const mutable = row as { rowDecorationGutterClassName: string };
+  mutable.rowDecorationGutterClassName = rowDecorationGutterClassName;
+}
+
+function setRowDecorationKey(row: MountedVirtualizedTextRow, rowDecorationKey: string): void {
+  const mutable = row as { rowDecorationKey: string };
+  mutable.rowDecorationKey = rowDecorationKey;
 }
 
 function addClassNames(element: HTMLElement, className: string): void {
@@ -1086,7 +1262,10 @@ export function updateGutterWidthIfNeeded(view: VirtualizedTextViewInternal): vo
 }
 
 function applyGutterWidth(view: VirtualizedTextViewInternal): void {
-  const nextWidth = gutterContributionsWidth(view);
+  const widths = gutterContributionWidthMap(view);
+  updateGutterContributionWidths(view, widths);
+
+  const nextWidth = fixedGutterWidth(view) + totalGutterContributionWidth(widths);
   setStyleValue(view.scrollElement, "--editor-gutter-width", `${nextWidth}px`);
   if (nextWidth === view.currentGutterWidth) return;
 
@@ -1094,13 +1273,57 @@ function applyGutterWidth(view: VirtualizedTextViewInternal): void {
   applySpacerWidth(view);
 }
 
-function gutterContributionsWidth(view: VirtualizedTextViewInternal): number {
-  if (view.gutterContributions.length === 0) return 0;
+function fixedGutterWidth(view: VirtualizedTextViewInternal): number {
+  const width = view.gutterWidthProvider?.(gutterWidthContext(view)) ?? 0;
+  if (!Number.isFinite(width) || width <= 0) return 0;
+  return Math.ceil(width);
+}
+
+function gutterContributionWidthMap(
+  view: VirtualizedTextViewInternal,
+): ReadonlyMap<string, number> {
+  const widths = new Map<string, number>();
+  if (view.gutterContributions.length === 0) return widths;
 
   const context = gutterWidthContext(view);
-  return view.gutterContributions.reduce((width, contribution) => {
-    return width + gutterContributionWidth(contribution, context);
-  }, 0);
+  for (const contribution of view.gutterContributions) {
+    widths.set(contribution.id, gutterContributionWidth(contribution, context));
+  }
+  return widths;
+}
+
+function updateGutterContributionWidths(
+  view: VirtualizedTextViewInternal,
+  widths: ReadonlyMap<string, number>,
+): void {
+  if (sameGutterContributionWidths(view.gutterContributionWidths, widths)) return;
+
+  view.gutterContributionWidths = widths;
+  applyGutterContributionWidths(view);
+}
+
+function sameGutterContributionWidths(
+  left: ReadonlyMap<string, number>,
+  right: ReadonlyMap<string, number>,
+): boolean {
+  if (left.size !== right.size) return false;
+
+  for (const [id, width] of right) {
+    if (left.get(id) !== width) return false;
+  }
+  return true;
+}
+
+function applyGutterContributionWidths(view: VirtualizedTextViewInternal): void {
+  for (const row of allRows(view)) {
+    for (const [id, cell] of row.gutterCells) setCachedGutterCellWidth(view, cell, id);
+  }
+}
+
+function totalGutterContributionWidth(widths: ReadonlyMap<string, number>): number {
+  let total = 0;
+  for (const width of widths.values()) total += width;
+  return total;
 }
 
 function gutterContributionWidth(

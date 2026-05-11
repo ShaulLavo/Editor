@@ -105,6 +105,7 @@
 .editor-virtualized-gutter-row {
   align-items: center;
   box-sizing: border-box;
+  contain: layout paint style;
   display: flex;
   height: var(--editor-row-height);
   justify-content: flex-start;
@@ -119,6 +120,7 @@
 .editor-virtualized-gutter-cell {
   align-items: center;
   box-sizing: border-box;
+  contain: layout paint style;
   display: inline-flex;
   flex: 0 0 auto;
   height: var(--editor-row-height);
@@ -138,6 +140,7 @@
 }
 
 .editor-virtualized-row {
+  contain: layout paint style;
   height: var(--editor-row-height);
   left: var(--editor-gutter-width);
   line-height: var(--editor-row-height);
@@ -146,7 +149,6 @@
   right: 0;
   top: 0;
   white-space: pre;
-  will-change: transform;
 }
 
 .editor-virtualized-row-chunk {

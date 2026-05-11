@@ -321,14 +321,13 @@ function rowGeometryCacheKey(
   view: VirtualizedTextViewInternal,
   row: MountedVirtualizedTextRow,
 ): string {
-  const decorationKey = row.element.dataset.editorRowDecorationKey ?? "";
   return [
     row.textRevision,
     row.chunkKey,
     row.text.length,
     row.displayKind,
     row.foldMarkerKey,
-    decorationKey,
+    row.rowDecorationKey,
     view.tabSize,
     view.metrics.characterWidth,
   ].join(":");

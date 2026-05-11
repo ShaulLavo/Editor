@@ -1,13 +1,13 @@
 export { DiffView } from "./DiffView";
+export { annotateInlineChanges } from "./inline";
 export { createTextDiff, parseGitPatch } from "./model";
 export { createSplitProjection, createStackedProjection } from "./projection";
 export type {
   CreateTextDiffOptions,
   DiffFile,
   DiffFileChangeType,
-  DiffHunkLocation,
-  DiffHunkNavigationOptions,
   DiffHunk,
+  DiffHunkLocation,
   DiffHunkLine,
   DiffInlineRange,
   DiffLineType,

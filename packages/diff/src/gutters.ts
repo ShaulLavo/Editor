@@ -1,7 +1,10 @@
-import type { EditorGutterContribution, EditorGutterRowContext } from "@editor/core";
+import type { EditorGutterContribution } from "@editor/core";
 import type { DiffRenderRow } from "./types";
 
 export type DiffGutterSide = "old" | "new" | "stacked";
+
+const MIN_LINE_NUMBER_DIGITS = 2;
+const GUTTER_RESERVED_WIDTH = 30;
 
 export function createDiffGutterContribution(
   side: DiffGutterSide,
@@ -14,46 +17,60 @@ export function createDiffGutterContribution(
       return createDiffGutterCell(document);
     },
     width(context) {
-      const digits = Math.max(2, String(Math.max(1, context.lineCount)).length);
-      return Math.ceil(digits * context.metrics.characterWidth + 30);
+      const characters = diffGutterWidthCharacters(side, getRows(), context.lineCount);
+      return Math.ceil(characters * context.metrics.characterWidth + GUTTER_RESERVED_WIDTH);
     },
-    updateCell(element, context) {
-      updateDiffGutterCell(element, context, getRows()[context.bufferRow], side);
-    },
+    updateCell() {},
   };
+}
+
+export function diffGutterWidthCharacters(
+  side: DiffGutterSide,
+  rows: readonly DiffRenderRow[],
+  lineCount: number,
+): number {
+  let maxCharacters = String(Math.max(1, lineCount)).length;
+  for (const row of rows) {
+    maxCharacters = Math.max(maxCharacters, lineNumberForRow(row, side).length);
+  }
+
+  return Math.max(MIN_LINE_NUMBER_DIGITS, maxCharacters);
 }
 
 function createDiffGutterCell(document: Document): HTMLElement {
   const element = document.createElement("span");
-  const indicator = document.createElement("span");
-  const number = document.createElement("span");
-
   element.className = "editor-diff-gutter";
-  indicator.className = "editor-diff-gutter-indicator";
-  number.className = "editor-diff-gutter-number";
-  element.append(indicator, number);
+  element.setAttribute("aria-hidden", "true");
   return element;
 }
 
-function updateDiffGutterCell(
-  element: HTMLElement,
-  context: EditorGutterRowContext,
-  row: DiffRenderRow | undefined,
-  side: DiffGutterSide,
-): void {
-  const indicator = element.querySelector(".editor-diff-gutter-indicator");
-  const number = element.querySelector(".editor-diff-gutter-number");
-  if (!row || !indicator || !number) return;
+export function diffGutterText(row: DiffRenderRow, side: DiffGutterSide): string {
+  const indicator = indicatorForRow(row, side);
+  const number = lineNumberForRow(row, side);
+  if (indicator && number) return `${indicator} ${number}`;
+  return indicator || number;
+}
 
-  element.dataset.diffRowType = row.type;
-  indicator.textContent = indicatorForRow(row, side);
-  number.textContent = lineNumberForRow(row, side);
-  element.toggleAttribute("data-primary-text-row", context.primaryText);
+export function diffGutterColor(
+  row: DiffRenderRow,
+  side: DiffGutterSide,
+  colors: {
+    readonly added: string;
+    readonly deleted: string;
+    readonly foreground: string;
+    readonly hunk: string;
+  },
+): string {
+  if (row.type === "addition" && side !== "old") return colors.added;
+  if (row.type === "deletion" && side !== "new") return colors.deleted;
+  if (row.type === "hunk") return colors.hunk;
+  return colors.foreground;
 }
 
 function indicatorForRow(row: DiffRenderRow, side: DiffGutterSide): string {
   if (row.type === "addition" && side !== "old") return "+";
   if (row.type === "deletion" && side !== "new") return "-";
+  if (row.type === "hunk" && row.expandable) return row.expanded ? "−" : "+";
   return "";
 }
 

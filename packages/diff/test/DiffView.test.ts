@@ -1,34 +1,32 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createTextDiff, DiffView } from "../src";
-import type { DiffSplitHandleContext, DiffSplitPaneOptions } from "../src";
+import type { DiffFile, DiffSplitHandleContext, DiffSplitPaneOptions } from "../src";
 
 beforeAll(() => {
   installHighlightPolyfill();
 });
 
 describe("DiffView split panes", () => {
-  it("renders old pane, custom handle, then new pane in split mode", () => {
-    const createHandle = vi.fn((context: DiffSplitHandleContext) => {
-      const handle = context.document.createElement("div");
-      handle.className = "diff-custom-handle";
-      return handle;
-    });
-    const { container } = renderDiffView({ createHandle });
+  it("renders a resizable handle between old and new panes", () => {
+    const { container } = renderDiffView();
     const split = querySplit(container);
     const children = Array.from(split.children);
+    const handle = children[1] as HTMLElement | undefined;
 
     expect(children).toHaveLength(3);
     expect(children[0]?.classList.contains("editor-diff-pane-old")).toBe(true);
-    expect(children[1]?.classList.contains("diff-custom-handle")).toBe(true);
-    expect(children[1]?.getAttribute("role")).toBe("separator");
+    expect(handle?.matches("[data-editor-pane-handle]")).toBe(true);
+    expect(handle?.getAttribute("role")).toBe("separator");
     expect(children[2]?.classList.contains("editor-diff-pane-new")).toBe(true);
   });
 
-  it("passes file-aware context to custom split handles", () => {
-    const createHandle = vi.fn((context: DiffSplitHandleContext) =>
-      context.document.createElement("div"),
-    );
-    renderDiffView({ createHandle });
+  it("mounts custom split handles with file-aware context", () => {
+    const createHandle = vi.fn((context: DiffSplitHandleContext) => {
+      const handle = context.document.createElement("div");
+      handle.className = "custom-diff-handle";
+      return handle;
+    });
+    const { container } = renderDiffView({ createHandle });
 
     expect(createHandle).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -38,9 +36,11 @@ describe("DiffView split panes", () => {
         orientation: "horizontal",
       }),
     );
+    expect(container.querySelector(".custom-diff-handle")).not.toBeNull();
+    expect(container.querySelector(".editor-diff-split-handle")).toBeNull();
   });
 
-  it("disposes the pane group when switching to stacked mode", () => {
+  it("removes the handle when switching to stacked mode", () => {
     const { container, diffView } = renderDiffView();
 
     expect(container.querySelector("[data-editor-pane-handle]")).not.toBeNull();
@@ -52,154 +52,58 @@ describe("DiffView split panes", () => {
     expect(container.querySelector(".editor-diff-pane-stacked")).not.toBeNull();
   });
 
-  it("reports split layout callbacks with old and new pane ids", () => {
-    const onLayoutChange = vi.fn();
-    const onLayoutChanged = vi.fn();
-    const { container } = renderDiffView({ onLayoutChange, onLayoutChanged });
-    const split = querySplit(container);
-    const handle = queryHandle(container);
-    setRect(split, 1000, 500);
+  it("reveals next and previous hunks with wrapping", () => {
+    const { diffView } = renderDiffView({ file: multiHunkDiff() });
 
-    dispatchPointer(handle, "pointerdown", { clientX: 500 });
-    dispatchPointer(container.ownerDocument, "pointermove", { clientX: 600 });
-    dispatchPointer(container.ownerDocument, "pointerup", { clientX: 600 });
-
-    expect(onLayoutChange).toHaveBeenCalledWith({ old: 60, new: 40 }, expect.any(Object));
-    expect(onLayoutChanged).toHaveBeenCalledWith({ old: 60, new: 40 }, expect.any(Object));
-  });
-});
-
-describe("DiffView hunk navigation", () => {
-  it("reveals next and previous hunks in the selected file", () => {
-    const { diffView } = renderDiffViewWithFiles([
-      createTextDiff({
-        oldFile: { path: "note.txt", text: "one\ntwo\nthree\nfour\nfive\n" },
-        newFile: { path: "note.txt", text: "ONE\ntwo\nthree\nFOUR\nfive\n" },
-        contextLines: 0,
-      }),
-    ]);
-
+    expect(diffView.getCurrentHunk()?.index).toBe(0);
     expect(diffView.revealNextHunk()).toBe(true);
-    expect(diffView.getCurrentHunk()).toMatchObject({ path: "note.txt", hunkIndex: 0 });
-
-    expect(diffView.revealNextHunk()).toBe(true);
-    expect(diffView.getCurrentHunk()).toMatchObject({ path: "note.txt", hunkIndex: 1 });
-
-    expect(diffView.revealPreviousHunk()).toBe(true);
-    expect(diffView.getCurrentHunk()).toMatchObject({ path: "note.txt", hunkIndex: 0 });
-  });
-
-  it("moves to the next file with changes", () => {
-    const { diffView } = renderDiffViewWithFiles([
-      createTextDiff({
-        oldFile: { path: "first.txt", text: "old\n" },
-        newFile: { path: "first.txt", text: "new\n" },
-      }),
-      createTextDiff({
-        oldFile: { path: "second.txt", text: "before\n" },
-        newFile: { path: "second.txt", text: "after\n" },
-      }),
-    ]);
-
-    expect(diffView.revealNextHunk()).toBe(true);
-    expect(diffView.getCurrentHunk()).toMatchObject({ path: "first.txt", hunkIndex: 0 });
-
-    expect(diffView.revealNextHunk()).toBe(true);
-    expect(diffView.getCurrentHunk()).toMatchObject({ path: "second.txt", hunkIndex: 0 });
-  });
-
-  it("reports false at the end unless wrapping is enabled", () => {
-    const { diffView } = renderDiffViewWithFiles([
-      createTextDiff({
-        oldFile: { path: "first.txt", text: "old\n" },
-        newFile: { path: "first.txt", text: "new\n" },
-      }),
-    ]);
-
-    expect(diffView.revealNextHunk()).toBe(true);
+    expect(diffView.getCurrentHunk()?.index).toBe(1);
     expect(diffView.revealNextHunk()).toBe(false);
-
     expect(diffView.revealNextHunk({ wrap: true })).toBe(true);
-    expect(diffView.getCurrentHunk()).toMatchObject({ path: "first.txt", hunkIndex: 0 });
+    expect(diffView.getCurrentHunk()?.index).toBe(0);
+    expect(diffView.revealPreviousHunk({ wrap: true })).toBe(true);
+    expect(diffView.getCurrentHunk()?.index).toBe(1);
   });
 });
 
 type RenderDiffViewOptions = {
   readonly createHandle?: DiffSplitPaneOptions["createHandle"];
-  readonly onLayoutChange?: DiffSplitPaneOptions["onLayoutChange"];
-  readonly onLayoutChanged?: DiffSplitPaneOptions["onLayoutChanged"];
+  readonly file?: DiffFile;
 };
 
 function renderDiffView(options: RenderDiffViewOptions = {}) {
-  return renderDiffViewWithFiles(
-    [
-      createTextDiff({
-        oldFile: { path: "note.txt", text: "one\ntwo\n" },
-        newFile: { path: "note.txt", text: "one\nTWO\n" },
-      }),
-    ],
-    options,
-  );
-}
-
-function renderDiffViewWithFiles(
-  files: Parameters<DiffView["setFiles"]>[0],
-  options: RenderDiffViewOptions = {},
-) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const diffView = new DiffView(container, {
-    syntaxHighlight: false,
+    showFileList: false,
     splitPane: {
       createHandle: options.createHandle,
-      onLayoutChange: options.onLayoutChange,
-      onLayoutChanged: options.onLayoutChanged,
     },
+    syntaxHighlight: false,
   });
-  diffView.setFiles(files);
+  diffView.setFiles([options.file ?? singleHunkDiff()]);
   return { container, diffView };
+}
+
+function singleHunkDiff() {
+  return createTextDiff({
+    oldFile: { path: "note.txt", text: "one\ntwo\n" },
+    newFile: { path: "note.txt", text: "one\nTWO\n" },
+  });
+}
+
+function multiHunkDiff() {
+  return createTextDiff({
+    contextLines: 0,
+    oldFile: { path: "note.txt", text: "one\ntwo\nthree\nfour\nfive\nsix\n" },
+    newFile: { path: "note.txt", text: "ONE\ntwo\nthree\nFOUR\nfive\nsix\n" },
+  });
 }
 
 function querySplit(container: HTMLElement): HTMLElement {
   const split = container.querySelector<HTMLElement>(".editor-diff-split");
   if (!split) throw new Error("Expected split diff");
   return split;
-}
-
-function queryHandle(container: HTMLElement): HTMLElement {
-  const handle = container.querySelector<HTMLElement>("[data-editor-pane-handle]");
-  if (!handle) throw new Error("Expected split handle");
-  return handle;
-}
-
-function setRect(element: HTMLElement, width: number, height: number): void {
-  element.getBoundingClientRect = () =>
-    ({
-      x: 0,
-      y: 0,
-      left: 0,
-      top: 0,
-      right: width,
-      bottom: height,
-      width,
-      height,
-      toJSON: () => undefined,
-    }) as DOMRect;
-}
-
-function dispatchPointer(
-  target: EventTarget,
-  type: string,
-  init: { readonly clientX: number; readonly clientY?: number },
-): void {
-  const event = new MouseEvent(type, {
-    bubbles: true,
-    cancelable: true,
-    clientX: init.clientX,
-    clientY: init.clientY ?? 0,
-    button: 0,
-  });
-  target.dispatchEvent(event);
 }
 
 type HighlightConstructor = new (...ranges: AbstractRange[]) => Highlight;

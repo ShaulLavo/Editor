@@ -415,12 +415,12 @@ function applyHandleOrientationStyle(
 ): void {
   if (orientation === "vertical") {
     element.style.width = element.style.width || "8px";
-    element.style.cursor = disabled ? "default" : "col-resize";
+    element.style.cursor = disabled ? "default" : "ew-resize";
     return;
   }
 
   element.style.height = element.style.height || "8px";
-  element.style.cursor = disabled ? "default" : "row-resize";
+  element.style.cursor = disabled ? "default" : "ns-resize";
 }
 
 function disposeHandle(handle: MountedHandle): void {

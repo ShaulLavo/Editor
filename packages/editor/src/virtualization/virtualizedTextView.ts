@@ -1,7 +1,7 @@
 import type { FoldMap } from "../foldMap";
 import { normalizeTabSize, type BlockRow } from "../displayTransforms";
 import type { EditorTheme } from "../theme";
-import type { EditorGutterContribution } from "../plugins";
+import type { EditorGutterContribution, EditorGutterWidthContext } from "../plugins";
 import type { EditorToken, TextEdit } from "../tokens";
 import { applyEditorTheme } from "../theme";
 import { measureBrowserTextMetrics, type BrowserTextMetrics } from "./browserMetrics";
@@ -127,6 +127,15 @@ const DEFAULT_CURSOR_LINE_HIGHLIGHT: Required<EditorCursorLineHighlightOptions> 
   rowBackground: true,
 };
 
+function normalizeGutterWidthProvider(
+  gutterWidth: VirtualizedTextViewOptions["gutterWidth"],
+): ((context: EditorGutterWidthContext) => number) | null {
+  if (typeof gutterWidth === "function") return gutterWidth;
+  if (gutterWidth === undefined) return null;
+
+  return () => gutterWidth;
+}
+
 export class VirtualizedTextView {
   public readonly scrollElement: HTMLDivElement;
   public readonly inputElement: HTMLTextAreaElement;
@@ -135,6 +144,7 @@ export class VirtualizedTextView {
   public constructor(container: HTMLElement, options: VirtualizedTextViewOptions = {}) {
     const overscan = options.overscan ?? DEFAULT_OVERSCAN;
     const gutterContributions = [...(options.gutterContributions ?? [])];
+    const gutterWidthProvider = normalizeGutterWidthProvider(options.gutterWidth);
 
     const styleEl = container.ownerDocument.createElement("style");
     const scrollElement = createScrollElement(container, options.className);
@@ -162,6 +172,7 @@ export class VirtualizedTextView {
       spacer,
       gutterElement,
       gutterContributions,
+      gutterWidthProvider,
       caretLayerElement,
       caretElement,
       secondaryCaretElements: [],
@@ -209,6 +220,7 @@ export class VirtualizedTextView {
       selections: [],
       lastSelectionHighlightSignature: "",
       lastRenderedRowsKey: "",
+      gutterContributionWidths: new Map(),
       gutterWidthDirty: true,
       currentGutterWidth: 0,
       contentWidth: 0,
@@ -230,7 +242,7 @@ export class VirtualizedTextView {
     caretElement.className = "editor-virtualized-caret";
     caretElement.hidden = true;
     caretLayerElement.appendChild(caretElement);
-    if (gutterContributions.length > 0) spacer.appendChild(gutterElement);
+    if (gutterContributions.length > 0 || gutterWidthProvider) spacer.appendChild(gutterElement);
     spacer.appendChild(caretLayerElement);
     scrollElement.appendChild(spacer);
     scrollElement.appendChild(inputElement);
@@ -267,6 +279,12 @@ export class VirtualizedTextView {
     view.lastRenderedRowsKey = "";
     resetContentWidthScan(view);
     updateVirtualizerRows(view);
+  }
+
+  public refreshGutterWidth(): void {
+    const view = this.view;
+    view.gutterWidthDirty = true;
+    this.renderSnapshot(view.virtualizer.getSnapshot());
   }
 
   public setFoldMap(foldMap: FoldMap | null): void {

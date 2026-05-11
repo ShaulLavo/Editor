@@ -188,8 +188,23 @@ describe("diff projections", () => {
     const projection = createStackedProjection(file);
     const separator = projection.rows.find((row) => row.type === "hunk");
 
-    expect(separator?.text).toBe("2 unmodified lines");
+    expect(separator?.text).toBe("Show 2 unmodified lines");
+    expect(separator?.expandable).toBe(true);
     expect(projection.rows.some((row) => row.text.startsWith("@@"))).toBe(false);
+  });
+
+  it("expands skipped unchanged lines when requested", () => {
+    const file = createTextDiff({
+      oldFile: { path: "note.txt", text: "one\ntwo\nthree\nfour\nfive\n" },
+      newFile: { path: "note.txt", text: "one\ntwo\nTHREE\nfour\nfive\n" },
+      contextLines: 0,
+    });
+    const projection = createStackedProjection(file, {
+      expandedHunks: new Set([0]),
+    });
+
+    expect(projection.rows[0]?.text).toBe("Hide 2 unmodified lines");
+    expect(projection.rows.slice(1, 3).map((row) => row.text)).toEqual(["one", "two"]);
   });
 
   it("does not render raw hunk headers if they appear in parsed line content", () => {

@@ -12,13 +12,13 @@ import {
   loadShikiTheme,
 } from "@editor/core/shiki";
 import { ResizablePaneGroup, type ResizablePaneLayout } from "@editor/panes";
-import { createDiffGutterContribution } from "./gutters";
+import { createDiffCanvasGutterRenderer, type DiffCanvasGutterRenderer } from "./canvasGutter";
+import { diffGutterWidthCharacters } from "./gutters";
 import { joinRenderLines, languageIdForPath } from "./lines";
 import { createSplitProjection, createStackedProjection } from "./projection";
 import type {
   DiffFile,
   DiffHunkLocation,
-  DiffHunkNavigationOptions,
   DiffRenderRow,
   DiffSplitPaneLayout,
   DiffViewMode,
@@ -26,20 +26,33 @@ import type {
 } from "./types";
 
 type MountedPane = {
-  readonly view: VirtualizedTextView;
-  readonly rows: readonly DiffRenderRow[];
+  rows: readonly DiffRenderRow[];
+  syntaxGeneration: number;
+  tokens?: readonly EditorToken[];
   readonly side: "old" | "new" | "stacked";
+  readonly view: VirtualizedTextView;
+  readonly disposeEvents: () => void;
+  readonly gutterRenderer: DiffCanvasGutterRenderer;
   syntaxSession?: { dispose(): void };
 };
 
-type HunkNavigationDirection = "next" | "previous";
+type PaneSelectionDrag = {
+  readonly anchorOffset: number;
+  readonly getRows: () => readonly DiffRenderRow[];
+  readonly view: VirtualizedTextView;
+  headOffset: number;
+};
 
-type HunkNavigationCursor = {
-  readonly fileIndex: number;
-  readonly hunkIndex: number;
+type PaneSelection = {
+  readonly anchorOffset: number;
+  readonly getRows: () => readonly DiffRenderRow[];
+  readonly view: VirtualizedTextView;
+  headOffset: number;
 };
 
 const DEFAULT_THEME = "github-dark";
+const DEFAULT_DIFF_OVERSCAN = 8;
+const WHEEL_LINE_DELTA = 40;
 let nextDiffViewId = 0;
 
 export class DiffView {
@@ -54,8 +67,11 @@ export class DiffView {
   private panes: MountedPane[] = [];
   private paneGroup: ResizablePaneGroup | null = null;
   private hunkRows: ReadonlyMap<number, number> = new Map();
-  private currentHunk: DiffHunkLocation | null = null;
+  private expandedHunksByPath = new Map<string, Set<number>>();
+  private disposeScrollSync: (() => void) | null = null;
   private syncingScroll = false;
+  private paneSelection: PaneSelection | null = null;
+  private paneSelectionDrag: PaneSelectionDrag | null = null;
 
   constructor(container: HTMLElement, options: DiffViewOptions = {}) {
     this.options = options;
@@ -67,16 +83,15 @@ export class DiffView {
     this.root.className = "editor-diff-view";
     this.fileList.className = "editor-diff-file-list";
     this.content.className = "editor-diff-content";
-    this.root.append(this.fileList, this.content);
+    if (this.options.showFileList !== false) this.root.append(this.fileList);
+    this.root.append(this.content);
     container.appendChild(this.root);
   }
 
   setFiles(files: readonly DiffFile[]): void {
     this.files = [...files];
     this.selectedPath = selectedPathForFiles(this.files, this.selectedPath);
-    this.currentHunk = validHunkLocation(this.files, this.currentHunk);
     this.render();
-    this.revealCurrentHunkInSelectedFile();
   }
 
   setMode(mode: DiffViewMode): void {
@@ -84,7 +99,6 @@ export class DiffView {
 
     this.mode = mode;
     this.renderSelectedFile();
-    this.revealCurrentHunkInSelectedFile();
   }
 
   setSelectedFile(path: string): void {
@@ -92,30 +106,43 @@ export class DiffView {
     if (!this.files.some((file) => file.path === path)) return;
 
     this.selectedPath = path;
-    this.currentHunk = null;
     this.render();
   }
 
+  revealNextHunk(options: { readonly wrap?: boolean } = {}): boolean {
+    const locations = this.selectedHunkLocations();
+    const position = this.currentHunkPosition(locations);
+    const next = locations[position + 1] ?? null;
+    if (next) return this.revealHunk(next.index);
+    if (!options.wrap) return false;
+
+    const first = locations[0] ?? null;
+    return first ? this.revealHunk(first.index) : false;
+  }
+
+  revealPreviousHunk(options: { readonly wrap?: boolean } = {}): boolean {
+    const locations = this.selectedHunkLocations();
+    const position = this.currentHunkPosition(locations);
+    const previous = locations[position - 1] ?? null;
+    if (previous) return this.revealHunk(previous.index);
+    if (!options.wrap) return false;
+
+    const last = locations.at(-1) ?? null;
+    return last ? this.revealHunk(last.index) : false;
+  }
+
   revealHunk(index: number): boolean {
-    const fileIndex = this.selectedFileIndex();
-    if (fileIndex === -1) return false;
+    const row = this.hunkRows.get(index);
+    if (row === undefined) return false;
 
-    const file = this.files[fileIndex];
-    if (!file) return false;
-
-    return this.revealHunkLocation({ path: file.path, fileIndex, hunkIndex: index });
-  }
-
-  revealNextHunk(options: DiffHunkNavigationOptions = {}): boolean {
-    return this.revealAdjacentHunk("next", options);
-  }
-
-  revealPreviousHunk(options: DiffHunkNavigationOptions = {}): boolean {
-    return this.revealAdjacentHunk("previous", options);
+    for (const pane of this.panes) pane.view.scrollToRow(row);
+    return true;
   }
 
   getCurrentHunk(): DiffHunkLocation | null {
-    return this.currentHunk;
+    const locations = this.selectedHunkLocations();
+    const position = this.currentHunkPosition(locations);
+    return locations[position] ?? null;
   }
 
   dispose(): void {
@@ -129,6 +156,8 @@ export class DiffView {
   }
 
   private renderFileList(): void {
+    if (this.options.showFileList === false) return;
+
     this.fileList.textContent = "";
     for (const file of this.files) this.fileList.appendChild(this.createFileButton(file));
   }
@@ -162,7 +191,9 @@ export class DiffView {
   }
 
   private renderSplitFile(file: DiffFile): void {
-    const projection = createSplitProjection(file);
+    const projection = createSplitProjection(file, {
+      expandedHunks: this.expandedHunksForFile(file),
+    });
     this.hunkRows = projection.hunkRows;
     const split = this.root.ownerDocument.createElement("div");
     split.className = "editor-diff-split";
@@ -171,7 +202,7 @@ export class DiffView {
     const right = this.createPane(split, "new", projection.rightRows, file);
     this.panes = [left, right];
     this.paneGroup = this.createSplitPaneGroup(split, left, right, file);
-    this.installScrollSync(left.view, right.view);
+    this.disposeScrollSync = this.installScrollSync(left.view, right.view);
   }
 
   private createSplitPaneGroup(
@@ -213,7 +244,9 @@ export class DiffView {
   }
 
   private renderStackedFile(file: DiffFile): void {
-    const projection = createStackedProjection(file);
+    const projection = createStackedProjection(file, {
+      expandedHunks: this.expandedHunksForFile(file),
+    });
     this.hunkRows = projection.hunkRows;
     const pane = this.createPane(this.content, "stacked", projection.rows, file);
     this.panes = [pane];
@@ -228,37 +261,316 @@ export class DiffView {
     const host = this.root.ownerDocument.createElement("div");
     host.className = `editor-diff-pane editor-diff-pane-${side}`;
     parent.appendChild(host);
+    let mountedPane: MountedPane | null = null;
+    const getRows = () => mountedPane?.rows ?? rows;
+    let gutterRenderer: DiffCanvasGutterRenderer | null = null;
     const view = new VirtualizedTextView(host, {
       className: "editor-diff-text editor-virtualized",
-      gutterContributions: [createDiffGutterContribution(side, () => rows)],
+      gutterWidth: (context) =>
+        Math.ceil(
+          diffGutterWidthCharacters(side, getRows(), context.lineCount) *
+            context.metrics.characterWidth +
+            30,
+        ),
       lineHeight: this.options.lineHeight,
+      onViewportChange: () => gutterRenderer?.render(),
+      overscan: this.options.overscan ?? DEFAULT_DIFF_OVERSCAN,
       selectionHighlightName: `${this.highlightPrefix}-${side}-selection`,
       tabSize: this.options.tabSize,
     });
+    gutterRenderer = createDiffCanvasGutterRenderer(view, getRows, side);
+    view.scrollElement.tabIndex = -1;
     view.setEditable(false);
     view.setText(joinRenderLines(rows));
     view.setRowDecorations(rowDecorations(rows));
     view.setRangeHighlight(this.inlineHighlightName(side), inlineHighlightRanges(rows), {
       backgroundColor: "rgba(255, 255, 255, 0.18)",
     });
-    void this.applySyntaxHighlighting({ view, rows, side }, file).catch((error: unknown) => {
-      console.warn("[editor/diff] syntax highlighting failed", error);
+    const disposeEvents = this.installPaneInteractions(view, getRows);
+    mountedPane = { view, rows, side, disposeEvents, gutterRenderer, syntaxGeneration: 0 };
+    gutterRenderer.render();
+    this.refreshSyntaxHighlighting(mountedPane, file);
+    return mountedPane;
+  }
+
+  private installPaneInteractions(
+    view: VirtualizedTextView,
+    getRows: () => readonly DiffRenderRow[],
+  ): () => void {
+    const onCopy = (event: ClipboardEvent) => this.handlePaneCopy(event, view, getRows);
+    const onClick = (event: MouseEvent) => this.handlePaneClick(event, getRows);
+    const onMouseDown = (event: MouseEvent) => this.handlePaneMouseDown(event, view, getRows);
+    view.scrollElement.addEventListener("copy", onCopy);
+    view.scrollElement.addEventListener("click", onClick);
+    view.scrollElement.addEventListener("mousedown", onMouseDown);
+    return () => {
+      view.scrollElement.removeEventListener("copy", onCopy);
+      view.scrollElement.removeEventListener("click", onClick);
+      view.scrollElement.removeEventListener("mousedown", onMouseDown);
+    };
+  }
+
+  private handlePaneMouseDown(
+    event: MouseEvent,
+    view: VirtualizedTextView,
+    getRows: () => readonly DiffRenderRow[],
+  ): void {
+    if (event.button !== 0) return;
+    if (event.detail !== 1) return;
+    if (event.defaultPrevented) return;
+
+    const offset = this.textOffsetFromPanePoint(view, event.clientX, event.clientY);
+    event.preventDefault();
+    view.scrollElement.focus({ preventScroll: true });
+    view.scrollElement.ownerDocument.getSelection()?.removeAllRanges();
+    this.clearPaneSelection(view);
+    this.paneSelectionDrag = {
+      anchorOffset: offset,
+      getRows,
+      headOffset: offset,
+      view,
+    };
+    this.setPaneSelection(view, getRows, offset, offset);
+    view.scrollElement.ownerDocument.addEventListener("mousemove", this.updatePaneSelectionDrag);
+    view.scrollElement.ownerDocument.addEventListener("mouseup", this.finishPaneSelectionDrag);
+  }
+
+  private updatePaneSelectionDrag = (event: MouseEvent): void => {
+    const drag = this.paneSelectionDrag;
+    if (!drag) return;
+
+    event.preventDefault();
+    drag.headOffset = this.textOffsetFromPanePoint(drag.view, event.clientX, event.clientY);
+    this.setPaneSelection(drag.view, drag.getRows, drag.anchorOffset, drag.headOffset);
+  };
+
+  private finishPaneSelectionDrag = (event: MouseEvent): void => {
+    const drag = this.paneSelectionDrag;
+    if (!drag) {
+      this.stopPaneSelectionDrag();
+      return;
+    }
+
+    event.preventDefault();
+    drag.headOffset = this.textOffsetFromPanePoint(drag.view, event.clientX, event.clientY);
+    this.setPaneSelection(drag.view, drag.getRows, drag.anchorOffset, drag.headOffset);
+    this.stopPaneSelectionDrag();
+  };
+
+  private stopPaneSelectionDrag(): void {
+    const drag = this.paneSelectionDrag;
+    this.paneSelectionDrag = null;
+    const document = drag?.view.scrollElement.ownerDocument;
+    document?.removeEventListener("mousemove", this.updatePaneSelectionDrag);
+    document?.removeEventListener("mouseup", this.finishPaneSelectionDrag);
+  }
+
+  private setPaneSelection(
+    view: VirtualizedTextView,
+    getRows: () => readonly DiffRenderRow[],
+    anchorOffset: number,
+    headOffset: number,
+  ): void {
+    view.setSelection(anchorOffset, headOffset);
+    this.paneSelection = { anchorOffset, getRows, headOffset, view };
+  }
+
+  private clearPaneSelection(except?: VirtualizedTextView): void {
+    const selection = this.paneSelection;
+    if (!selection) return;
+    if (selection.view === except) return;
+
+    selection.view.clearSelection();
+    this.paneSelection = null;
+  }
+
+  private handlePaneCopy(
+    event: ClipboardEvent,
+    view: VirtualizedTextView,
+    getRows: () => readonly DiffRenderRow[],
+  ): void {
+    const selection = this.paneSelection;
+    if (!selection) return;
+    if (selection.view !== view) return;
+
+    const text = selectedPaneText(selection, getRows());
+    if (text.length === 0) return;
+
+    event.preventDefault();
+    event.clipboardData?.setData("text/plain", text);
+  }
+
+  private textOffsetFromPanePoint(
+    view: VirtualizedTextView,
+    clientX: number,
+    clientY: number,
+  ): number {
+    return (
+      view.textOffsetFromPoint(clientX, clientY) ??
+      view.textOffsetFromViewportPoint(clientX, clientY)
+    );
+  }
+
+  private handlePaneClick(event: MouseEvent, getRows: () => readonly DiffRenderRow[]): void {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+
+    const rowElement = target.closest<HTMLElement>("[data-editor-virtual-row]");
+    if (!rowElement) return;
+
+    this.toggleRowHunk(getRows()[Number(rowElement.dataset.editorVirtualRow)]);
+  }
+
+  private toggleRowHunk(row: DiffRenderRow | undefined): void {
+    if (row?.type !== "hunk") return;
+    if (!row.expandable) return;
+    if (row.hunkIndex === undefined) return;
+
+    const file = this.selectedFile();
+    if (!file) return;
+
+    toggleSetValue(this.mutableExpandedHunksForFile(file), row.hunkIndex);
+    this.updateSelectedFilePanes(file);
+  }
+
+  private updateSelectedFilePanes(file: DiffFile): void {
+    if (this.mode === "stacked") {
+      this.updateStackedFile(file);
+      return;
+    }
+
+    this.updateSplitFile(file);
+  }
+
+  private updateSplitFile(file: DiffFile): void {
+    const left = this.panes[0];
+    const right = this.panes[1];
+    if (!left || !right || left.side !== "old" || right.side !== "new") {
+      this.renderSelectedFile();
+      return;
+    }
+
+    const projection = createSplitProjection(file, {
+      expandedHunks: this.expandedHunksForFile(file),
     });
-    return { view, rows, side };
+    this.hunkRows = projection.hunkRows;
+    this.updatePaneRows(left, projection.leftRows, file);
+    this.updatePaneRows(right, projection.rightRows, file);
   }
 
-  private installScrollSync(left: VirtualizedTextView, right: VirtualizedTextView): void {
-    left.scrollElement.addEventListener("scroll", () => this.syncScroll(left, right));
-    right.scrollElement.addEventListener("scroll", () => this.syncScroll(right, left));
+  private updateStackedFile(file: DiffFile): void {
+    const pane = this.panes[0];
+    if (!pane || pane.side !== "stacked") {
+      this.renderSelectedFile();
+      return;
+    }
+
+    const projection = createStackedProjection(file, {
+      expandedHunks: this.expandedHunksForFile(file),
+    });
+    this.hunkRows = projection.hunkRows;
+    this.updatePaneRows(pane, projection.rows, file);
   }
 
-  private syncScroll(source: VirtualizedTextView, target: VirtualizedTextView): void {
-    if (this.syncingScroll) return;
+  private updatePaneRows(pane: MountedPane, rows: readonly DiffRenderRow[], file: DiffFile): void {
+    this.clearPaneSelection();
+    pane.rows = rows;
+    pane.view.setText(joinRenderLines(rows));
+    pane.view.refreshGutterWidth();
+    if (pane.tokens) pane.view.setTokens(pane.tokens);
+    pane.view.setRowDecorations(rowDecorations(rows));
+    pane.view.setRangeHighlight(this.inlineHighlightName(pane.side), inlineHighlightRanges(rows), {
+      backgroundColor: "rgba(255, 255, 255, 0.18)",
+    });
+    pane.gutterRenderer.render();
+    this.refreshSyntaxHighlighting(pane, file);
+  }
 
+  private installScrollSync(left: VirtualizedTextView, right: VirtualizedTextView): () => void {
+    const leftElement = left.scrollElement;
+    const rightElement = right.scrollElement;
+    let pendingFrame = 0;
+    let pendingSource: HTMLElement | null = null;
+    let pendingTarget: HTMLElement | null = null;
+
+    const onLeftWheel = (event: WheelEvent) =>
+      this.syncWheelScroll(event, leftElement, rightElement);
+    const onRightWheel = (event: WheelEvent) =>
+      this.syncWheelScroll(event, rightElement, leftElement);
+    const onLeftScroll = () => {
+      if (this.syncingScroll) return;
+
+      pendingSource = leftElement;
+      pendingTarget = rightElement;
+      pendingFrame ||=
+        this.root.ownerDocument.defaultView?.requestAnimationFrame(flushPendingScroll) ?? 0;
+    };
+    const onRightScroll = () => {
+      if (this.syncingScroll) return;
+
+      pendingSource = rightElement;
+      pendingTarget = leftElement;
+      pendingFrame ||=
+        this.root.ownerDocument.defaultView?.requestAnimationFrame(flushPendingScroll) ?? 0;
+    };
+    const flushPendingScroll = () => {
+      pendingFrame = 0;
+      if (!pendingSource || !pendingTarget) return;
+
+      this.syncScrollElements(pendingSource, pendingTarget);
+      pendingSource = null;
+      pendingTarget = null;
+    };
+
+    leftElement.addEventListener("wheel", onLeftWheel, { passive: false });
+    rightElement.addEventListener("wheel", onRightWheel, { passive: false });
+    leftElement.addEventListener("scroll", onLeftScroll);
+    rightElement.addEventListener("scroll", onRightScroll);
+
+    return () => {
+      const view = this.root.ownerDocument.defaultView;
+      if (pendingFrame) view?.cancelAnimationFrame(pendingFrame);
+      leftElement.removeEventListener("wheel", onLeftWheel);
+      rightElement.removeEventListener("wheel", onRightWheel);
+      leftElement.removeEventListener("scroll", onLeftScroll);
+      rightElement.removeEventListener("scroll", onRightScroll);
+    };
+  }
+
+  private syncWheelScroll(event: WheelEvent, source: HTMLElement, target: HTMLElement): void {
+    if (!event.cancelable) return;
+
+    const delta = normalizedWheelDelta(event, source);
+    if (!delta.top && !delta.left) return;
+
+    event.preventDefault();
+    this.withScrollSync(() => {
+      const beforeTop = source.scrollTop;
+      const beforeLeft = source.scrollLeft;
+      source.scrollTop += delta.top;
+      source.scrollLeft += delta.left;
+      target.scrollTop += source.scrollTop - beforeTop;
+      target.scrollLeft += source.scrollLeft - beforeLeft;
+    });
+  }
+
+  private syncScrollElements(source: HTMLElement, target: HTMLElement): void {
+    this.withScrollSync(() => {
+      target.scrollTop = source.scrollTop;
+      target.scrollLeft = source.scrollLeft;
+    });
+  }
+
+  private withScrollSync(sync: () => void): void {
     this.syncingScroll = true;
-    target.scrollElement.scrollTop = source.scrollElement.scrollTop;
-    target.scrollElement.scrollLeft = source.scrollElement.scrollLeft;
-    this.syncingScroll = false;
+    sync();
+    const view = this.root.ownerDocument.defaultView;
+    if (!view) {
+      this.syncingScroll = false;
+      return;
+    }
+
+    view.requestAnimationFrame(() => (this.syncingScroll = false));
   }
 
   private renderEmptyState(text: string): void {
@@ -273,104 +585,119 @@ export class DiffView {
     return this.files.find((file) => file.path === this.selectedPath) ?? this.files[0] ?? null;
   }
 
-  private selectedFileIndex(): number {
-    if (this.selectedPath === null) return this.files.length > 0 ? 0 : -1;
-    return this.files.findIndex((file) => file.path === this.selectedPath);
+  private selectedHunkLocations(): readonly DiffHunkLocation[] {
+    const file = this.selectedFile();
+    if (!file) return [];
+
+    const locations = [...this.hunkRows].flatMap(([index, row]) => {
+      const hunk = file.hunks[index];
+      if (!hunk) return [];
+
+      return [{ hunk, index, path: file.path, row }];
+    });
+
+    return locations.sort((left, right) => left.row - right.row);
   }
 
-  private revealAdjacentHunk(
-    direction: HunkNavigationDirection,
-    options: DiffHunkNavigationOptions,
-  ): boolean {
-    const target = adjacentHunkLocation(
-      allHunkLocations(this.files),
-      this.currentHunkCursor(direction),
-      direction,
-      options.wrap ?? false,
-    );
-    if (!target) return false;
+  private currentHunkPosition(locations: readonly DiffHunkLocation[]): number {
+    const topRow = this.currentTopRow();
+    let current = -1;
 
-    return this.revealHunkLocation(target);
-  }
+    for (const [position, location] of locations.entries()) {
+      if (location.row > topRow) break;
 
-  private currentHunkCursor(direction: HunkNavigationDirection): HunkNavigationCursor | null {
-    const current = validHunkLocation(this.files, this.currentHunk);
-    if (current) return current;
-
-    const fileIndex = this.selectedFileIndex();
-    const file = this.files[fileIndex];
-    if (!file) return null;
-    return {
-      fileIndex,
-      hunkIndex: direction === "next" ? -1 : file.hunks.length,
-    };
-  }
-
-  private revealHunkLocation(location: DiffHunkLocation): boolean {
-    const target = validHunkLocation(this.files, location);
-    if (!target) return false;
-
-    if (this.selectedPath !== target.path) {
-      this.selectedPath = target.path;
-      this.render();
+      current = position;
     }
 
-    if (!this.scrollToHunk(target.hunkIndex)) return false;
-
-    this.currentHunk = target;
-    return true;
+    return current;
   }
 
-  private revealCurrentHunkInSelectedFile(): void {
-    if (this.currentHunk?.path !== this.selectedPath) return;
-
-    this.scrollToHunk(this.currentHunk.hunkIndex);
-  }
-
-  private scrollToHunk(index: number): boolean {
-    const row = this.hunkRows.get(index);
-    if (row === undefined) return false;
-
-    for (const pane of this.panes) pane.view.scrollToRow(row);
-    return true;
+  private currentTopRow(): number {
+    return this.panes[0]?.view.getState().visibleRange.start ?? 0;
   }
 
   private disposePanes(): void {
+    this.stopPaneSelectionDrag();
+    this.clearPaneSelection();
     this.paneGroup?.dispose();
     this.paneGroup = null;
+    this.disposeScrollSync?.();
+    this.disposeScrollSync = null;
     for (const pane of this.panes) {
+      pane.disposeEvents();
       pane.syntaxSession?.dispose();
+      pane.gutterRenderer.dispose();
       pane.view.dispose();
     }
     this.panes = [];
   }
 
-  private async applySyntaxHighlighting(pane: MountedPane, file: DiffFile): Promise<void> {
+  private expandedHunksForFile(file: DiffFile): ReadonlySet<number> {
+    return this.expandedHunksByPath.get(file.path) ?? new Set();
+  }
+
+  private mutableExpandedHunksForFile(file: DiffFile): Set<number> {
+    const existing = this.expandedHunksByPath.get(file.path);
+    if (existing) return existing;
+
+    const next = new Set<number>();
+    this.expandedHunksByPath.set(file.path, next);
+    return next;
+  }
+
+  private refreshSyntaxHighlighting(pane: MountedPane, file: DiffFile): void {
+    pane.syntaxSession?.dispose();
+    pane.syntaxSession = undefined;
+    pane.syntaxGeneration += 1;
+    const generation = pane.syntaxGeneration;
+    void this.applySyntaxHighlighting(pane, file, generation).catch(() => undefined);
+  }
+
+  private async applySyntaxHighlighting(
+    pane: MountedPane,
+    file: DiffFile,
+    generation: number,
+  ): Promise<void> {
     if (this.options.syntaxHighlight === false) return;
     if (!canUseShikiWorker()) return;
 
-    const text = joinRenderLines(pane.rows);
+    const syntaxText = joinSyntaxLines(pane.rows);
     const lang = shikiLanguageForFile(file);
     if (!lang) return;
 
-    const snapshot = createPieceTableSnapshot(text);
+    const snapshot = createPieceTableSnapshot(syntaxText);
     const session = createShikiHighlighterSession({
       documentId: `${file.path}:${pane.side}`,
       languageId: file.languageId ?? lang,
-      text,
+      text: syntaxText,
       snapshot,
+      langs: [lang],
       lang,
       theme: this.options.theme ?? DEFAULT_THEME,
+      themes: [this.options.theme ?? DEFAULT_THEME],
     });
     if (!session) return;
+
+    if (pane.syntaxGeneration !== generation) {
+      session.dispose();
+      return;
+    }
 
     pane.syntaxSession = session;
     const [theme, result] = await Promise.all([
       loadConfiguredTheme(this.options.theme),
-      session.refresh(snapshot, text),
+      session.refresh(snapshot, syntaxText),
     ]);
-    pane.view.setTheme(result.theme ?? theme);
-    pane.view.setTokens(result.tokens as readonly EditorToken[]);
+    if (pane.syntaxGeneration !== generation) {
+      session.dispose();
+      return;
+    }
+
+    pane.view.setTheme(syntaxOnlyTheme(result.theme ?? theme));
+    pane.gutterRenderer.refreshStyle();
+    pane.gutterRenderer.render();
+    pane.tokens = result.tokens as readonly EditorToken[];
+    pane.view.setTokens(pane.tokens);
   }
 
   private inlineHighlightName(side: MountedPane["side"]): string {
@@ -383,81 +710,44 @@ function selectedPathForFiles(files: readonly DiffFile[], current: string | null
   return files[0]?.path ?? null;
 }
 
-function allHunkLocations(files: readonly DiffFile[]): readonly DiffHunkLocation[] {
-  const locations: DiffHunkLocation[] = [];
+function toggleSetValue(set: Set<number>, value: number): void {
+  if (set.delete(value)) return;
 
-  for (const [fileIndex, file] of files.entries()) {
-    for (const [hunkIndex] of file.hunks.entries()) {
-      locations.push({ path: file.path, fileIndex, hunkIndex });
-    }
-  }
-
-  return locations;
+  set.add(value);
 }
 
-function validHunkLocation(
-  files: readonly DiffFile[],
-  location: DiffHunkLocation | null,
-): DiffHunkLocation | null {
-  if (!location) return null;
+function selectedPaneText(selection: PaneSelection, rows: readonly DiffRenderRow[]): string {
+  const start = Math.min(selection.anchorOffset, selection.headOffset);
+  const end = Math.max(selection.anchorOffset, selection.headOffset);
+  if (start === end) return "";
 
-  const file = files[location.fileIndex];
-  if (!file) return null;
-  if (file.path !== location.path) return null;
-  if (location.hunkIndex < 0) return null;
-  if (location.hunkIndex >= file.hunks.length) return null;
-  return location;
+  return joinRenderLines(rows).slice(start, end);
 }
 
-function adjacentHunkLocation(
-  locations: readonly DiffHunkLocation[],
-  cursor: HunkNavigationCursor | null,
-  direction: HunkNavigationDirection,
-  wrap: boolean,
-): DiffHunkLocation | null {
-  if (locations.length === 0) return null;
-  if (!cursor) return direction === "next" ? locations[0]! : locations[locations.length - 1]!;
-
-  const target =
-    direction === "next"
-      ? firstHunkAfterCursor(locations, cursor)
-      : lastHunkBeforeCursor(locations, cursor);
-  if (target) return target;
-  if (!wrap) return null;
-
-  return direction === "next" ? locations[0]! : locations[locations.length - 1]!;
+function normalizedWheelDelta(
+  event: WheelEvent,
+  element: HTMLElement,
+): { left: number; top: number } {
+  const multiplier = wheelDeltaMultiplier(event, element);
+  const top = event.shiftKey && event.deltaX === 0 ? 0 : event.deltaY;
+  const left = event.shiftKey && event.deltaX === 0 ? event.deltaY : event.deltaX;
+  return {
+    left: left * multiplier,
+    top: top * multiplier,
+  };
 }
 
-function firstHunkAfterCursor(
-  locations: readonly DiffHunkLocation[],
-  cursor: HunkNavigationCursor,
-): DiffHunkLocation | null {
-  for (const location of locations) {
-    if (compareHunkLocationToCursor(location, cursor) > 0) return location;
-  }
+function wheelDeltaMultiplier(event: WheelEvent, element: HTMLElement): number {
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) return WHEEL_LINE_DELTA;
+  if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) return element.clientHeight;
 
-  return null;
+  return 1;
 }
 
-function lastHunkBeforeCursor(
-  locations: readonly DiffHunkLocation[],
-  cursor: HunkNavigationCursor,
-): DiffHunkLocation | null {
-  let target: DiffHunkLocation | null = null;
-  for (const location of locations) {
-    if (compareHunkLocationToCursor(location, cursor) >= 0) return target;
-    target = location;
-  }
+function syntaxOnlyTheme(theme: EditorTheme | null | undefined): EditorTheme | null {
+  if (!theme) return null;
 
-  return target;
-}
-
-function compareHunkLocationToCursor(
-  location: DiffHunkLocation,
-  cursor: HunkNavigationCursor,
-): number {
-  if (location.fileIndex !== cursor.fileIndex) return location.fileIndex - cursor.fileIndex;
-  return location.hunkIndex - cursor.hunkIndex;
+  return { syntax: theme.syntax };
 }
 
 function rowDecorations(
@@ -495,10 +785,23 @@ function appendInlineRanges(
 
 function decorationForRow(row: DiffRenderRow): VirtualizedTextRowDecoration {
   const suffix = row.type;
+  const expandable = row.expandable ? " editor-diff-row-expandable" : "";
   return {
-    className: `editor-diff-row editor-diff-row-${suffix}`,
+    className: `editor-diff-row editor-diff-row-${suffix}${expandable}`,
     gutterClassName: `editor-diff-gutter-row editor-diff-gutter-row-${suffix}`,
   };
+}
+
+function joinSyntaxLines(rows: readonly DiffRenderRow[]): string {
+  return rows.map(syntaxLineText).join("\n");
+}
+
+function syntaxLineText(row: DiffRenderRow): string {
+  if (row.type === "context" || row.type === "addition" || row.type === "deletion") {
+    return row.text;
+  }
+
+  return " ".repeat(row.text.length);
 }
 
 function shikiLanguageForFile(file: DiffFile): string | null {

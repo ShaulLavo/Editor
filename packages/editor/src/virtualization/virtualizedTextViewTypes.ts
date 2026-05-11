@@ -1,4 +1,4 @@
-import type { EditorGutterContribution } from "../plugins";
+import type { EditorGutterContribution, EditorGutterWidthContext } from "../plugins";
 import type { EditorTokenStyle } from "../tokens";
 import type { BlockRow } from "../displayTransforms";
 import type { BrowserTextMetrics } from "./browserMetrics";
@@ -19,7 +19,7 @@ export type VirtualizedTextViewOptions = {
   readonly rowHeight?: number;
   readonly overscan?: number;
   readonly className?: string;
-  readonly gutterWidth?: number;
+  readonly gutterWidth?: number | ((context: EditorGutterWidthContext) => number);
   readonly longLineChunkSize?: number;
   readonly longLineChunkThreshold?: number;
   readonly horizontalOverscanColumns?: number;
@@ -73,6 +73,8 @@ export type VirtualizedTextChunk = {
 export type VirtualizedTextChunkPart =
   | VirtualizedTextChunkTextPart
   | VirtualizedTextChunkControlPart;
+
+export type VirtualizedTextRenderMode = "simple" | "rendered" | "chunked";
 
 export type VirtualizedTextChunkTextPart = {
   readonly kind: "text";
@@ -164,6 +166,7 @@ export type TokenRowSegment = {
 export type MountedVirtualizedTextRow = VirtualizedTextRow & {
   readonly gutterElement: HTMLDivElement;
   readonly gutterCells: Map<string, HTMLElement>;
+  readonly gutterCellList: readonly HTMLElement[];
   readonly leftSpacerElement: HTMLSpanElement;
   readonly selectionLayerElement: HTMLDivElement;
   readonly foldPlaceholderElement: HTMLSpanElement;
@@ -178,6 +181,11 @@ export type MountedVirtualizedTextRow = VirtualizedTextRow & {
   readonly foldMarkerKey: string;
   readonly foldCollapsed: boolean;
   readonly displayKind: "text" | "block";
+  readonly textRenderMode: VirtualizedTextRenderMode;
+  readonly rowDecorationClassName: string;
+  readonly rowDecorationGutterClassName: string;
+  readonly rowDecorationKey: string;
+  readonly cursorLineContentActive: boolean;
   readonly geometryCache: unknown | null;
 };
 

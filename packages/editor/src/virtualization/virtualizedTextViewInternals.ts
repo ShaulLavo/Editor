@@ -1,6 +1,6 @@
 import type { FoldMap } from "../foldMap";
 import type { BlockRow, DisplayRow } from "../displayTransforms";
-import type { EditorGutterContribution } from "../plugins";
+import type { EditorGutterContribution, EditorGutterWidthContext } from "../plugins";
 import type { EditorToken, EditorTokenStyle } from "../tokens";
 import type { BrowserTextMetrics } from "./browserMetrics";
 import type { FixedRowVirtualizer } from "./fixedRowVirtualizer";
@@ -65,6 +65,7 @@ export interface VirtualizedTextViewInternal {
   readonly spacer: HTMLDivElement;
   readonly gutterElement: HTMLDivElement;
   gutterContributions: readonly EditorGutterContribution[];
+  readonly gutterWidthProvider: ((context: EditorGutterWidthContext) => number) | null;
   readonly caretLayerElement: HTMLDivElement;
   readonly caretElement: HTMLDivElement;
   readonly secondaryCaretElements: HTMLDivElement[];
@@ -112,6 +113,7 @@ export interface VirtualizedTextViewInternal {
   selections: readonly VirtualizedStoredSelection[];
   lastSelectionHighlightSignature: string;
   lastRenderedRowsKey: string;
+  gutterContributionWidths: ReadonlyMap<string, number>;
   gutterWidthDirty: boolean;
   currentGutterWidth: number;
   contentWidth: number;
