@@ -17,8 +17,12 @@ export type {
   TypeScriptLspDiagnosticCounts,
   TypeScriptLspDefinitionTarget,
   TypeScriptLspDiagnosticSummary,
+  TypeScriptLspNavigationKind,
+  TypeScriptLspNavigationOpenMode,
+  TypeScriptLspNavigationOptions,
   TypeScriptLspPlugin,
   TypeScriptLspPluginOptions,
+  TypeScriptLspReferencesResult,
   TypeScriptLspSourceFile,
   TypeScriptLspStatus,
 } from "./types"

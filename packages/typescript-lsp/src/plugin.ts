@@ -1,5 +1,6 @@
 import type {
   DocumentSessionChange,
+  EditorCommandId,
   EditorDisposable,
   EditorFeatureContribution,
   EditorFeatureContributionContext,
@@ -23,10 +24,12 @@ import {
 import type * as lsp from "vscode-languageserver-protocol"
 import {
   identifierRangeAtOffset,
-  navigateToDefinition,
+  navigateToTarget,
   preferredDefinitionTarget,
   preferredJumpableDefinitionTarget,
+  preferredReferenceTarget,
   requestDefinition,
+  requestNavigationTargets,
   sameOffsetRange,
   type DefinitionResult,
   type OffsetRange,
@@ -51,6 +54,10 @@ import {
 import type {
   TypeScriptLspDefinitionTarget,
   TypeScriptLspDiagnosticSummary,
+  TypeScriptLspNavigationKind,
+  TypeScriptLspNavigationOpenMode,
+  TypeScriptLspNavigationOptions,
+  TypeScriptLspReferencesResult,
   TypeScriptLspPlugin,
   TypeScriptLspPluginOptions,
   TypeScriptLspSourceFile,
@@ -69,10 +76,22 @@ export type TypeScriptLspResolvedOptions = {
   readonly onStatusChange?: (status: TypeScriptLspStatus) => void
   readonly onDiagnostics?: (summary: TypeScriptLspDiagnosticSummary) => void
   readonly onOpenDefinition?: (
-    target: TypeScriptLspDefinitionTarget
+    target: TypeScriptLspDefinitionTarget,
+    options?: TypeScriptLspNavigationOptions
+  ) => void | boolean
+  readonly onOpenReferences?: (
+    result: TypeScriptLspReferencesResult
   ) => void | boolean
   readonly onError?: (error: unknown) => void
 }
+
+type TypeScriptLspNavigationCommand = {
+  readonly kind: TypeScriptLspNavigationKind
+  readonly openMode: TypeScriptLspNavigationOpenMode
+  readonly includeDeclaration?: boolean
+}
+
+type DiagnosticMarkerDirection = "next" | "previous"
 
 type ActiveDocument = {
   readonly uri: lsp.DocumentUri
@@ -156,8 +175,23 @@ class TypeScriptLspPluginState {
   }
 
   public goToDefinitionFromSelection(): boolean {
+    return this.runNavigationCommand({
+      kind: "definition",
+      openMode: "default",
+    })
+  }
+
+  public runNavigationCommand(command: TypeScriptLspNavigationCommand): boolean {
     for (const contribution of this.contributions) {
-      if (contribution.goToDefinitionFromSelection()) return true
+      if (contribution.runNavigationCommand(command)) return true
+    }
+
+    return false
+  }
+
+  public moveDiagnosticMarker(direction: DiagnosticMarkerDirection): boolean {
+    for (const contribution of this.contributions) {
+      if (contribution.moveDiagnosticMarker(direction)) return true
     }
 
     return false
@@ -165,19 +199,19 @@ class TypeScriptLspPluginState {
 }
 
 class TypeScriptLspCommandContribution implements EditorFeatureContribution {
-  private readonly command: EditorDisposable
+  private readonly commands: readonly EditorDisposable[]
 
   public constructor(
     _context: EditorFeatureContributionContext,
     private readonly state: TypeScriptLspPluginState
   ) {
-    this.command = _context.registerCommand("goToDefinition", () =>
-      this.state.goToDefinitionFromSelection()
+    this.commands = TYPESCRIPT_LSP_COMMANDS.map((command) =>
+      _context.registerCommand(command.id, () => command.run(this.state))
     )
   }
 
   public dispose(): void {
-    this.command.dispose()
+    for (const command of this.commands) command.dispose()
   }
 }
 
@@ -275,12 +309,37 @@ class TypeScriptLspContribution implements EditorViewContribution {
   }
 
   public goToDefinitionFromSelection(): boolean {
+    return this.runNavigationCommand({
+      kind: "definition",
+      openMode: "default",
+    })
+  }
+
+  public runNavigationCommand(command: TypeScriptLspNavigationCommand): boolean {
+    const selection = this.context.getSnapshot().selections[0]
+    if (!selection) return false
+    return this.requestNavigationAtOffset(selection.headOffset, command)
+  }
+
+  public moveDiagnosticMarker(direction: DiagnosticMarkerDirection): boolean {
     const active = this.activeDocument
     if (!active) return false
 
     const selection = this.context.getSnapshot().selections[0]
     if (!selection) return false
-    return this.goToDefinitionAtOffset(selection.headOffset)
+
+    const range = diagnosticMarkerTarget(
+      active.text,
+      this.activeDiagnostics,
+      selection.headOffset,
+      direction
+    )
+    if (!range) return false
+
+    const timingName = `typescriptLsp.marker.${direction}`
+    this.context.setSelection(range.start, range.end, timingName, range.start)
+    this.context.focusEditor()
+    return true
   }
 
   private createClient(): LspClient {
@@ -726,6 +785,16 @@ class TypeScriptLspContribution implements EditorViewContribution {
   }
 
   private goToDefinitionAtOffset(offset: number): boolean {
+    return this.requestNavigationAtOffset(offset, {
+      kind: "definition",
+      openMode: "default",
+    })
+  }
+
+  private requestNavigationAtOffset(
+    offset: number,
+    command: TypeScriptLspNavigationCommand
+  ): boolean {
     const active = this.activeDocument
     if (!active) return false
     if (!this.client.initialized) return false
@@ -734,12 +803,16 @@ class TypeScriptLspContribution implements EditorViewContribution {
     this.clearDefinitionLink()
     const requestId = this.definitionRequestId + 1
     this.definitionRequestId = requestId
-    void requestDefinition(this.client, {
+    void requestNavigationTargets(this.client, {
       uri: active.uri,
       text: active.text,
       offset,
+      kind: command.kind,
+      includeDeclaration: command.includeDeclaration,
     })
-      .then((result) => this.handleDefinitionResult(requestId, active, result))
+      .then((result) =>
+        this.handleNavigationResult(requestId, active, offset, command, result)
+      )
       .catch((error: unknown) => this.handleRequestError(error))
     return true
   }
@@ -788,26 +861,72 @@ class TypeScriptLspContribution implements EditorViewContribution {
     this.context.scrollElement.style.cursor = "pointer"
   }
 
-  private handleDefinitionResult(
+  private handleNavigationResult(
     requestId: number,
     active: ActiveDocument,
+    offset: number,
+    command: TypeScriptLspNavigationCommand,
     result: DefinitionResult
   ): void {
     if (requestId !== this.definitionRequestId) return
     if (active !== this.activeDocument) return
 
-    const target = preferredDefinitionTarget(active.uri, result)
-    if (!target) return
-    if (target.uri === active.uri) {
-      navigateToDefinition(target, {
-        text: active.text,
-        setSelection: this.context.setSelection.bind(this.context),
-        focusEditor: this.context.focusEditor.bind(this.context),
-      })
+    if (command.kind === "references") {
+      this.handleReferencesResult(active, offset, result)
       return
     }
 
-    this.options.onOpenDefinition?.(target)
+    const target = preferredDefinitionTarget(active.uri, result)
+    if (!target) return
+    this.openNavigationTarget(active, target, command)
+  }
+
+  private handleReferencesResult(
+    active: ActiveDocument,
+    offset: number,
+    result: DefinitionResult
+  ): void {
+    const handled = this.options.onOpenReferences?.({
+      uri: active.uri,
+      targets: result.targets,
+    })
+    if (handled) return
+
+    const target = preferredReferenceTarget(active.uri, active.text, offset, result)
+    if (!target) return
+    this.openNavigationTarget(active, target, {
+      kind: "references",
+      openMode: "peek",
+    })
+  }
+
+  private openNavigationTarget(
+    active: ActiveDocument,
+    target: TypeScriptLspDefinitionTarget,
+    command: TypeScriptLspNavigationCommand
+  ): void {
+    const shouldOfferExternalOpen =
+      target.uri !== active.uri || command.openMode !== "default"
+    const handled = shouldOfferExternalOpen
+      ? this.openDefinitionTarget(target, command)
+      : false
+    if (handled) return
+    if (target.uri !== active.uri) return
+
+    navigateToTarget(target, {
+      text: active.text,
+      setSelection: this.context.setSelection.bind(this.context),
+      focusEditor: this.context.focusEditor.bind(this.context),
+    }, navigationTimingName(command.kind))
+  }
+
+  private openDefinitionTarget(
+    target: TypeScriptLspDefinitionTarget,
+    command: TypeScriptLspNavigationCommand
+  ): void | boolean {
+    const options = defaultDefinitionOptions(command)
+    if (!options) return this.options.onOpenDefinition?.(target)
+    return this.options.onOpenDefinition?.(target, options)
   }
 
   private hideHover(): void {
@@ -860,8 +979,82 @@ function resolveOptions(
     onStatusChange: options.onStatusChange,
     onDiagnostics: options.onDiagnostics,
     onOpenDefinition: options.onOpenDefinition,
+    onOpenReferences: options.onOpenReferences,
     onError: options.onError,
   }
+}
+
+const TYPESCRIPT_LSP_COMMANDS: readonly {
+  readonly id: EditorCommandId
+  run(state: TypeScriptLspPluginState): boolean
+}[] = [
+  {
+    id: "goToDefinition",
+    run: (state) => state.goToDefinitionFromSelection(),
+  },
+  {
+    id: "editor.action.goToDefinition",
+    run: (state) => state.goToDefinitionFromSelection(),
+  },
+  {
+    id: "editor.action.peekDefinition",
+    run: (state) =>
+      state.runNavigationCommand({ kind: "definition", openMode: "peek" }),
+  },
+  {
+    id: "editor.action.revealDefinitionAside",
+    run: (state) =>
+      state.runNavigationCommand({ kind: "definition", openMode: "aside" }),
+  },
+  {
+    id: "editor.action.goToImplementation",
+    run: (state) =>
+      state.runNavigationCommand({
+        kind: "implementation",
+        openMode: "default",
+      }),
+  },
+  {
+    id: "editor.action.goToTypeDefinition",
+    run: (state) =>
+      state.runNavigationCommand({
+        kind: "typeDefinition",
+        openMode: "default",
+      }),
+  },
+  {
+    id: "editor.action.goToReferences",
+    run: (state) =>
+      state.runNavigationCommand({
+        kind: "references",
+        openMode: "peek",
+        includeDeclaration: true,
+      }),
+  },
+  {
+    id: "editor.action.marker.next",
+    run: (state) => state.moveDiagnosticMarker("next"),
+  },
+  {
+    id: "editor.action.marker.prev",
+    run: (state) => state.moveDiagnosticMarker("previous"),
+  },
+]
+
+function defaultDefinitionOptions(
+  command: TypeScriptLspNavigationCommand
+): TypeScriptLspNavigationOptions | null {
+  if (command.kind === "definition" && command.openMode === "default") return null
+
+  return {
+    kind: command.kind,
+    openMode: command.openMode,
+  }
+}
+
+function navigationTimingName(kind: TypeScriptLspNavigationKind): string {
+  if (kind === "typeDefinition") return "typescriptLsp.goToTypeDefinition"
+  return `typescriptLsp.goTo${capitalize(kind)}`
 }
 
 function shouldSyncDocument(
@@ -960,6 +1153,42 @@ function visibleRangeAtOffset(text: string, offset: number): OffsetRange {
   return { start, end: Math.min(text.length, start + 1) }
 }
 
+function diagnosticMarkerTarget(
+  text: string,
+  diagnostics: readonly lsp.Diagnostic[],
+  offset: number,
+  direction: DiagnosticMarkerDirection
+): OffsetRange | null {
+  const ranges = diagnostics
+    .flatMap((diagnostic) => diagnosticRange(text, diagnostic))
+    .sort(compareOffsetRanges)
+  if (ranges.length === 0) return null
+  if (direction === "next")
+    return ranges.find((range) => range.start > offset) ?? ranges[0] ?? null
+
+  return (
+    ranges
+      .toReversed()
+      .find((range) => range.start < offset) ??
+    ranges.at(-1) ??
+    null
+  )
+}
+
+function diagnosticRange(
+  text: string,
+  diagnostic: lsp.Diagnostic
+): readonly OffsetRange[] {
+  const start = lspPositionToOffset(text, diagnostic.range.start)
+  const end = lspPositionToOffset(text, diagnostic.range.end)
+  if (end < start) return []
+  return [{ start, end }]
+}
+
+function compareOffsetRanges(left: OffsetRange, right: OffsetRange): number {
+  return left.start - right.start || left.end - right.end
+}
+
 function isNavigationModifier(event: {
   readonly metaKey: boolean
   readonly ctrlKey: boolean
@@ -975,3 +1204,7 @@ function isAbortError(error: unknown): boolean {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
+
+function capitalize(value: string): string {
+  return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`
+}

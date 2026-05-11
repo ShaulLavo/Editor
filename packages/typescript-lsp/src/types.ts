@@ -31,6 +31,24 @@ export type TypeScriptLspDefinitionTarget = {
   readonly range: lsp.Range;
 };
 
+export type TypeScriptLspNavigationKind =
+  | "definition"
+  | "references"
+  | "implementation"
+  | "typeDefinition";
+
+export type TypeScriptLspNavigationOpenMode = "default" | "peek" | "aside";
+
+export type TypeScriptLspNavigationOptions = {
+  readonly kind: TypeScriptLspNavigationKind;
+  readonly openMode: TypeScriptLspNavigationOpenMode;
+};
+
+export type TypeScriptLspReferencesResult = {
+  readonly uri: lsp.DocumentUri;
+  readonly targets: readonly TypeScriptLspDefinitionTarget[];
+};
+
 export type TypeScriptLspPluginOptions = {
   readonly rootUri?: lsp.DocumentUri | null;
   readonly compilerOptions?: ts.CompilerOptions;
@@ -42,7 +60,11 @@ export type TypeScriptLspPluginOptions = {
   readonly webSocketTransportOptions?: LspWebSocketTransportOptions;
   readonly onStatusChange?: (status: TypeScriptLspStatus) => void;
   readonly onDiagnostics?: (summary: TypeScriptLspDiagnosticSummary) => void;
-  readonly onOpenDefinition?: (target: TypeScriptLspDefinitionTarget) => void | boolean;
+  readonly onOpenDefinition?: (
+    target: TypeScriptLspDefinitionTarget,
+    options?: TypeScriptLspNavigationOptions,
+  ) => void | boolean;
+  readonly onOpenReferences?: (result: TypeScriptLspReferencesResult) => void | boolean;
   readonly onError?: (error: unknown) => void;
 };
 

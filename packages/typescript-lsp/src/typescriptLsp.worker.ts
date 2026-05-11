@@ -81,6 +81,11 @@ type WorkspacePackage = {
   readonly root: string;
 };
 
+type TypeScriptNavigationItem = {
+  readonly fileName: string;
+  readonly textSpan: ts.TextSpan;
+};
+
 type JsonRpcResponseError = {
   readonly code: number;
   readonly message: string;
@@ -132,6 +137,9 @@ async function requestResult(message: lsp.RequestMessage): Promise<unknown> {
   if (message.method === "shutdown") return shutdownResult();
   if (message.method === "textDocument/hover") return hoverResult(message.params);
   if (message.method === "textDocument/definition") return definitionResult(message.params);
+  if (message.method === "textDocument/references") return referencesResult(message.params);
+  if (message.method === "textDocument/implementation") return implementationResult(message.params);
+  if (message.method === "textDocument/typeDefinition") return typeDefinitionResult(message.params);
   throw rpcError(METHOD_NOT_FOUND, `Method not implemented: ${message.method}`);
 }
 
@@ -163,6 +171,9 @@ function initializeResult(params: unknown): lsp.InitializeResult {
       },
       hoverProvider: true,
       definitionProvider: true,
+      referencesProvider: true,
+      implementationProvider: true,
+      typeDefinitionProvider: true,
     },
   } as lsp.InitializeResult;
 }
@@ -319,7 +330,57 @@ async function definitionResult(params: unknown): Promise<lsp.Location[]> {
   const state = await ensureService();
   const offset = lspPositionToOffset(document.text, request.position);
   const definitions = definitionInfosAtPosition(state.env, document.fileName, offset);
-  return definitions.flatMap((definition) => locationFromDefinition(state.env, definition));
+  return definitions.flatMap((definition) => locationFromNavigationItem(state.env, definition));
+}
+
+async function referencesResult(params: unknown): Promise<lsp.Location[]> {
+  const request = textDocumentPositionParams(params);
+  if (!request) return [];
+
+  const document = documentForUri(request.uri);
+  if (!document) return [];
+
+  const state = await ensureService();
+  const offset = lspPositionToOffset(document.text, request.position);
+  const references =
+    state.env.languageService.getReferencesAtPosition(document.fileName, offset) ?? [];
+  return references
+    .filter(
+      (reference) => referencesIncludeDeclaration(params) || !referenceIsDefinition(reference),
+    )
+    .flatMap((reference) => locationFromNavigationItem(state.env, reference));
+}
+
+async function implementationResult(params: unknown): Promise<lsp.Location[]> {
+  const request = textDocumentPositionParams(params);
+  if (!request) return [];
+
+  const document = documentForUri(request.uri);
+  if (!document) return [];
+
+  const state = await ensureService();
+  const offset = lspPositionToOffset(document.text, request.position);
+  const implementations =
+    state.env.languageService.getImplementationAtPosition(document.fileName, offset) ?? [];
+  return implementations.flatMap((implementation) =>
+    locationFromNavigationItem(state.env, implementation),
+  );
+}
+
+async function typeDefinitionResult(params: unknown): Promise<lsp.Location[]> {
+  const request = textDocumentPositionParams(params);
+  if (!request) return [];
+
+  const document = documentForUri(request.uri);
+  if (!document) return [];
+
+  const state = await ensureService();
+  const offset = lspPositionToOffset(document.text, request.position);
+  const typeDefinitions =
+    state.env.languageService.getTypeDefinitionAtPosition(document.fileName, offset) ?? [];
+  return typeDefinitions.flatMap((typeDefinition) =>
+    locationFromNavigationItem(state.env, typeDefinition),
+  );
 }
 
 function ensureService(): Promise<TypeScriptServiceState> {
@@ -507,18 +568,18 @@ function definitionInfosAtPosition(
   return service.getDefinitionAtPosition(fileName, offset) ?? [];
 }
 
-function locationFromDefinition(
+function locationFromNavigationItem(
   env: VirtualTypeScriptEnvironment,
-  definition: ts.DefinitionInfo,
+  item: TypeScriptNavigationItem,
 ): readonly lsp.Location[] {
-  const fileName = workspaceFileNameForDefinition(definition.fileName);
+  const fileName = workspaceFileNameForDefinition(item.fileName);
   const text = sourceTextForFile(env, fileName);
   if (text === null) return [];
 
   return [
     {
       uri: fileNameToDocumentUri(fileName),
-      range: rangeFromTextSpan(text, definition.textSpan),
+      range: rangeFromTextSpan(text, item.textSpan),
     },
   ];
 }
@@ -843,6 +904,16 @@ function textDocumentPositionParams(params: unknown): {
       character: params.position.character,
     },
   };
+}
+
+function referencesIncludeDeclaration(params: unknown): boolean {
+  if (!isRecord(params)) return true;
+  if (!isRecord(params.context)) return true;
+  return params.context.includeDeclaration !== false;
+}
+
+function referenceIsDefinition(reference: ts.ReferenceEntry): boolean {
+  return (reference as { readonly isDefinition?: boolean }).isDefinition === true;
 }
 
 function isCurrentDocument(

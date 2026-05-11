@@ -293,6 +293,85 @@ describe("TypeScript LSP worker", () => {
       ],
     });
   });
+
+  it("returns references, implementations, and type definition locations", async () => {
+    const postMessage = vi.spyOn(globalThis, "postMessage").mockImplementation(() => undefined);
+    const sourceFiles = new Map<string, string>();
+    installVfsMocks(sourceFiles);
+    await import("../src/typescriptLsp.worker");
+
+    openDocumentWithInitializedWorker("const value = typed;\ninterface Typed {}");
+    send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "textDocument/references",
+      params: {
+        textDocument: { uri: "file:///src/index.ts" },
+        position: { line: 0, character: 6 },
+        context: { includeDeclaration: true },
+      },
+    });
+    send({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "textDocument/implementation",
+      params: {
+        textDocument: { uri: "file:///src/index.ts" },
+        position: { line: 0, character: 6 },
+      },
+    });
+    send({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "textDocument/typeDefinition",
+      params: {
+        textDocument: { uri: "file:///src/index.ts" },
+        position: { line: 0, character: 14 },
+      },
+    });
+    await waitFor(() => responseForId(postMessage.mock.calls, 4) !== null);
+
+    expect(responseForId(postMessage.mock.calls, 2)).toMatchObject({
+      result: [
+        {
+          uri: "file:///src/index.ts",
+          range: {
+            start: { line: 0, character: 6 },
+            end: { line: 0, character: 11 },
+          },
+        },
+        {
+          uri: "file:///src/index.ts",
+          range: {
+            start: { line: 0, character: 14 },
+            end: { line: 0, character: 19 },
+          },
+        },
+      ],
+    });
+    expect(responseForId(postMessage.mock.calls, 3)).toMatchObject({
+      result: [
+        {
+          uri: "file:///src/index.ts",
+          range: {
+            start: { line: 1, character: 9 },
+            end: { line: 1, character: 14 },
+          },
+        },
+      ],
+    });
+    expect(responseForId(postMessage.mock.calls, 4)).toMatchObject({
+      result: [
+        {
+          uri: "file:///src/index.ts",
+          range: {
+            start: { line: 1, character: 9 },
+            end: { line: 1, character: 14 },
+          },
+        },
+      ],
+    });
+  });
 });
 
 function installVfsMocks(sourceFiles: Map<string, string>): void {
@@ -341,6 +420,16 @@ function createEnvironment(sourceFiles: Map<string, string>): unknown {
         ],
       }),
       getDefinitionAtPosition: () => [],
+      getReferencesAtPosition: () => [
+        { fileName: "/src/index.ts", textSpan: { start: 6, length: 5 } },
+        { fileName: "/src/index.ts", textSpan: { start: 14, length: 5 } },
+      ],
+      getImplementationAtPosition: () => [
+        { fileName: "/src/index.ts", textSpan: { start: 30, length: 5 } },
+      ],
+      getTypeDefinitionAtPosition: () => [
+        { fileName: "/src/index.ts", textSpan: { start: 30, length: 5 } },
+      ],
     },
   };
 }

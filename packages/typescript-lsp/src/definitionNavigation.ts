@@ -1,12 +1,8 @@
-import {
-  lspPositionToOffset,
-  offsetToLspPosition,
-  type LspClient,
-} from "@editor/lsp"
+import { lspPositionToOffset, offsetToLspPosition, type LspClient } from "@editor/lsp"
 import type * as lsp from "vscode-languageserver-protocol"
 
 import { documentUriToFileName } from "./paths"
-import type { TypeScriptLspDefinitionTarget } from "./types"
+import type { TypeScriptLspDefinitionTarget, TypeScriptLspNavigationKind } from "./types"
 
 /**
  * Half-open `[start, end)` offset range into the editor text buffer. Used
@@ -31,6 +27,11 @@ export type DefinitionRequest = {
   readonly signal?: AbortSignal
 }
 
+export type NavigationRequest = DefinitionRequest & {
+  readonly kind: TypeScriptLspNavigationKind
+  readonly includeDeclaration?: boolean
+}
+
 /**
  * Normalized response from {@link requestDefinition}. The LSP protocol
  * permits a single `Location`, an array of `Location`, or an array of
@@ -50,16 +51,17 @@ export type DefinitionResult = {
  */
 export type NavigationEditor = {
   readonly text: string
-  setSelection(
-    anchor: number,
-    head: number,
-    timingName: string,
-    revealOffset?: number
-  ): void
+  setSelection(anchor: number, head: number, timingName: string, revealOffset?: number): void
   focusEditor(): void
 }
 
 const SET_SELECTION_TIMING_NAME = "typescriptLsp.goToDefinition"
+
+const REQUEST_METHODS: Record<Exclude<TypeScriptLspNavigationKind, "references">, string> = {
+  definition: "textDocument/definition",
+  implementation: "textDocument/implementation",
+  typeDefinition: "textDocument/typeDefinition",
+}
 
 /**
  * Issue a `textDocument/definition` request and normalize the response
@@ -69,17 +71,42 @@ const SET_SELECTION_TIMING_NAME = "typescriptLsp.goToDefinition"
  */
 export async function requestDefinition(
   client: LspClient,
-  request: DefinitionRequest
+  request: DefinitionRequest,
 ): Promise<DefinitionResult> {
-  const raw = await client.request<
-    lsp.Location[] | lsp.Location | lsp.LocationLink[] | null
-  >(
-    "textDocument/definition",
+  return requestNavigationTargets(client, { ...request, kind: "definition" })
+}
+
+export async function requestNavigationTargets(
+  client: LspClient,
+  request: NavigationRequest,
+): Promise<DefinitionResult> {
+  if (request.kind === "references") return requestReferences(client, request)
+
+  const raw = await client.request<lsp.Location[] | lsp.Location | lsp.LocationLink[] | null>(
+    REQUEST_METHODS[request.kind],
     {
       textDocument: { uri: request.uri },
       position: offsetToLspPosition(request.text, request.offset),
     } satisfies lsp.TextDocumentPositionParams,
-    request.signal ? { signal: request.signal } : undefined
+    request.signal ? { signal: request.signal } : undefined,
+  )
+  return { targets: definitionTargets(raw) }
+}
+
+async function requestReferences(
+  client: LspClient,
+  request: NavigationRequest,
+): Promise<DefinitionResult> {
+  const raw = await client.request<lsp.Location[] | null>(
+    "textDocument/references",
+    {
+      textDocument: { uri: request.uri },
+      position: offsetToLspPosition(request.text, request.offset),
+      context: {
+        includeDeclaration: request.includeDeclaration ?? true,
+      },
+    } satisfies lsp.ReferenceParams,
+    request.signal ? { signal: request.signal } : undefined,
   )
   return { targets: definitionTargets(raw) }
 }
@@ -93,11 +120,19 @@ export async function requestDefinition(
  */
 export function navigateToDefinition(
   target: TypeScriptLspDefinitionTarget,
-  editor: NavigationEditor
+  editor: NavigationEditor,
+): void {
+  navigateToTarget(target, editor, SET_SELECTION_TIMING_NAME)
+}
+
+export function navigateToTarget(
+  target: TypeScriptLspDefinitionTarget,
+  editor: NavigationEditor,
+  timingName: string,
 ): void {
   const start = lspPositionToOffset(editor.text, target.range.start)
   const end = lspPositionToOffset(editor.text, target.range.end)
-  editor.setSelection(start, end, SET_SELECTION_TIMING_NAME, start)
+  editor.setSelection(start, end, timingName, start)
   editor.focusEditor()
 }
 
@@ -108,9 +143,28 @@ export function navigateToDefinition(
  */
 export function preferredDefinitionTarget(
   activeUri: lsp.DocumentUri,
-  result: DefinitionResult
+  result: DefinitionResult,
 ): TypeScriptLspDefinitionTarget | null {
   return preferredTarget(activeUri, result.targets)
+}
+
+export function preferredReferenceTarget(
+  activeUri: lsp.DocumentUri,
+  activeText: string,
+  sourceOffset: number,
+  result: DefinitionResult,
+): TypeScriptLspDefinitionTarget | null {
+  const sourceRange =
+    identifierRangeAtOffset(activeText, sourceOffset) ??
+    ({ start: sourceOffset, end: sourceOffset } satisfies OffsetRange)
+  const sameDocumentTargets = result.targets.flatMap((target) =>
+    targetWithOffset(activeUri, activeText, target),
+  )
+  const nextTarget = sameDocumentTargets.find((target) => target.start > sourceRange.end)
+  if (nextTarget) return nextTarget.target
+
+  const otherTarget = sameDocumentTargets.find((target) => !rangesOverlap(sourceRange, target))
+  return otherTarget?.target ?? preferredTarget(activeUri, result.targets)
 }
 
 /**
@@ -124,10 +178,10 @@ export function preferredJumpableDefinitionTarget(
   activeUri: lsp.DocumentUri,
   activeText: string,
   sourceRange: OffsetRange,
-  result: DefinitionResult
+  result: DefinitionResult,
 ): TypeScriptLspDefinitionTarget | null {
   const targets = result.targets.filter(
-    (target) => !targetIsSourceRange(activeUri, activeText, sourceRange, target)
+    (target) => !targetIsSourceRange(activeUri, activeText, sourceRange, target),
   )
   return preferredTarget(activeUri, targets)
 }
@@ -140,10 +194,7 @@ export function preferredJumpableDefinitionTarget(
  * past the identifier's last character are permitted so the function
  * behaves intuitively when the cursor is immediately after the name.
  */
-export function identifierRangeAtOffset(
-  text: string,
-  offset: number
-): OffsetRange | null {
+export function identifierRangeAtOffset(text: string, offset: number): OffsetRange | null {
   const clamped = Math.max(0, Math.min(offset, text.length))
   const index = identifierIndexAtOffset(text, clamped)
   if (index === null) return null
@@ -160,7 +211,7 @@ export function identifierRangeAtOffset(
 
 function preferredTarget(
   activeUri: lsp.DocumentUri,
-  targets: readonly TypeScriptLspDefinitionTarget[]
+  targets: readonly TypeScriptLspDefinitionTarget[],
 ): TypeScriptLspDefinitionTarget | null {
   return (
     targets.find((target) => target.uri === activeUri) ??
@@ -170,11 +221,29 @@ function preferredTarget(
   )
 }
 
+function targetWithOffset(
+  activeUri: lsp.DocumentUri,
+  activeText: string,
+  target: TypeScriptLspDefinitionTarget,
+): readonly (OffsetRange & {
+  readonly target: TypeScriptLspDefinitionTarget
+})[] {
+  if (target.uri !== activeUri) return []
+
+  return [
+    {
+      start: lspPositionToOffset(activeText, target.range.start),
+      end: lspPositionToOffset(activeText, target.range.end),
+      target,
+    },
+  ]
+}
+
 function targetIsSourceRange(
   activeUri: lsp.DocumentUri,
   activeText: string,
   sourceRange: OffsetRange,
-  target: TypeScriptLspDefinitionTarget
+  target: TypeScriptLspDefinitionTarget,
 ): boolean {
   if (target.uri !== activeUri) return false
 
@@ -188,7 +257,7 @@ function rangesOverlap(left: OffsetRange, right: OffsetRange): boolean {
 }
 
 function definitionTargets(
-  result: lsp.Location[] | lsp.Location | lsp.LocationLink[] | null
+  result: lsp.Location[] | lsp.Location | lsp.LocationLink[] | null,
 ): readonly TypeScriptLspDefinitionTarget[] {
   if (!result) return []
   const items = Array.isArray(result) ? result : [result]
@@ -196,11 +265,10 @@ function definitionTargets(
 }
 
 function definitionTarget(
-  item: lsp.Location | lsp.LocationLink
+  item: lsp.Location | lsp.LocationLink,
 ): readonly TypeScriptLspDefinitionTarget[] {
   const uri = "targetUri" in item ? item.targetUri : item.uri
-  const range =
-    "targetSelectionRange" in item ? item.targetSelectionRange : item.range
+  const range = "targetSelectionRange" in item ? item.targetSelectionRange : item.range
   const fileName = documentUriToFileName(uri)
   if (!fileName) return []
 
@@ -215,8 +283,7 @@ function definitionTarget(
 
 function identifierIndexAtOffset(text: string, offset: number): number | null {
   if (isIdentifierCharacter(text[offset] ?? "")) return offset
-  if (offset > 0 && isIdentifierCharacter(text[offset - 1] ?? ""))
-    return offset - 1
+  if (offset > 0 && isIdentifierCharacter(text[offset - 1] ?? "")) return offset - 1
   return null
 }
 
@@ -229,9 +296,6 @@ function isIdentifierCharacter(value: string): boolean {
  * span. Accepts `null` on the left-hand side so callers can pass in the
  * previously-stored "last link range" without an extra null check.
  */
-export function sameOffsetRange(
-  left: OffsetRange | null,
-  right: OffsetRange
-): boolean {
+export function sameOffsetRange(left: OffsetRange | null, right: OffsetRange): boolean {
   return left?.start === right.start && left.end === right.end
 }

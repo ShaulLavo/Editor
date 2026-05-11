@@ -1,6 +1,9 @@
 import type {
   DocumentSessionChange,
+  EditorCommandId,
+  EditorFeatureContributionContext,
   EditorPluginContext,
+  EditorCommandHandler,
   EditorViewContributionContext,
   EditorViewContributionProvider,
   EditorViewSnapshot,
@@ -798,6 +801,158 @@ describe("createTypeScriptLspPlugin", () => {
       },
     });
   });
+
+  it("registers VS Code navigation and marker commands at plugin level", () => {
+    const plugin = createTypeScriptLspPlugin();
+    const { commands } = activatePluginWithCommands(plugin);
+
+    expect([...commands.keys()]).toEqual(
+      expect.arrayContaining([
+        "goToDefinition",
+        "editor.action.goToDefinition",
+        "editor.action.goToReferences",
+        "editor.action.peekDefinition",
+        "editor.action.revealDefinitionAside",
+        "editor.action.goToImplementation",
+        "editor.action.goToTypeDefinition",
+        "editor.action.marker.next",
+        "editor.action.marker.prev",
+      ]),
+    );
+  });
+
+  it("routes implementation commands through the TypeScript LSP plugin", async () => {
+    const worker = new FakeWorker();
+    const context = viewContributionContext(
+      editorSnapshot({
+        selections: [{ anchorOffset: 6, headOffset: 6, startOffset: 6, endOffset: 6 }],
+      }),
+    );
+    const plugin = createTypeScriptLspPlugin({ workerFactory: () => worker });
+    const { provider, commands } = activatePluginWithCommands(plugin);
+    provider.createContribution(context);
+
+    worker.receive(initializeResponse(message(worker.sent[0])));
+    await flushPromises();
+    expect(command(commands, "editor.action.goToImplementation")({})).toBe(true);
+
+    const request = message(
+      worker.sent.toReversed().find(hasMethod("textDocument/implementation")),
+    );
+    worker.receive({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: [
+        {
+          uri: "file:///src/index.ts",
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 5 },
+          },
+        },
+      ],
+    });
+    await flushPromises();
+
+    expect(context.setSelection).toHaveBeenCalledWith(0, 5, "typescriptLsp.goToImplementation", 0);
+  });
+
+  it("routes references commands and jumps to the next same-file reference", async () => {
+    const worker = new FakeWorker();
+    const context = viewContributionContext(
+      editorSnapshot({
+        text: "const value = 1; console.log(value);",
+        selections: [{ anchorOffset: 6, headOffset: 6, startOffset: 6, endOffset: 6 }],
+      }),
+    );
+    const plugin = createTypeScriptLspPlugin({ workerFactory: () => worker });
+    const { provider, commands } = activatePluginWithCommands(plugin);
+    provider.createContribution(context);
+
+    worker.receive(initializeResponse(message(worker.sent[0])));
+    await flushPromises();
+    expect(command(commands, "editor.action.goToReferences")({})).toBe(true);
+
+    const request = message(worker.sent.toReversed().find(hasMethod("textDocument/references")));
+    expect(request.params).toMatchObject({
+      textDocument: { uri: "file:///src/index.ts" },
+      position: { line: 0, character: 6 },
+      context: { includeDeclaration: true },
+    });
+
+    worker.receive({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: [
+        {
+          uri: "file:///src/index.ts",
+          range: {
+            start: { line: 0, character: 6 },
+            end: { line: 0, character: 11 },
+          },
+        },
+        {
+          uri: "file:///src/index.ts",
+          range: {
+            start: { line: 0, character: 29 },
+            end: { line: 0, character: 34 },
+          },
+        },
+      ],
+    });
+    await flushPromises();
+
+    expect(context.setSelection).toHaveBeenCalledWith(29, 34, "typescriptLsp.goToReferences", 29);
+  });
+
+  it("moves next and previous marker commands across TypeScript diagnostics", async () => {
+    const worker = new FakeWorker();
+    const context = viewContributionContext(
+      editorSnapshot({
+        selections: [{ anchorOffset: 6, headOffset: 6, startOffset: 6, endOffset: 6 }],
+      }),
+    );
+    const plugin = createTypeScriptLspPlugin({ workerFactory: () => worker });
+    const { provider, commands } = activatePluginWithCommands(plugin);
+    provider.createContribution(context);
+
+    worker.receive(initializeResponse(message(worker.sent[0])));
+    await flushPromises();
+    worker.receive({
+      jsonrpc: "2.0",
+      method: "textDocument/publishDiagnostics",
+      params: {
+        uri: "file:///src/index.ts",
+        version: 0,
+        diagnostics: [
+          {
+            severity: 1,
+            source: "typescript",
+            message: "first",
+            range: {
+              start: { line: 0, character: 2 },
+              end: { line: 0, character: 3 },
+            },
+          },
+          {
+            severity: 1,
+            source: "typescript",
+            message: "second",
+            range: {
+              start: { line: 0, character: 22 },
+              end: { line: 0, character: 23 },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(command(commands, "editor.action.marker.next")({})).toBe(true);
+    expect(context.setSelection).toHaveBeenCalledWith(22, 23, "typescriptLsp.marker.next", 22);
+
+    expect(command(commands, "editor.action.marker.prev")({})).toBe(true);
+    expect(context.setSelection).toHaveBeenCalledWith(2, 3, "typescriptLsp.marker.previous", 2);
+  });
 });
 
 function activatePlugin(
@@ -817,6 +972,64 @@ function activatePlugin(
 
   if (!provider) throw new Error("missing provider");
   return provider;
+}
+
+function activatePluginWithCommands(plugin: ReturnType<typeof createTypeScriptLspPlugin>): {
+  readonly provider: EditorViewContributionProvider;
+  readonly commands: ReadonlyMap<EditorCommandId, EditorCommandHandler>;
+} {
+  let provider: EditorViewContributionProvider | null = null;
+  const commands = new Map<EditorCommandId, EditorCommandHandler>();
+  plugin.activate({
+    registerHighlighter: () => ({ dispose: () => undefined }),
+    registerSyntaxProvider: () => ({ dispose: () => undefined }),
+    registerViewContribution: (value) => {
+      provider = value;
+      return { dispose: () => undefined };
+    },
+    registerEditorFeatureContribution: (value) => {
+      value.createContribution(featureContributionContext(commands));
+      return { dispose: () => undefined };
+    },
+    registerGutterContribution: () => ({ dispose: () => undefined }),
+  } satisfies EditorPluginContext);
+
+  if (!provider) throw new Error("missing provider");
+  return { provider, commands };
+}
+
+function featureContributionContext(
+  commands: Map<EditorCommandId, EditorCommandHandler>,
+): EditorFeatureContributionContext {
+  const element = document.createElement("div");
+  return {
+    container: element,
+    scrollElement: element,
+    highlightPrefix: "editor-test",
+    hasDocument: () => true,
+    getText: () => "",
+    getSelections: () => [],
+    focusEditor: vi.fn(),
+    setSelection: vi.fn(),
+    setSelections: vi.fn(),
+    applyEdits: vi.fn(),
+    setRangeHighlight: vi.fn(),
+    clearRangeHighlight: vi.fn(),
+    registerCommand: (commandId, handler) => {
+      commands.set(commandId, handler);
+      return { dispose: () => commands.delete(commandId) };
+    },
+    registerFeature: () => ({ dispose: () => undefined }),
+  };
+}
+
+function command(
+  commands: ReadonlyMap<EditorCommandId, EditorCommandHandler>,
+  commandId: EditorCommandId,
+): EditorCommandHandler {
+  const handler = commands.get(commandId);
+  if (!handler) throw new Error(`missing command ${commandId}`);
+  return handler;
 }
 
 function viewContributionContext(snapshot: EditorViewSnapshot): EditorViewContributionContext {
