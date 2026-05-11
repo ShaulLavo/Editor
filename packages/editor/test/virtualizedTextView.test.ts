@@ -1252,6 +1252,23 @@ describe("VirtualizedTextView", () => {
     expect(view.scrollElement.textContent).not.toContain("[U+0081]");
   });
 
+  it("reuses rendered direct row DOM during full repaint when text is unchanged", () => {
+    view.setText("\u0000PNG\u0081tail");
+    view.setScrollMetrics(0, 20);
+
+    const rowBefore = view.getState().mountedRows[0]!;
+    const childNodesBefore = [...rowBefore.element.childNodes];
+    const textNodeBefore = rowBefore.chunks[0]!.textNode;
+    const replaceChildren = vi.spyOn(rowBefore.element, "replaceChildren");
+
+    view.setText("\u0000PNG\u0081tail");
+
+    const rowAfter = view.getState().mountedRows[0]!;
+    expect(replaceChildren).not.toHaveBeenCalled();
+    expect([...rowAfter.element.childNodes]).toEqual(childNodesBefore);
+    expect(rowAfter.chunks[0]!.textNode).toBe(textNodeBefore);
+  });
+
   it("hit-tests complex rows without native caret APIs", () => {
     view.setText("\u0000PNG");
     view.setScrollMetrics(0, 20);

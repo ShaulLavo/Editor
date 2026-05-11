@@ -609,6 +609,8 @@ function setDirectRowText(
   text: string,
   startOffset: number,
 ): void {
+  if (reuseDirectRowText(row, text, startOffset)) return;
+
   if (!isSimpleRowText(text)) {
     setRenderedDirectRowText(view, row, text, startOffset);
     return;
@@ -637,6 +639,26 @@ function setRenderedDirectRowText(
   row.element.replaceChildren(...rendered.nodes);
   setTextRenderMode(row, "rendered");
   syncDirectRowChunk(row, text, startOffset, rendered.parts, rendered.textNode);
+}
+
+function reuseDirectRowText(
+  row: MountedVirtualizedTextRow,
+  text: string,
+  startOffset: number,
+): boolean {
+  if (row.text !== text) return false;
+  if (row.textRenderMode === "simple") {
+    syncSimpleDirectRowChunk(row, text, startOffset);
+    return true;
+  }
+
+  if (row.textRenderMode !== "rendered") return false;
+
+  const chunk = row.chunks[0];
+  if (!isReusableRenderedDirectChunk(row, chunk)) return false;
+
+  syncDirectRowChunk(row, text, startOffset, chunk.parts, chunk.textNode);
+  return true;
 }
 
 function syncDirectRowChunk(
@@ -697,6 +719,17 @@ function isReusableSimpleDirectChunk(
   const part = chunk.parts[0];
   if (chunk.parts.length !== 1 || !part) return false;
   return part.kind === "text" && part.localStart === 0 && part.node === row.textNode;
+}
+
+function isReusableRenderedDirectChunk(
+  row: MountedVirtualizedTextRow,
+  chunk: VirtualizedTextChunk | undefined,
+): chunk is VirtualizedTextChunk {
+  if (!chunk) return false;
+  if (row.chunks.length !== 1) return false;
+  if (chunk.element !== null) return false;
+  if (chunk.localStart !== 0) return false;
+  return chunk.localEnd === row.text.length;
 }
 
 function rowHasInlineAttachments(row: MountedVirtualizedTextRow): boolean {
