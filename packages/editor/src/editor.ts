@@ -1,6 +1,7 @@
 export { createMergeConflictPlugin, EDITOR_MERGE_CONFLICT_FEATURE_ID } from "./mergeConflictPlugin";
 export {
   Editor,
+  observeEditorMountTiming,
   resetEditorInstanceCount,
   setEditorSyntaxSessionFactory,
   setHighlightRegistry,

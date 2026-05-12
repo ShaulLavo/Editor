@@ -4,7 +4,7 @@ export {
   computeFixedRowVisibleRange,
   computeFixedRowVirtualItems,
 } from "./fixedRowVirtualizer";
-export { measureBrowserTextMetrics } from "./browserMetrics";
+export { clearBrowserTextMetricsCache, measureBrowserTextMetrics } from "./browserMetrics";
 export { VirtualizedTextView } from "./virtualizedTextView";
 export type { BrowserTextMetrics } from "./browserMetrics";
 export type { VirtualizedTextSelection } from "./virtualizedTextViewInternals";

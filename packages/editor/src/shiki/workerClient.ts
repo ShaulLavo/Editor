@@ -35,6 +35,7 @@ const supportsWorkers = (): boolean => typeof Worker !== "undefined";
 let worker: Worker | null = null;
 let nextRequestId = 1;
 const pendingRequests = new Map<number, PendingRequest>();
+const themeRequests = new Map<string, Promise<EditorTheme | null | undefined>>();
 
 export const canUseShikiWorker = (): boolean => supportsWorkers();
 
@@ -50,12 +51,16 @@ export async function loadShikiTheme(
 ): Promise<EditorTheme | null | undefined> {
   if (!canUseShikiWorker()) return undefined;
 
-  const result = await postRequest({
-    type: "theme",
-    theme: options.theme,
-    themes: options.themes ?? [],
+  const key = shikiThemeRequestKey(options);
+  const existing = themeRequests.get(key);
+  if (existing) return existing;
+
+  const request = requestShikiTheme(options).catch((error) => {
+    themeRequests.delete(key);
+    throw error;
   });
-  return result?.theme;
+  themeRequests.set(key, request);
+  return request;
 }
 
 export async function disposeShikiWorker(): Promise<void> {
@@ -66,6 +71,7 @@ export async function disposeShikiWorker(): Promise<void> {
   } finally {
     worker.terminate();
     worker = null;
+    themeRequests.clear();
     rejectPendingRequests(new Error("Shiki worker disposed"));
   }
 }
@@ -190,6 +196,7 @@ const handleWorkerMessage = (event: MessageEvent<ShikiWorkerResponse>): void => 
 };
 
 const handleWorkerError = (event: ErrorEvent): void => {
+  themeRequests.clear();
   rejectPendingRequests(new Error(event.message || "Shiki worker failed"));
 };
 
@@ -222,3 +229,21 @@ export const createTextDiffEdit = (previousText: string, nextText: string) => {
     text: nextText.slice(start, nextEnd),
   };
 };
+
+async function requestShikiTheme(
+  options: ShikiThemeOptions,
+): Promise<EditorTheme | null | undefined> {
+  const result = await postRequest({
+    type: "theme",
+    theme: options.theme,
+    themes: options.themes ?? [],
+  });
+  return result?.theme;
+}
+
+function shikiThemeRequestKey(options: ShikiThemeOptions): string {
+  return JSON.stringify({
+    theme: options.theme,
+    themes: [...(options.themes ?? [])].sort(),
+  });
+}

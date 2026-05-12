@@ -1,8 +1,4 @@
-import {
-  createDocumentSession,
-  type Editor,
-  type EditorResolvedSelection,
-} from "@editor/core";
+import { createDocumentSession, type Editor, type EditorResolvedSelection } from "@editor/core";
 import { act, createElement, useLayoutEffect, type ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -89,6 +85,27 @@ describe("useEditor", () => {
       startOffset: 1,
       endOffset: 4,
     });
+
+    mounted.dispose();
+  });
+
+  it("can skip React store snapshot sync for lightweight editor hosts", () => {
+    const mounted = mountReactEditor({
+      document: { text: "alpha", documentId: "a.ts", revision: 1 },
+      storeSync: "none",
+    });
+
+    expect(mounted.controller.getEditor()).not.toBeNull();
+    expect(mounted.controller.getText()).toBe("alpha");
+    expect(mounted.controller.getSnapshot()).toBeNull();
+
+    act(() => mounted.controller.commands.setSelection(1, 4));
+    act(() => mounted.controller.commands.edit({ from: 5, to: 5, text: "!" }));
+
+    expect(mounted.controller.getText()).toBe("alpha!");
+    expect(mounted.controller.getState()?.length).toBe(6);
+    expect(mounted.controller.getUpdateKind()).toBeNull();
+    expect(mounted.controller.getSnapshot()).toBeNull();
 
     mounted.dispose();
   });

@@ -1,8 +1,11 @@
 import type { EditorSyntaxSessionFactory, HighlightRegistry } from "./types";
 
+export type EditorMountTimingObserver = (durationMs: number) => void;
+
 let editorInstanceCount = 0;
 let editorSyntaxSessionFactory: EditorSyntaxSessionFactory | undefined;
 let highlightRegistry: HighlightRegistry | undefined;
+const editorMountTimingObservers = new Set<EditorMountTimingObserver>();
 
 export function nextEditorHighlightPrefix(): string {
   return `editor-token-${editorInstanceCount++}`;
@@ -10,6 +13,20 @@ export function nextEditorHighlightPrefix(): string {
 
 export function resetEditorInstanceCount(): void {
   editorInstanceCount = 0;
+}
+
+export function observeEditorMountTiming(observer: EditorMountTimingObserver): () => void {
+  editorMountTimingObservers.add(observer);
+
+  return () => {
+    editorMountTimingObservers.delete(observer);
+  };
+}
+
+export function recordEditorMountTiming(durationMs: number): void {
+  if (editorMountTimingObservers.size === 0) return;
+
+  for (const observer of editorMountTimingObservers) observer(durationMs);
 }
 
 /**

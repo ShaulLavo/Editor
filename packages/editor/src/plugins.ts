@@ -299,6 +299,10 @@ export class EditorPluginHost implements EditorDisposable {
     return null;
   }
 
+  public hasHighlighterProviders(): boolean {
+    return this.highlighters.length > 0;
+  }
+
   public async loadHighlighterTheme(): Promise<EditorTheme | null | undefined> {
     for (const provider of this.highlighters) {
       if (!provider.loadTheme) continue;
@@ -317,6 +321,10 @@ export class EditorPluginHost implements EditorDisposable {
     }
 
     return null;
+  }
+
+  public hasSyntaxProviders(): boolean {
+    return this.syntaxProviders.length > 0;
   }
 
   public createViewContributions(context: EditorViewContributionContext): EditorViewContribution[] {

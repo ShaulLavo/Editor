@@ -1,5 +1,6 @@
 export {
   Editor,
+  observeEditorMountTiming,
   resetEditorInstanceCount,
   setEditorSyntaxSessionFactory,
   setHighlightRegistry,

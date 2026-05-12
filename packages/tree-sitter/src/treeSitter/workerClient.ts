@@ -67,6 +67,7 @@ let nextGeneration = 1;
 let initPromise: Promise<void> | null = null;
 const pendingRequests = new Map<number, PendingRequest>();
 const sentSourceChunkIds = new Map<string, Set<string>>();
+const registeredLanguageSignatures = new Map<TreeSitterLanguageId, string>();
 
 const getWorker = (): Worker | null => {
   if (!supportsWorkers()) return null;
@@ -95,12 +96,16 @@ export const canUseTreeSitterWorker = (): boolean => supportsWorkers();
 export const registerTreeSitterLanguagesWithWorker = async (
   languages: readonly TreeSitterLanguageDescriptor[],
 ): Promise<void> => {
-  if (languages.length === 0) return;
+  const nextLanguages = unregisteredLanguages(languages);
+  if (nextLanguages.length === 0) return;
 
   const handle = await ensureWorkerReady();
   if (!handle) return;
 
-  await postRequest({ type: "registerLanguages", languages });
+  await postRequest({ type: "registerLanguages", languages: nextLanguages });
+  for (const language of nextLanguages) {
+    registeredLanguageSignatures.set(language.id, languageDescriptorSignature(language));
+  }
 };
 
 export const parseWithTreeSitter = async (
@@ -163,6 +168,7 @@ export const disposeTreeSitterWorker = async (): Promise<void> => {
     worker.terminate();
     worker = null;
     initPromise = null;
+    registeredLanguageSignatures.clear();
     sentSourceChunkIds.clear();
     rejectPendingRequests(new Error("Tree-sitter worker disposed"));
   }
@@ -250,6 +256,7 @@ const handleWorkerError = (event: ErrorEvent): void => {
   const error = new Error(event.message || "Tree-sitter worker failed");
   rejectPendingRequests(error);
   initPromise = null;
+  registeredLanguageSignatures.clear();
   sentSourceChunkIds.clear();
 };
 
@@ -257,6 +264,45 @@ const rejectPendingRequests = (error: Error): void => {
   for (const request of pendingRequests.values()) request.reject(error);
   pendingRequests.clear();
 };
+
+function shouldRegisterLanguageWithWorker(language: TreeSitterLanguageDescriptor): boolean {
+  return registeredLanguageSignatures.get(language.id) !== languageDescriptorSignature(language);
+}
+
+function unregisteredLanguages(
+  languages: readonly TreeSitterLanguageDescriptor[],
+): readonly TreeSitterLanguageDescriptor[] {
+  const nextLanguages: TreeSitterLanguageDescriptor[] = [];
+  const nextSignatures = new Map<TreeSitterLanguageId, string>();
+
+  for (const language of languages) {
+    if (!shouldRegisterLanguageWithWorker(language)) continue;
+
+    const signature = languageDescriptorSignature(language);
+    if (nextSignatures.get(language.id) === signature) continue;
+
+    nextSignatures.set(language.id, signature);
+    nextLanguages.push(language);
+  }
+
+  return nextLanguages;
+}
+
+function languageDescriptorSignature(language: TreeSitterLanguageDescriptor): string {
+  return JSON.stringify({
+    aliases: sortedItems(language.aliases),
+    extensions: sortedItems(language.extensions),
+    foldQuerySource: language.foldQuerySource,
+    highlightQuerySource: language.highlightQuerySource,
+    id: language.id,
+    injectionQuerySource: language.injectionQuerySource,
+    wasmUrl: language.wasmUrl,
+  });
+}
+
+function sortedItems(items: readonly string[]): readonly string[] {
+  return [...items].sort();
+}
 
 const documentIdForPayload = (payload: TreeSitterWorkerRequestPayload): string | null => {
   if ("documentId" in payload) return payload.documentId;

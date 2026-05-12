@@ -17,6 +17,7 @@ vi.mock("../../src/shiki/workerClient", () => ({
 describe("createShikiHighlighterPlugin", () => {
   beforeEach(() => {
     createShikiHighlighterSession.mockClear();
+    loadShikiTheme.mockClear();
   });
 
   it("maps .tsx TypeScript documents to Shiki TSX", () => {
@@ -71,6 +72,19 @@ describe("createShikiHighlighterPlugin", () => {
         lang: "typescript",
       }),
     );
+  });
+
+  it("reuses equivalent shared highlighter providers", () => {
+    const first = activateHighlighterProvider({
+      preloadLanguages: ["typescript", "tsx"],
+      preloadThemes: ["github-dark"],
+    });
+    const second = activateHighlighterProvider({
+      preloadLanguages: ["tsx", "typescript"],
+      preloadThemes: ["github-dark"],
+    });
+
+    expect(second).toBe(first);
   });
 });
 

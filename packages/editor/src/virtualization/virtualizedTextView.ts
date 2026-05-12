@@ -246,7 +246,6 @@ export class VirtualizedTextView {
     spacer.appendChild(caretLayerElement);
     scrollElement.appendChild(spacer);
     scrollElement.appendChild(inputElement);
-    container.ownerDocument.head.appendChild(styleEl);
 
     virtualizer.attachScrollElement(scrollElement, (snapshot) => {
       this.renderSnapshot(snapshot);

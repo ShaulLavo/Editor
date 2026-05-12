@@ -6,8 +6,13 @@ export type BrowserTextMetrics = {
 const DEFAULT_ROW_HEIGHT = 24;
 const DEFAULT_CHARACTER_WIDTH = 8;
 const PROBE_TEXT = "mmmmmmmmmmmmmmmm";
+let metricsCache = new WeakMap<Document, Map<string, BrowserTextMetrics>>();
 
 export function measureBrowserTextMetrics(element: HTMLElement): BrowserTextMetrics {
+  const cacheKey = browserTextMetricsCacheKey(element);
+  const cached = cacheKey ? cachedBrowserTextMetrics(element.ownerDocument, cacheKey) : null;
+  if (cached) return cached;
+
   const document = element.ownerDocument;
   const probe = document.createElement("span");
   probe.className = "editor-virtualized-metric-probe";
@@ -20,7 +25,13 @@ export function measureBrowserTextMetrics(element: HTMLElement): BrowserTextMetr
   const characterWidth = measuredCharacterWidth(rect);
   probe.remove();
 
-  return { rowHeight, characterWidth };
+  const metrics = { rowHeight, characterWidth };
+  if (cacheKey) cacheBrowserTextMetrics(document, cacheKey, metrics);
+  return metrics;
+}
+
+export function clearBrowserTextMetricsCache(): void {
+  metricsCache = new WeakMap<Document, Map<string, BrowserTextMetrics>>();
 }
 
 function measuredRowHeight(rect: DOMRect, style: CSSStyleDeclaration | undefined): number {
@@ -63,4 +74,39 @@ function parseCssPixels(value: string | undefined): number | null {
   const pixels = Number.parseFloat(value);
   if (!Number.isFinite(pixels)) return null;
   return pixels;
+}
+
+function cachedBrowserTextMetrics(
+  document: Document,
+  key: string,
+): BrowserTextMetrics | null {
+  return metricsCache.get(document)?.get(key) ?? null;
+}
+
+function cacheBrowserTextMetrics(
+  document: Document,
+  key: string,
+  metrics: BrowserTextMetrics,
+): void {
+  const cache = metricsCache.get(document) ?? new Map<string, BrowserTextMetrics>();
+  cache.set(key, metrics);
+  metricsCache.set(document, cache);
+}
+
+function browserTextMetricsCacheKey(element: HTMLElement): string | null {
+  const style = readComputedStyle(element);
+  if (!style) return null;
+
+  return [
+    style.fontFamily,
+    style.fontSize,
+    style.fontStyle,
+    style.fontStretch,
+    style.fontVariant,
+    style.fontWeight,
+    style.letterSpacing,
+    style.lineHeight,
+    style.textTransform,
+    style.whiteSpace,
+  ].join("\n");
 }

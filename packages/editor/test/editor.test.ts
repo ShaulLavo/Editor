@@ -621,6 +621,22 @@ describe("Editor", () => {
       });
     });
 
+    it("does not move focus out of external inputs when opening background documents", () => {
+      const input = document.createElement("input");
+      document.body.append(input);
+      input.focus();
+
+      editor.openDocument({
+        documentId: "excerpt.ts",
+        documentMode: "static",
+        text: "const value = 1",
+      });
+
+      expect(document.activeElement).toBe(input);
+
+      input.remove();
+    });
+
     it("updates editability after construction", () => {
       editor.setText("abc");
       editor.setEditability("readonly");
@@ -669,6 +685,56 @@ describe("Editor", () => {
       expect([...highlightsMap.keys()].some((name) => name.includes("search-result-match"))).toBe(
         false,
       );
+    });
+
+    it("does not rebuild unchanged semantic range highlights", () => {
+      editor.openDocument({ documentId: "main.ts", text: "alpha beta gamma" });
+
+      editor.setRangeDecorations([
+        {
+          start: 6,
+          end: 10,
+          className: "search-result-match",
+          style: { backgroundColor: "yellow" },
+        },
+      ]);
+
+      const firstEntry = [...highlightsMap].find(([name]) => name.includes("search-result-match"));
+      editor.setRangeDecorations([
+        {
+          start: 6,
+          end: 10,
+          className: "search-result-match",
+          style: { backgroundColor: "yellow" },
+        },
+      ]);
+      const secondEntry = [...highlightsMap].find(([name]) => name.includes("search-result-match"));
+
+      expect(secondEntry?.[1]).toBe(firstEntry?.[1]);
+
+      editor.setRangeDecorations([
+        {
+          start: 11,
+          end: 16,
+          className: "search-result-match",
+          style: { backgroundColor: "yellow" },
+        },
+      ]);
+      const thirdEntry = [...highlightsMap].find(([name]) => name.includes("search-result-match"));
+
+      expect(thirdEntry?.[1]).not.toBe(secondEntry?.[1]);
+
+      editor.setRangeDecorations([
+        {
+          start: 11,
+          end: 16,
+          className: "search-result-match",
+          style: { backgroundColor: "orange" },
+        },
+      ]);
+      const fourthEntry = [...highlightsMap].find(([name]) => name.includes("search-result-match"));
+
+      expect(fourthEntry?.[1]).not.toBe(thirdEntry?.[1]);
     });
   });
 
@@ -733,7 +799,11 @@ describe("Editor", () => {
         ...container.querySelectorAll<HTMLButtonElement>(".editor-merge-conflict-action"),
       ];
 
-      expect(actions.map((action) => action.textContent)).toEqual(["HEAD", "branch", "Both"]);
+      expect(actions.map((action) => action.textContent)).toEqual([
+        "Use HEAD",
+        "Use branch",
+        "Use Both",
+      ]);
       expect(actions.map((action) => action.title)).toEqual([
         "Use HEAD",
         "Use branch",

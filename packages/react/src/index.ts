@@ -54,8 +54,11 @@ export type ReactEditorOptions = Omit<EditorOptions, "hiddenCharacters" | "onCha
   readonly hiddenCharacters?: HiddenCharactersMode | undefined;
   readonly selection?: ReactEditorSelection | null | undefined;
   readonly scrollPosition?: EditorScrollPosition | null | undefined;
+  readonly storeSync?: ReactEditorStoreSyncMode;
   readonly onChange?: EditorChangeHandler;
 };
+
+export type ReactEditorStoreSyncMode = "full" | "none";
 
 export type ReactEditorCommands = {
   focus(): void;
@@ -233,7 +236,7 @@ class ReactEditorControllerImplementation implements ReactEditorController {
   }
 
   public getState(): EditorState | null {
-    return this.store.read().state;
+    return this.getEditor()?.getState() ?? null;
   }
 
   public getSnapshot(): EditorViewSnapshot | null {
@@ -241,7 +244,7 @@ class ReactEditorControllerImplementation implements ReactEditorController {
   }
 
   public getText(): string {
-    return this.store.read().text;
+    return this.getEditor()?.getText() ?? "";
   }
 
   public getLastChange(): DocumentSessionChange | null {
@@ -291,7 +294,7 @@ class ReactEditorControllerImplementation implements ReactEditorController {
   }
 
   public syncPluginsOption(): void {
-    syncPlugins(this.getEditor(), this.reactSyncPlugin, this.options.plugins);
+    syncPlugins(this.getEditor(), this.reactSyncPlugin, this.options);
   }
 
   public syncSnapshot(
@@ -299,6 +302,8 @@ class ReactEditorControllerImplementation implements ReactEditorController {
     kind: EditorViewContributionUpdateKind,
     change: DocumentSessionChange | null,
   ): void {
+    if (!this.shouldSyncStore()) return;
+
     this.store.update({
       snapshot,
       text: snapshot.text,
@@ -308,6 +313,8 @@ class ReactEditorControllerImplementation implements ReactEditorController {
   }
 
   public syncChange(state: EditorState, change: DocumentSessionChange | null): void {
+    if (!this.shouldSyncStore()) return;
+
     this.store.update({
       state,
       text: this.getEditor()?.getText() ?? "",
@@ -331,9 +338,10 @@ class ReactEditorControllerImplementation implements ReactEditorController {
       document: _document,
       hiddenCharacters,
       onChange: _onChange,
-      plugins,
+      plugins: _plugins,
       scrollPosition: _scrollPosition,
       selection: _selection,
+      storeSync: _storeSync,
       theme,
       ...constructorOptions
     } = this.options;
@@ -342,7 +350,7 @@ class ReactEditorControllerImplementation implements ReactEditorController {
       ...constructorOptions,
       hiddenCharacters,
       theme: theme ?? undefined,
-      plugins: [this.reactSyncPlugin, ...(plugins ?? [])],
+      plugins: editorPluginsForOptions(this.reactSyncPlugin, this.options),
       onChange: (state, change) => {
         this.syncChange(state, change);
         this.options.onChange?.(state, change);
@@ -358,6 +366,10 @@ class ReactEditorControllerImplementation implements ReactEditorController {
     syncRangeDecorations(editor, this.options.rangeDecorations);
     syncSelection(editor, this.options.selection);
     syncScrollPosition(editor, this.options.scrollPosition);
+  }
+
+  private shouldSyncStore(): boolean {
+    return reactEditorStoreSyncMode(this.options) === "full";
   }
 }
 
@@ -450,7 +462,10 @@ function useControlledOptionSync(
     () => controller.syncHiddenCharactersOption(),
     [controller, options.hiddenCharacters],
   );
-  useEditorLayoutEffect(() => controller.syncEditabilityOption(), [controller, options.editability]);
+  useEditorLayoutEffect(
+    () => controller.syncEditabilityOption(),
+    [controller, options.editability],
+  );
   useEditorLayoutEffect(
     () => controller.syncRangeDecorationsOption(),
     [controller, options.rangeDecorations],
@@ -463,7 +478,10 @@ function useControlledOptionSync(
     () => controller.syncScrollPositionOption(),
     [controller, scrollPosition?.top, scrollPosition?.left],
   );
-  useEditorLayoutEffect(() => controller.syncPluginsOption(), [controller, options.plugins]);
+  useEditorLayoutEffect(
+    () => controller.syncPluginsOption(),
+    [controller, options.plugins, options.storeSync],
+  );
 }
 
 function createReactSyncPlugin(controller: ReactEditorControllerImplementation): EditorPlugin {
@@ -568,11 +586,24 @@ function syncScrollPosition(
 function syncPlugins(
   editor: Editor | null,
   reactSyncPlugin: EditorPlugin,
-  plugins: readonly EditorPlugin[] | null | undefined,
+  options: ReactEditorOptions,
 ): void {
   if (!editor) return;
 
-  editor.setPlugins([reactSyncPlugin, ...(plugins ?? [])]);
+  editor.setPlugins(editorPluginsForOptions(reactSyncPlugin, options));
+}
+
+function editorPluginsForOptions(
+  reactSyncPlugin: EditorPlugin,
+  options: ReactEditorOptions,
+): readonly EditorPlugin[] {
+  if (reactEditorStoreSyncMode(options) === "none") return options.plugins ?? [];
+
+  return [reactSyncPlugin, ...(options.plugins ?? [])];
+}
+
+function reactEditorStoreSyncMode(options: ReactEditorOptions): ReactEditorStoreSyncMode {
+  return options.storeSync ?? "full";
 }
 
 function disposeEditor(store: ReactEditorStore): void {

@@ -142,11 +142,14 @@ export function setRangeHighlight(
     return;
   }
 
-  const group = getOrCreateRangeHighlightGroup(view, name, style);
-  group.ranges = ranges.map((range) => ({
+  const nextRanges = ranges.map((range) => ({
     start: clamp(range.start, 0, view.text.length),
     end: clamp(range.end, 0, view.text.length),
   }));
+  const group = getOrCreateRangeHighlightGroup(view, name, style);
+  if (canSkipRangeHighlightUpdate(view, group, nextRanges, style)) return;
+
+  group.ranges = nextRanges;
   group.style = style;
   group.signature = staleRangeHighlightSignature();
   renderRangeHighlight(view, name);
@@ -674,6 +677,50 @@ function getOrCreateRangeHighlightGroup(
   return group;
 }
 
+function canSkipRangeHighlightUpdate(
+  view: VirtualizedTextViewInternal,
+  group: VirtualizedTextHighlightGroup,
+  ranges: readonly VirtualizedTextHighlightRange[],
+  style: VirtualizedTextHighlightStyle,
+): boolean {
+  if (!sameRangeHighlight(group, ranges, style)) return false;
+
+  return rangeHighlightSignature(view, group) === group.signature;
+}
+
+function sameRangeHighlight(
+  group: VirtualizedTextHighlightGroup,
+  ranges: readonly VirtualizedTextHighlightRange[],
+  style: VirtualizedTextHighlightStyle,
+): boolean {
+  if (!sameHighlightStyle(group.style, style)) return false;
+  if (group.ranges.length !== ranges.length) return false;
+
+  return group.ranges.every((range, index) => {
+    const next = ranges[index];
+    return next ? sameHighlightRange(range, next) : false;
+  });
+}
+
+function sameHighlightStyle(
+  left: VirtualizedTextHighlightStyle,
+  right: VirtualizedTextHighlightStyle,
+): boolean {
+  if (left.backgroundColor !== right.backgroundColor) return false;
+  if (left.color !== right.color) return false;
+
+  return left.textDecoration === right.textDecoration;
+}
+
+function sameHighlightRange(
+  left: VirtualizedTextHighlightRange,
+  right: VirtualizedTextHighlightRange,
+): boolean {
+  if (left.start !== right.start) return false;
+
+  return left.end === right.end;
+}
+
 function addMountedRangeHighlightRanges(
   view: VirtualizedTextViewInternal,
   group: VirtualizedTextHighlightGroup,
@@ -856,9 +903,27 @@ export function rebuildStyleRules(view: VirtualizedTextViewInternal): void {
   }
 
   const nextRules = rules.join("\n");
-  if (view.styleEl.textContent === nextRules) return;
+  if (view.styleEl.textContent === nextRules) {
+    syncStyleElementConnection(view, nextRules);
+    return;
+  }
 
   view.styleEl.textContent = nextRules;
+  syncStyleElementConnection(view, nextRules);
+}
+
+function syncStyleElementConnection(
+  view: VirtualizedTextViewInternal,
+  rules: string,
+): void {
+  if (rules.length === 0) {
+    view.styleEl.remove();
+    return;
+  }
+
+  if (view.styleEl.isConnected) return;
+
+  view.scrollElement.ownerDocument.head.appendChild(view.styleEl);
 }
 
 function rangeHighlightRule(

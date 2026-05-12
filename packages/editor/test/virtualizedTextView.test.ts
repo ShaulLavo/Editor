@@ -7,6 +7,7 @@ import { projectTokensThroughEdit } from "../src/editor/tokenProjection";
 import {
   createFoldMap,
   createPieceTableSnapshot,
+  clearBrowserTextMetricsCache,
   measureBrowserTextMetrics,
   treeSitterCapturesToEditorTokens,
   VirtualizedTextView,
@@ -93,6 +94,27 @@ describe("VirtualizedTextView", () => {
     });
   });
 
+  it("reuses cached browser text metrics for matching editor styles", () => {
+    clearBrowserTextMetricsCache();
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    first.className = "editor-virtualized";
+    second.className = "editor-virtualized";
+    document.body.append(first, second);
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+
+    const firstMetrics = measureBrowserTextMetrics(first);
+    const callsAfterFirstMeasure = rectSpy.mock.calls.length;
+    const secondMetrics = measureBrowserTextMetrics(second);
+
+    expect(secondMetrics).toEqual(firstMetrics);
+    expect(rectSpy.mock.calls.length).toBe(callsAfterFirstMeasure);
+
+    rectSpy.mockRestore();
+    first.remove();
+    second.remove();
+  });
+
   it("adds bottom scroll padding so the final row can align with the viewport top", () => {
     view.setText(createLines(10));
     view.setScrollMetrics(0, 100);
@@ -149,6 +171,31 @@ describe("VirtualizedTextView", () => {
     view.setScrollMetrics(20, 20);
 
     expect(highlightsMap.get("test-find")?.size).toBe(1);
+  });
+
+  it("skips unchanged custom range highlight updates", () => {
+    view.setText("alpha\nbeta\ngamma");
+    view.setScrollMetrics(0, 20);
+
+    view.setRangeHighlight("test-find", [{ start: 0, end: 5 }], {
+      backgroundColor: "rgba(234, 179, 8, 0.34)",
+    });
+
+    const firstHighlight = highlightsMap.get("test-find");
+    const setCount = registrySets;
+    const addCount = highlightAdds;
+    const clearCount = highlightClears;
+    expect(setCount).toBe(1);
+    expect(addCount).toBe(1);
+
+    view.setRangeHighlight("test-find", [{ start: 0, end: 5 }], {
+      backgroundColor: "rgba(234, 179, 8, 0.34)",
+    });
+
+    expect(highlightsMap.get("test-find")).toBe(firstHighlight);
+    expect(registrySets).toBe(setCount);
+    expect(highlightAdds).toBe(addCount);
+    expect(highlightClears).toBe(clearCount);
   });
 
   it("removes custom range highlights when ranges become empty", () => {
@@ -1502,6 +1549,7 @@ describe("VirtualizedTextView", () => {
   });
 
   it("measures browser row and character metrics from a DOM probe", () => {
+    clearBrowserTextMetricsCache();
     const original = HTMLElement.prototype.getBoundingClientRect;
     HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
       if (this.classList.contains("editor-virtualized-metric-probe")) {
@@ -1513,6 +1561,7 @@ describe("VirtualizedTextView", () => {
 
     const metrics = measureBrowserTextMetrics(container);
     HTMLElement.prototype.getBoundingClientRect = original;
+    clearBrowserTextMetricsCache();
 
     expect(metrics.rowHeight).toBe(24);
     expect(metrics.characterWidth).toBe(10);

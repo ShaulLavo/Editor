@@ -23,6 +23,8 @@ import {
   getEditorSyntaxSessionFactory,
   getHighlightRegistry,
   nextEditorHighlightPrefix,
+  observeEditorMountTiming,
+  recordEditorMountTiming,
   resetEditorInstanceCount,
   setEditorSyntaxSessionFactory,
   setHighlightRegistry,
@@ -101,7 +103,12 @@ import {
 } from "../virtualization/virtualizedTextView";
 
 const SYNTAX_EDIT_DEBOUNCE_MS = 75;
-export { resetEditorInstanceCount, setEditorSyntaxSessionFactory, setHighlightRegistry };
+export {
+  observeEditorMountTiming,
+  resetEditorInstanceCount,
+  setEditorSyntaxSessionFactory,
+  setHighlightRegistry,
+};
 
 const syntaxRefreshDelay = (change: DocumentSessionChange | null): number => {
   if (!change || change.edits.length === 0) return 0;
@@ -184,9 +191,11 @@ export class Editor {
   private nativeInputGeneration = 0;
   private rangeDecorations: readonly EditorRangeDecoration[] = [];
   private appliedRangeDecorationNames: readonly string[] = [];
+  private nativeInputHandlersInstalled = false;
   private readonly tabSize: number;
 
   constructor(container: HTMLElement, options: EditorOptions = {}) {
+    const mountStart = nowMs();
     this.container = container;
     this.options = options;
     this.tabSize = normalizeTabSize(options.tabSize);
@@ -210,7 +219,7 @@ export class Editor {
     this.foldState = new EditorFoldState(this.view, () => this.session?.getSnapshot() ?? null);
     this.el = this.view.scrollElement;
     this.applyResolvedTheme();
-    this.refreshHighlighterTheme();
+    if (this.pluginHost.hasHighlighterProviders()) this.refreshHighlighterTheme();
     this.createInitialEditorFeatureContributions(
       this.pluginHost.getEditorFeatureContributionProviders(),
     );
@@ -238,6 +247,7 @@ export class Editor {
     this.installEditingHandlers();
     this.initializeDefaultText();
     this.setRangeDecorations(options.rangeDecorations ?? []);
+    recordEditorMountTiming(nowMs() - mountStart);
   }
 
   setContent(text: string): void {
@@ -497,6 +507,8 @@ export class Editor {
   }
 
   setRangeDecorations(decorations: readonly EditorRangeDecoration[]): void {
+    if (sameEditorRangeDecorations(this.rangeDecorations, decorations)) return;
+
     this.rangeDecorations = [...decorations];
     this.applyRangeDecorations();
   }
@@ -768,6 +780,11 @@ export class Editor {
   }
 
   private refreshHighlighterTheme(): void {
+    if (!this.pluginHost.hasHighlighterProviders()) {
+      this.setProviderHighlighterTheme(null);
+      return;
+    }
+
     this.highlighterThemeRequests.schedule({
       run: () => this.pluginHost.loadHighlighterTheme(),
       apply: (theme) => this.setProviderHighlighterTheme(theme),
@@ -912,7 +929,9 @@ export class Editor {
   }
 
   private syncViewEditability(): void {
-    this.view.setEditable(this.canEditDocument());
+    const editable = this.canEditDocument();
+    this.view.setEditable(editable);
+    this.syncNativeInputHandlers(editable);
   }
 
   private applyRangeDecorations(): void {
@@ -1074,16 +1093,6 @@ export class Editor {
   private installEditingHandlers(): void {
     this.el.addEventListener("mousedown", this.handleMouseDown);
     this.el.addEventListener("beforeinput", this.handleBeforeInput);
-    this.view.inputElement.addEventListener(
-      "beforeinput",
-      this.handleNativeInputBeforeInputCapture,
-      {
-        capture: true,
-      },
-    );
-    this.view.inputElement.addEventListener("input", this.handleNativeInputInputCapture, {
-      capture: true,
-    });
     this.el.addEventListener("copy", this.handleCopy);
     this.el.addEventListener("drop", this.handleDrop);
     this.el.addEventListener("paste", this.handlePaste);
@@ -1094,16 +1103,9 @@ export class Editor {
   }
 
   private uninstallEditingHandlers(): void {
+    this.uninstallNativeInputHandlers();
     this.el.removeEventListener("mousedown", this.handleMouseDown);
     this.el.removeEventListener("beforeinput", this.handleBeforeInput);
-    this.view.inputElement.removeEventListener(
-      "beforeinput",
-      this.handleNativeInputBeforeInputCapture,
-      { capture: true },
-    );
-    this.view.inputElement.removeEventListener("input", this.handleNativeInputInputCapture, {
-      capture: true,
-    });
     this.el.removeEventListener("copy", this.handleCopy);
     this.el.removeEventListener("drop", this.handleDrop);
     this.el.removeEventListener("paste", this.handlePaste);
@@ -1112,6 +1114,45 @@ export class Editor {
     this.el.removeEventListener("mouseup", this.syncSessionSelectionFromDom);
     this.el.ownerDocument.removeEventListener("selectionchange", this.syncCustomSelectionFromDom);
     this.stopMouseSelectionDrag();
+  }
+
+  private syncNativeInputHandlers(editable: boolean): void {
+    if (editable) {
+      this.installNativeInputHandlers();
+      return;
+    }
+
+    this.uninstallNativeInputHandlers();
+  }
+
+  private installNativeInputHandlers(): void {
+    if (this.nativeInputHandlersInstalled) return;
+
+    this.view.inputElement.addEventListener(
+      "beforeinput",
+      this.handleNativeInputBeforeInputCapture,
+      {
+        capture: true,
+      },
+    );
+    this.view.inputElement.addEventListener("input", this.handleNativeInputInputCapture, {
+      capture: true,
+    });
+    this.nativeInputHandlersInstalled = true;
+  }
+
+  private uninstallNativeInputHandlers(): void {
+    if (!this.nativeInputHandlersInstalled) return;
+
+    this.view.inputElement.removeEventListener(
+      "beforeinput",
+      this.handleNativeInputBeforeInputCapture,
+      { capture: true },
+    );
+    this.view.inputElement.removeEventListener("input", this.handleNativeInputInputCapture, {
+      capture: true,
+    });
+    this.nativeInputHandlersInstalled = false;
   }
 
   private handleNativeInputBeforeInputCapture = (_event: InputEvent): void => {
@@ -2167,6 +2208,12 @@ export class Editor {
     const start = clamp(resolved.startOffset, 0, this.text.length);
     const end = clamp(resolved.endOffset, start, this.text.length);
 
+    if (this.hasFocusedExternalElement()) {
+      this.syncSessionSelectionHighlight();
+      this.notifyViewContributions("selection", null);
+      return;
+    }
+
     if (this.isInputFocused()) {
       this.syncSessionSelectionHighlight();
       this.notifyViewContributions("selection", null);
@@ -2227,6 +2274,15 @@ export class Editor {
 
   private isInputFocused(): boolean {
     return this.el.ownerDocument.activeElement === this.view.inputElement;
+  }
+
+  private hasFocusedExternalElement(): boolean {
+    const activeElement = this.el.ownerDocument.activeElement;
+    if (!activeElement) return false;
+    if (activeElement === this.el.ownerDocument.body) return false;
+    if (activeElement === this.el.ownerDocument.documentElement) return false;
+
+    return !this.el.contains(activeElement);
   }
 
   private domBoundaryToTextOffset(node: Node, offset: number): number | null {
@@ -2539,6 +2595,41 @@ function rangeDecorationStyle(decoration: EditorRangeDecoration): {
     color: decoration.style?.color || undefined,
     textDecoration: decoration.style?.textDecoration || undefined,
   };
+}
+
+function sameEditorRangeDecorations(
+  left: readonly EditorRangeDecoration[],
+  right: readonly EditorRangeDecoration[],
+): boolean {
+  if (left.length !== right.length) return false;
+
+  return left.every((decoration, index) => {
+    const next = right[index];
+    return next ? sameEditorRangeDecoration(decoration, next) : false;
+  });
+}
+
+function sameEditorRangeDecoration(
+  left: EditorRangeDecoration,
+  right: EditorRangeDecoration,
+): boolean {
+  if (left.start !== right.start) return false;
+  if (left.end !== right.end) return false;
+  if (left.className !== right.className) return false;
+
+  return sameRangeDecorationStyle(left, right);
+}
+
+function sameRangeDecorationStyle(
+  left: EditorRangeDecoration,
+  right: EditorRangeDecoration,
+): boolean {
+  const leftStyle = rangeDecorationStyle(left);
+  const rightStyle = rangeDecorationStyle(right);
+  if (leftStyle.backgroundColor !== rightStyle.backgroundColor) return false;
+  if (leftStyle.color !== rightStyle.color) return false;
+
+  return leftStyle.textDecoration === rightStyle.textDecoration;
 }
 
 function sanitizedHighlightName(value: string | undefined): string | null {

@@ -125,6 +125,31 @@ describe("Tree-sitter syntax capture conversion", () => {
     ).toBeNull();
   });
 
+  it("shares language plugin registrations across editor plugin hosts", () => {
+    const plugin = createTreeSitterLanguagePlugin([testLanguage("sql", [".sql"])], {
+      name: "sql-language",
+    });
+    const firstHost = new EditorPluginHost([plugin]);
+    const secondHost = new EditorPluginHost([plugin]);
+
+    expect(createSqlSyntaxSession(firstHost)).not.toBeNull();
+    expect(createSqlSyntaxSession(secondHost)).not.toBeNull();
+
+    firstHost.dispose();
+
+    expect(createSqlSyntaxSession(secondHost)).not.toBeNull();
+
+    secondHost.dispose();
+
+    const emptyHost = new EditorPluginHost([]);
+    expect(createSqlSyntaxSession(emptyHost)).toBeNull();
+    emptyHost.dispose();
+
+    const nextHost = new EditorPluginHost([plugin]);
+    expect(createSqlSyntaxSession(nextHost)).not.toBeNull();
+    nextHost.dispose();
+  });
+
   it("converts non-empty captures to editor tokens", () => {
     const tokens = treeSitterCapturesToEditorTokens([
       { startIndex: 0, endIndex: 5, captureName: "keyword.declaration" },
@@ -283,6 +308,17 @@ function createTestLanguageRegistry(): TreeSitterLanguageRegistry {
     testLanguage("typescript", [".ts", ".cts", ".mts", ".tsx"], ["typescript", "ts", "tsx"]),
   );
   return registry;
+}
+
+function createSqlSyntaxSession(host: EditorPluginHost) {
+  const text = "select 1;";
+  return host.createSyntaxSession({
+    documentId: "query.sql",
+    languageId: "sql",
+    includeHighlights: true,
+    text,
+    snapshot: createPieceTableSnapshot(text),
+  });
 }
 
 function testLanguage(
