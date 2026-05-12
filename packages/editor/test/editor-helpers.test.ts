@@ -6,7 +6,12 @@ import {
   elementBoundaryToTextOffset,
 } from "../src/editor/domBoundary";
 import { EditorFoldState } from "../src/editor/foldState";
-import { defaultEditorKeyBindings } from "../src/editor/keymap";
+import {
+  defaultEditorKeyBindings,
+  editorKeyBindings,
+  editorKeymapLayersForCommandPacks,
+  readonlySafeEditorCommandPacks,
+} from "../src/editor/keymap";
 import {
   foldMarkerFromRange,
   foldRangeKey,
@@ -116,6 +121,48 @@ describe("navigation helpers", () => {
 });
 
 describe("default editor keybindings", () => {
+  it("resolves later layers over earlier layers for the same normalized hotkey", () => {
+    const bindings = editorKeyBindings({
+      defaultBindings: false,
+      layers: [
+        {
+          id: "base",
+          bindings: [{ hotkey: "Mod+K", command: "find" }],
+        },
+        {
+          id: "override",
+          bindings: [{ hotkey: { key: "K", mod: true }, command: "selectAll" }],
+        },
+      ],
+    });
+
+    expect(bindings).toEqual([{ hotkey: { key: "K", mod: true }, command: "selectAll" }]);
+  });
+
+  it("keeps compatibility bindings as the last layer", () => {
+    const bindings = editorKeyBindings({
+      defaultBindings: false,
+      bindings: [{ hotkey: "Mod+K", command: "selectAll" }],
+      layers: [{ id: "base", bindings: [{ hotkey: "Mod+K", command: "find" }] }],
+    });
+
+    expect(bindings).toEqual([{ hotkey: "Mod+K", command: "selectAll" }]);
+  });
+
+  it("builds readonly-safe command pack layers without edit commands", () => {
+    const commands = editorKeymapLayersForCommandPacks(readonlySafeEditorCommandPacks, "linux")
+      .flatMap((layer) => layer.bindings)
+      .map((binding) => binding.command);
+
+    expect(commands).toContain("cursorLeft");
+    expect(commands).toContain("selectAll");
+    expect(commands).toContain("find");
+    expect(commands).not.toContain("deleteBackward");
+    expect(commands).not.toContain("findReplace");
+    expect(commands).not.toContain("editor.action.insertCursorAbove");
+    expect(commands).not.toContain("goToDefinition");
+  });
+
   it("binds VS Code edit actions by default", () => {
     const commands = defaultEditorKeyBindings("mac").map((binding) => binding.command);
 

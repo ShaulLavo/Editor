@@ -17,8 +17,27 @@ export * from "./syntax";
 export * from "./theme";
 export * from "./virtualization";
 export type { EditorCommandContext, EditorCommandId } from "./editor/commands";
-export { defaultEditorKeyBindings } from "./editor/keymap";
-export type { EditorKeyBinding, EditorKeymapOptions } from "./editor/keymap";
+export {
+  defaultEditorCommandPacks,
+  defaultEditorKeyBindings,
+  defaultEditorKeymapLayers,
+  editorCommandPackForCommand,
+  editorKeyBindings,
+  editorKeyBindingsFromLayers,
+  editorKeymapLayerForCommandPack,
+  editorKeymapLayers,
+  editorKeymapLayersForBindings,
+  editorKeymapLayersForCommandPacks,
+  filterEditorKeymapLayersByCommandPacks,
+  readonlySafeEditorCommandPacks,
+} from "./editor/keymap";
+export type {
+  EditorCommandPack,
+  EditorKeyBinding,
+  EditorKeymapLayer,
+  EditorKeymapLayerSource,
+  EditorKeymapOptions,
+} from "./editor/keymap";
 export type {
   EditorChangeHandler,
   EditorDocumentMode,
