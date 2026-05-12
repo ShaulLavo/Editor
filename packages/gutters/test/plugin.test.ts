@@ -66,6 +66,38 @@ describe("gutter plugins", () => {
     expect(cell.classList.contains("editor-virtualized-line-number-active")).toBe(true);
   });
 
+  it("supports source line offsets and minimum digits", () => {
+    const contribution = createLineGutterContribution({ minDigits: 4, startLine: 811 });
+    const cell = contribution.createCell(document);
+
+    contribution.updateCell(cell, {
+      index: 0,
+      bufferRow: 2,
+      startOffset: 0,
+      endOffset: 0,
+      text: "",
+      kind: "text",
+      primaryText: true,
+      cursorLine: false,
+      cursorLineHighlight: {
+        gutterBackground: true,
+        gutterNumber: true,
+        rowBackground: true,
+      },
+      foldMarker: null,
+      lineCount: 3,
+      toggleFold: vi.fn(),
+    });
+
+    const width = contribution.width({
+      lineCount: 3,
+      metrics: { characterWidth: 7, rowHeight: 20 },
+    });
+
+    expect(cell.style.counterSet).toBe("editor-line 813");
+    expect(width).toBeGreaterThanOrEqual(36);
+  });
+
   it("renders fold gutter icons from DOM factories", () => {
     const contribution = createFoldGutterContribution({
       icon: ({ document }) => {

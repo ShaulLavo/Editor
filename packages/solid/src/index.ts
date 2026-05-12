@@ -4,10 +4,12 @@ import {
   type EditorChangeHandler,
   type EditorCommandContext,
   type EditorCommandId,
+  type EditorDocumentMode,
   type EditorEditInput,
   type EditorEditOptions,
   type EditorOpenDocumentOptions,
   type EditorOptions,
+  type EditorRangeDecoration,
   type EditorPlugin,
   type EditorScrollPosition,
   type EditorSetTextOptions,
@@ -26,6 +28,7 @@ export type SolidEditorDocument = {
   readonly documentId?: string;
   readonly revision?: string | number;
   readonly text: string;
+  readonly documentMode?: EditorDocumentMode;
   readonly languageId?: EditorSyntaxLanguageId | null;
   readonly scrollPosition?: EditorScrollPosition;
 };
@@ -149,6 +152,8 @@ function mountEditor(
     syncDocument(instance, readReactive(options.document), documentState);
     syncTheme(instance, readReactive(options.theme));
     syncHiddenCharacters(instance, readReactive(options.hiddenCharacters));
+    syncEditability(instance, options.editability);
+    syncRangeDecorations(instance, options.rangeDecorations);
     syncSelection(instance, readReactive(options.selection));
     syncScrollPosition(instance, readReactive(options.scrollPosition));
   });
@@ -193,6 +198,8 @@ function createReactiveEffects(
   createEffect(() =>
     syncHiddenCharacters(runtime.getEditor(), readReactive(options.hiddenCharacters)),
   );
+  createEffect(() => syncEditability(runtime.getEditor(), options.editability));
+  createEffect(() => syncRangeDecorations(runtime.getEditor(), options.rangeDecorations));
   createEffect(() => syncSelection(runtime.getEditor(), readReactive(options.selection)));
   createEffect(() => syncScrollPosition(runtime.getEditor(), readReactive(options.scrollPosition)));
 }
@@ -256,6 +263,7 @@ function syncDocument(
 
   editor.openDocument({
     documentId: document.documentId,
+    documentMode: document.documentMode,
     languageId: document.languageId,
     scrollPosition: document.scrollPosition,
     text: document.text,
@@ -275,6 +283,24 @@ function syncHiddenCharacters(
   if (!editor || hiddenCharacters === undefined) return;
 
   editor.setHiddenCharacters(hiddenCharacters);
+}
+
+function syncEditability(
+  editor: Editor | null,
+  editability: SolidEditorOptions["editability"],
+): void {
+  if (!editor || editability === undefined) return;
+
+  editor.setEditability(editability);
+}
+
+function syncRangeDecorations(
+  editor: Editor | null,
+  rangeDecorations: readonly EditorRangeDecoration[] | undefined,
+): void {
+  if (!editor || rangeDecorations === undefined) return;
+
+  editor.setRangeDecorations(rangeDecorations);
 }
 
 function syncSelection(
@@ -362,7 +388,9 @@ function createDocumentState(): SolidEditorDocumentState {
 function documentKey(document: SolidEditorDocument | null | undefined): SolidEditorDocumentKey {
   if (!document) return NO_DOCUMENT;
 
-  return `${document.documentId ?? ""}\u0000${document.revision ?? ""}`;
+  return `${document.documentId ?? ""}\u0000${document.documentMode ?? ""}\u0000${
+    document.revision ?? ""
+  }`;
 }
 
 function readReactive<T>(value: SolidEditorReactiveValue<T> | undefined): T | undefined {

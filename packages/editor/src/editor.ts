@@ -12,12 +12,15 @@ export {
 } from "./mergeConflicts";
 export type {
   EditorChangeHandler,
+  EditorDocumentMode,
+  EditorEditability,
   EditorEditHistoryMode,
   EditorEditInput,
   EditorEditOptions,
   EditorEditSelection,
   EditorOpenDocumentOptions,
   EditorOptions,
+  EditorRangeDecoration,
   EditorScrollPosition,
   EditorSessionChangeHandler,
   EditorSessionOptions,

@@ -4,11 +4,13 @@ import {
   type DocumentSessionChange,
   type EditorChangeHandler,
   type EditorCommandContext,
+  type EditorDocumentMode,
   type EditorCommandId,
   type EditorEditInput,
   type EditorEditOptions,
   type EditorOpenDocumentOptions,
   type EditorOptions,
+  type EditorRangeDecoration,
   type EditorPlugin,
   type EditorScrollPosition,
   type EditorSetTextOptions,
@@ -35,6 +37,7 @@ export type ReactEditorDocument = {
   readonly revision?: string | number;
   readonly session?: DocumentSession | null;
   readonly text: string;
+  readonly documentMode?: EditorDocumentMode;
   readonly languageId?: EditorSyntaxLanguageId | null;
   readonly scrollPosition?: EditorScrollPosition;
 };
@@ -271,6 +274,14 @@ class ReactEditorControllerImplementation implements ReactEditorController {
     syncHiddenCharacters(this.getEditor(), this.options.hiddenCharacters);
   }
 
+  public syncEditabilityOption(): void {
+    syncEditability(this.getEditor(), this.options.editability);
+  }
+
+  public syncRangeDecorationsOption(): void {
+    syncRangeDecorations(this.getEditor(), this.options.rangeDecorations);
+  }
+
   public syncSelectionOption(): void {
     syncSelection(this.getEditor(), this.options.selection);
   }
@@ -343,6 +354,8 @@ class ReactEditorControllerImplementation implements ReactEditorController {
     syncDocument(editor, this.options.document, this.documentState);
     syncTheme(editor, this.options.theme);
     syncHiddenCharacters(editor, this.options.hiddenCharacters);
+    syncEditability(editor, this.options.editability);
+    syncRangeDecorations(editor, this.options.rangeDecorations);
     syncSelection(editor, this.options.selection);
     syncScrollPosition(editor, this.options.scrollPosition);
   }
@@ -437,6 +450,11 @@ function useControlledOptionSync(
     () => controller.syncHiddenCharactersOption(),
     [controller, options.hiddenCharacters],
   );
+  useEditorLayoutEffect(() => controller.syncEditabilityOption(), [controller, options.editability]);
+  useEditorLayoutEffect(
+    () => controller.syncRangeDecorationsOption(),
+    [controller, options.rangeDecorations],
+  );
   useEditorLayoutEffect(
     () => controller.syncSelectionOption(),
     [controller, selection?.anchor, selection?.head, selection?.revealOffset],
@@ -489,6 +507,7 @@ function syncDocument(
 
   editor.openDocument({
     documentId: document.documentId,
+    documentMode: document.documentMode,
     languageId: document.languageId,
     scrollPosition: document.scrollPosition,
     text: document.text,
@@ -508,6 +527,24 @@ function syncHiddenCharacters(
   if (!editor || hiddenCharacters === undefined) return;
 
   editor.setHiddenCharacters(hiddenCharacters);
+}
+
+function syncEditability(
+  editor: Editor | null,
+  editability: ReactEditorOptions["editability"],
+): void {
+  if (!editor || editability === undefined) return;
+
+  editor.setEditability(editability);
+}
+
+function syncRangeDecorations(
+  editor: Editor | null,
+  rangeDecorations: readonly EditorRangeDecoration[] | undefined,
+): void {
+  if (!editor || rangeDecorations === undefined) return;
+
+  editor.setRangeDecorations(rangeDecorations);
 }
 
 function syncSelection(
@@ -589,6 +626,7 @@ function documentKey(
   document:
     | (Readonly<{
         readonly documentId?: string;
+        readonly documentMode?: EditorDocumentMode;
         readonly revision?: string | number;
         readonly session?: DocumentSession | null;
       }> &
@@ -599,9 +637,9 @@ function documentKey(
   if (!document) return NO_DOCUMENT;
 
   const session = "session" in document ? document.session : null;
-  return `${document.documentId ?? ""}\u0000${document.revision ?? ""}\u0000${sessionIdentity(
-    session,
-  )}`;
+  return `${document.documentId ?? ""}\u0000${document.documentMode ?? ""}\u0000${
+    document.revision ?? ""
+  }\u0000${sessionIdentity(session)}`;
 }
 
 const sessionKeys = new WeakMap<DocumentSession, number>();

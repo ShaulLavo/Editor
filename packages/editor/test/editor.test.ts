@@ -567,6 +567,111 @@ describe("Editor", () => {
     });
   });
 
+  describe("readonly and static documents", () => {
+    it("blocks user and programmatic edits while preserving selection and copy", async () => {
+      editor.dispose();
+      editor = new Editor(container, {
+        defaultText: "alpha",
+        editability: "readonly",
+      });
+
+      const inputEvent = createInsertEvent("!");
+      editorRoot().dispatchEvent(inputEvent);
+      editor.edit({ from: 5, to: 5, text: "?" });
+      editor.dispatchCommand("deleteBackward");
+      editorRoot().dispatchEvent(createPasteEvent(" pasted"));
+      dispatchEditorKey("x");
+      await flushTimers();
+
+      expect(inputEvent.defaultPrevented).toBe(true);
+      expect(editor.getText()).toBe("alpha");
+      expect(editor.getState()).toMatchObject({
+        editability: "readonly",
+        documentMode: "session",
+        canUndo: false,
+        isDirty: false,
+      });
+
+      editor.setSelection(0, 5);
+      const copy = createCopyEvent();
+      editorRoot().dispatchEvent(copy.event);
+
+      expect(copy.getText()).toBe("alpha");
+    });
+
+    it("opens static documents without undo, dirty state, or write behavior", () => {
+      editor.openDocument({
+        documentId: "excerpt.ts",
+        documentMode: "static",
+        text: "const value = 1",
+      });
+
+      editor.edit({ from: 0, to: 5, text: "let" });
+      editor.dispatchCommand("undo");
+      editor.dispatchCommand("indentSelection");
+
+      expect(editor.getText()).toBe("const value = 1");
+      expect(editor.getState()).toMatchObject({
+        documentId: "excerpt.ts",
+        documentMode: "static",
+        editability: "editable",
+        canUndo: false,
+        canRedo: false,
+        isDirty: false,
+      });
+    });
+
+    it("updates editability after construction", () => {
+      editor.setText("abc");
+      editor.setEditability("readonly");
+
+      editor.edit({ from: 3, to: 3, text: "!" });
+
+      expect(editor.getText()).toBe("abc");
+      expect(editor.getState().editability).toBe("readonly");
+
+      editor.setEditability("editable");
+      editor.edit({ from: 3, to: 3, text: "!" });
+
+      expect(editor.getText()).toBe("abc!");
+    });
+  });
+
+  describe("range decorations", () => {
+    it("registers and clears semantic range highlights", () => {
+      editor.openDocument({ documentId: "main.ts", text: "alpha beta gamma" });
+
+      editor.setRangeDecorations([
+        {
+          start: 6,
+          end: 10,
+          className: "search-result-match",
+          style: {
+            backgroundColor: "yellow",
+            color: "black",
+            textDecoration: "underline",
+          },
+        },
+      ]);
+
+      const entry = [...highlightsMap].find(([name]) => name.includes("search-result-match"));
+      const styleText = [...document.head.querySelectorAll("style")]
+        .map((style) => style.textContent ?? "")
+        .join("\n");
+
+      expect(entry?.[1].size).toBe(1);
+      expect(styleText).toContain("background-color: yellow");
+      expect(styleText).toContain("color: black");
+      expect(styleText).toContain("text-decoration: underline");
+
+      editor.setRangeDecorations([]);
+
+      expect([...highlightsMap.keys()].some((name) => name.includes("search-result-match"))).toBe(
+        false,
+      );
+    });
+  });
+
   describe("setContent", () => {
     it("sets the text content", () => {
       editor.setContent("hello world");

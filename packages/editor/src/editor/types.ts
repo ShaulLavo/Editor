@@ -21,6 +21,17 @@ export interface HighlightRegistry {
 
 export type EditorSessionChangeHandler = (change: DocumentSessionChange) => void;
 
+export type EditorEditability = "editable" | "readonly";
+
+export type EditorDocumentMode = "session" | "static";
+
+export type EditorRangeDecoration = {
+  readonly className?: string;
+  readonly end: number;
+  readonly start: number;
+  readonly style?: Partial<CSSStyleDeclaration>;
+};
+
 export type EditorScrollPosition = {
   readonly top?: number;
   readonly left?: number;
@@ -37,6 +48,8 @@ export type EditorSyntaxStatus = "plain" | "loading" | "ready" | "error";
 
 export type EditorState = {
   readonly documentId: string | null;
+  readonly documentMode: EditorDocumentMode;
+  readonly editability: EditorEditability;
   readonly languageId: EditorSyntaxLanguageId | null;
   readonly syntaxStatus: EditorSyntaxStatus;
   readonly cursor: {
@@ -56,6 +69,8 @@ export type EditorChangeHandler = (
 
 export type EditorOptions = {
   readonly defaultText?: string;
+  readonly documentMode?: EditorDocumentMode;
+  readonly editability?: EditorEditability;
   readonly theme?: EditorTheme;
   readonly onChange?: EditorChangeHandler;
   readonly plugins?: readonly EditorPlugin[];
@@ -63,10 +78,12 @@ export type EditorOptions = {
   readonly cursorLineHighlight?: EditorCursorLineHighlightOptions;
   readonly hiddenCharacters?: HiddenCharactersMode;
   readonly lineHeight?: number;
+  readonly rangeDecorations?: readonly EditorRangeDecoration[];
   readonly tabSize?: number;
 };
 
 export type EditorSetTextOptions = {
+  readonly documentMode?: EditorDocumentMode;
   readonly languageId?: EditorSyntaxLanguageId | null;
   readonly scrollPosition?: EditorScrollPosition;
 };

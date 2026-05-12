@@ -5,12 +5,15 @@ import "./lineGutter.css";
 export type LineGutterPluginOptions = {
   readonly counterStyle?: string;
   readonly minLabelColumns?: number;
+  readonly minDigits?: number;
   readonly minWidth?: number;
+  readonly startLine?: number;
 };
 
 const DEFAULT_COUNTER_STYLE = "decimal";
 const DEFAULT_LINE_GUTTER_MIN_COLUMNS = 3;
 const DEFAULT_LINE_GUTTER_MIN_WIDTH = 26;
+const DEFAULT_START_LINE = 1;
 const LINE_GUTTER_PADDING_PX = 8;
 
 export function createLineGutterPlugin(options: LineGutterPluginOptions = {}): EditorPlugin {
@@ -28,11 +31,12 @@ export function createLineGutterContribution(
   options: LineGutterPluginOptions = {},
 ): EditorGutterContribution {
   const counterStyle = options.counterStyle ?? DEFAULT_COUNTER_STYLE;
-  const minLabelColumns = normalizePositiveInteger(
-    options.minLabelColumns,
-    DEFAULT_LINE_GUTTER_MIN_COLUMNS,
+  const minLabelColumns = Math.max(
+    normalizePositiveInteger(options.minLabelColumns, DEFAULT_LINE_GUTTER_MIN_COLUMNS),
+    normalizePositiveInteger(options.minDigits, DEFAULT_LINE_GUTTER_MIN_COLUMNS),
   );
   const minWidth = normalizeNonNegativeNumber(options.minWidth, DEFAULT_LINE_GUTTER_MIN_WIDTH);
+  const startLine = normalizePositiveInteger(options.startLine, DEFAULT_START_LINE);
 
   return {
     id: "line-gutter",
@@ -44,19 +48,24 @@ export function createLineGutterContribution(
       return element;
     },
     width(context) {
-      const columns = Math.max(minLabelColumns, decimalDigitCount(context.lineCount));
+      const endLine = startLine + context.lineCount - 1;
+      const columns = Math.max(minLabelColumns, decimalDigitCount(endLine));
       return Math.max(
         minWidth,
         Math.ceil(columns * context.metrics.characterWidth + LINE_GUTTER_PADDING_PX),
       );
     },
     updateCell(element, row) {
-      updateLineGutterCell(element, row);
+      updateLineGutterCell(element, row, startLine);
     },
   };
 }
 
-function updateLineGutterCell(element: HTMLElement, row: EditorGutterRowContext): void {
+function updateLineGutterCell(
+  element: HTMLElement,
+  row: EditorGutterRowContext,
+  startLine: number,
+): void {
   setElementHidden(element, !row.primaryText);
   element.classList.toggle(
     "editor-virtualized-line-number-active",
@@ -64,7 +73,7 @@ function updateLineGutterCell(element: HTMLElement, row: EditorGutterRowContext)
   );
   if (!row.primaryText) return;
 
-  setCounterSet(element, `editor-line ${row.bufferRow + 1}`);
+  setCounterSet(element, `editor-line ${startLine + row.bufferRow}`);
 }
 
 function setCounterSet(element: HTMLElement, value: string): void {

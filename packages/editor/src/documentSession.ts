@@ -468,8 +468,194 @@ class PieceTableDocumentSession implements DocumentSession {
   }
 }
 
+class StaticDocumentSession implements DocumentSession {
+  private readonly snapshot: PieceTableSnapshot;
+  private readonly text: string;
+  private selections: SelectionSet<PieceTableAnchor>;
+  private tokens: readonly EditorToken[] = [];
+
+  public constructor(text: string) {
+    this.text = text;
+    this.snapshot = createPieceTableSnapshot(text);
+    this.selections = createSelectionSet(
+      [createAnchorSelection(this.snapshot, this.snapshot.length)],
+      true,
+      this.snapshot,
+    );
+  }
+
+  public applyText(_text: string): DocumentSessionChange {
+    return this.createChange("none", []);
+  }
+
+  public indentSelection(_text: string): DocumentSessionChange {
+    return this.createChange("none", []);
+  }
+
+  public outdentSelection(_tabSize: number): DocumentSessionChange {
+    return this.createChange("none", []);
+  }
+
+  public applyEdits(
+    _edits: readonly TextEdit[],
+    _options: DocumentSessionApplyEditsOptions = {},
+  ): DocumentSessionChange {
+    return this.createChange("none", []);
+  }
+
+  public backspace(): DocumentSessionChange {
+    return this.createChange("none", []);
+  }
+
+  public deleteSelection(): DocumentSessionChange {
+    return this.createChange("none", []);
+  }
+
+  public undo(): DocumentSessionChange {
+    return this.createChange("none", []);
+  }
+
+  public redo(): DocumentSessionChange {
+    return this.createChange("none", []);
+  }
+
+  public setSelection(
+    anchorOffset: number,
+    headOffset = anchorOffset,
+    options: DocumentSessionSelectionOptions = {},
+  ): DocumentSessionChange {
+    return this.setSelections([{ anchor: anchorOffset, head: headOffset }], options);
+  }
+
+  public setSelections(
+    selections: readonly DocumentSessionSelectionRange[],
+    options: DocumentSessionSelectionOptions = {},
+  ): DocumentSessionChange {
+    const start = nowMs();
+    this.selections = this.createNormalizedSelectionSet(selections, options);
+    return appendTiming(this.createChange("selection", []), "session.selection", start);
+  }
+
+  public addSelection(
+    anchorOffset: number,
+    headOffset = anchorOffset,
+    options: DocumentSessionSelectionOptions = {},
+  ): DocumentSessionChange {
+    const start = nowMs();
+    const nextSelection = this.createSelection(anchorOffset, headOffset, options);
+    this.selections = normalizeSelectionSet(
+      this.snapshot,
+      createSelectionSet([...this.selections.selections, nextSelection]),
+    );
+    return appendTiming(this.createChange("selection", []), "session.addSelection", start);
+  }
+
+  public clearSecondarySelections(): DocumentSessionChange {
+    const start = nowMs();
+    const normalized = normalizeSelectionSet(this.snapshot, this.selections);
+    const primary = normalized.selections[0];
+    if (!primary || normalized.selections.length <= 1) {
+      return appendTiming(this.createChange("none", []), "session.clearSecondarySelections", start);
+    }
+
+    this.selections = createSelectionSet([primary], true, this.snapshot);
+    return appendTiming(
+      this.createChange("selection", []),
+      "session.clearSecondarySelections",
+      start,
+    );
+  }
+
+  public setTokens(tokens: readonly EditorToken[]): DocumentSessionChange {
+    return this.adoptTokens([...tokens]);
+  }
+
+  public adoptTokens(tokens: readonly EditorToken[]): DocumentSessionChange {
+    const start = nowMs();
+    this.tokens = tokens;
+    return appendTiming(this.createChange("none", []), "session.setTokens", start);
+  }
+
+  public getText(): string {
+    return this.text;
+  }
+
+  public getTokens(): readonly EditorToken[] {
+    return this.tokens;
+  }
+
+  public getSelections(): SelectionSet<PieceTableAnchor> {
+    return this.selections;
+  }
+
+  public getSnapshot(): PieceTableSnapshot {
+    return this.snapshot;
+  }
+
+  public canUndo(): boolean {
+    return false;
+  }
+
+  public canRedo(): boolean {
+    return false;
+  }
+
+  public isDirty(): boolean {
+    return false;
+  }
+
+  public markClean(): void {
+    return;
+  }
+
+  private createNormalizedSelectionSet(
+    selections: readonly DocumentSessionSelectionRange[],
+    options: DocumentSessionSelectionOptions,
+  ): SelectionSet<PieceTableAnchor> {
+    const anchorSelections = selections.map((selection) => {
+      const head = selection.head ?? selection.anchor;
+      return this.createSelection(selection.anchor, head, {
+        goal: selection.goal ?? options.goal,
+      });
+    });
+    return normalizeSelectionSet(this.snapshot, createSelectionSet(anchorSelections));
+  }
+
+  private createSelection(
+    anchorOffset: number,
+    headOffset: number,
+    options: DocumentSessionSelectionOptions,
+  ): AnchorSelection {
+    return createAnchorSelection(this.snapshot, anchorOffset, headOffset, {
+      goal: options.goal,
+    });
+  }
+
+  private createChange(
+    kind: DocumentSessionChangeKind,
+    edits: readonly TextEdit[],
+  ): DocumentSessionChange {
+    return {
+      kind,
+      edits,
+      snapshot: this.snapshot,
+      selections: this.selections,
+      text: this.text,
+      tokens: this.tokens,
+      timings: [],
+      canUndo: false,
+      canRedo: false,
+      isDirty: false,
+    };
+  }
+}
+
 export function createDocumentSession(text: string): DocumentSession {
   return new PieceTableDocumentSession(text);
+}
+
+export function createStaticDocumentSession(text: string): DocumentSession {
+  return new StaticDocumentSession(text);
 }
 
 function normalizeTextEdits(edits: readonly TextEdit[]): readonly TextEdit[] {

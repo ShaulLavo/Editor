@@ -21,12 +21,15 @@ export { defaultEditorKeyBindings } from "./editor/keymap";
 export type { EditorKeyBinding, EditorKeymapOptions } from "./editor/keymap";
 export type {
   EditorChangeHandler,
+  EditorDocumentMode,
+  EditorEditability,
   EditorEditHistoryMode,
   EditorEditInput,
   EditorEditOptions,
   EditorEditSelection,
   EditorOpenDocumentOptions,
   EditorOptions,
+  EditorRangeDecoration,
   EditorSetTextOptions,
   EditorScrollPosition,
   EditorState,

@@ -379,8 +379,6 @@ export class VirtualizedTextView {
   }
 
   public focusInput(): void {
-    if (this.inputElement.readOnly) return;
-
     const view = this.view;
     const scrollTop = this.scrollElement.scrollTop;
     const scrollLeft = this.scrollElement.scrollLeft;

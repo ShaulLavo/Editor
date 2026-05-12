@@ -848,7 +848,8 @@ function hideSecondaryCaretElements(view: VirtualizedTextViewInternal, startInde
 export function rebuildStyleRules(view: VirtualizedTextViewInternal): void {
   const rules: string[] = [];
   for (const group of view.rangeHighlightGroups.values()) {
-    rules.push(rangeHighlightRule(group.name, group.style));
+    const rule = rangeHighlightRule(group.name, group.style);
+    if (rule) rules.push(rule);
   }
   for (const group of view.tokenGroups.values()) {
     rules.push(buildHighlightRule(group.name, group.style));
@@ -860,10 +861,16 @@ export function rebuildStyleRules(view: VirtualizedTextViewInternal): void {
   view.styleEl.textContent = nextRules;
 }
 
-function rangeHighlightRule(name: string, style: VirtualizedTextHighlightStyle): string {
-  const declarations = [`background-color: ${style.backgroundColor};`];
+function rangeHighlightRule(
+  name: string,
+  style: VirtualizedTextHighlightStyle,
+): string | null {
+  const declarations = [];
+  if (style.backgroundColor) declarations.push(`background-color: ${style.backgroundColor};`);
   if (style.color) declarations.push(`color: ${style.color};`);
   if (style.textDecoration) declarations.push(`text-decoration: ${style.textDecoration};`);
+  if (declarations.length === 0) return null;
+
   return `::highlight(${name}) { ${declarations.join(" ")} }`;
 }
 

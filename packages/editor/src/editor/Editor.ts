@@ -1,5 +1,5 @@
 import type { DocumentSession, DocumentSessionChange } from "../documentSession";
-import { createDocumentSession } from "../documentSession";
+import { createDocumentSession, createStaticDocumentSession } from "../documentSession";
 import { childContainingNode, childNodeIndex, elementBoundaryToTextOffset } from "./domBoundary";
 import { projectSyntaxFoldsThroughLineEdit } from "./folds";
 import { EditorFoldState } from "./foldState";
@@ -33,10 +33,13 @@ import {
   preservedScrollPosition,
 } from "./scroll";
 import type {
+  EditorDocumentMode,
   EditorEditInput,
   EditorEditOptions,
+  EditorEditability,
   EditorOptions,
   EditorOpenDocumentOptions,
+  EditorRangeDecoration,
   EditorScrollPosition,
   EditorSetTextOptions,
   EditorSessionOptions,
@@ -118,6 +121,8 @@ type ResetOwnedDocumentOptions = {
 };
 
 const EDITOR_FIND_FEATURE_ID = "editor.find";
+const DEFAULT_EDITABILITY: EditorEditability = "editable";
+const DEFAULT_DOCUMENT_MODE: EditorDocumentMode = "session";
 
 type EditorFindFeature = {
   openFind(): boolean;
@@ -157,6 +162,8 @@ export class Editor {
   private session: DocumentSession | null = null;
   private sessionOptions: EditorSessionOptions = {};
   private documentId: string | null = null;
+  private documentMode: EditorDocumentMode = DEFAULT_DOCUMENT_MODE;
+  private editability: EditorEditability = DEFAULT_EDITABILITY;
   private languageId: EditorSyntaxLanguageId | null = null;
   private syntaxStatus: EditorSyntaxStatus = "plain";
   private syntaxSession: EditorSyntaxSession | null = null;
@@ -175,12 +182,16 @@ export class Editor {
   private mouseSelectionAutoScrollFrame = 0;
   private useSessionSelectionForNextInput = false;
   private nativeInputGeneration = 0;
+  private rangeDecorations: readonly EditorRangeDecoration[] = [];
+  private appliedRangeDecorationNames: readonly string[] = [];
   private readonly tabSize: number;
 
   constructor(container: HTMLElement, options: EditorOptions = {}) {
     this.container = container;
     this.options = options;
     this.tabSize = normalizeTabSize(options.tabSize);
+    this.editability = normalizeEditorEditability(options.editability);
+    this.documentMode = normalizeEditorDocumentMode(options.documentMode);
     this.configuredTheme = options.theme ?? null;
     this.pluginHost = new EditorPluginHost(options.plugins);
     this.highlightPrefix = nextEditorHighlightPrefix();
@@ -226,6 +237,7 @@ export class Editor {
     });
     this.installEditingHandlers();
     this.initializeDefaultText();
+    this.setRangeDecorations(options.rangeDecorations ?? []);
   }
 
   setContent(text: string): void {
@@ -233,6 +245,7 @@ export class Editor {
     this.view.setText(text);
     this.setTokens([]);
     this.clearSyntaxFolds();
+    this.applyRangeDecorations();
     this.notifyViewContributions("content", null);
   }
 
@@ -293,7 +306,11 @@ export class Editor {
   setText(text: string, options: EditorSetTextOptions = {}): void {
     const currentScrollPosition = this.getScrollPosition();
     const documentVersion = this.resetOwnedDocument(
-      { text, languageId: options.languageId },
+      {
+        text,
+        documentMode: options.documentMode ?? this.documentMode,
+        languageId: options.languageId,
+      },
       {
         documentId: null,
         persistentIdentity: false,
@@ -305,6 +322,8 @@ export class Editor {
   }
 
   edit(editOrEdits: EditorEditInput, options: EditorEditOptions = {}): void {
+    if (!this.canEditDocument()) return;
+
     this.ensureAnonymousSession();
     if (!this.session) return;
 
@@ -352,6 +371,8 @@ export class Editor {
 
     return {
       documentId: this.documentId,
+      documentMode: this.documentMode,
+      editability: this.editability,
       languageId: this.languageId,
       syntaxStatus: this.syntaxStatus,
       cursor: {
@@ -374,6 +395,8 @@ export class Editor {
   }
 
   resolveMergeConflict(index: number, resolution: MergeConflictResolution): boolean {
+    if (!this.canEditDocument()) return false;
+
     const text = this.getText();
     const conflict = parseMergeConflicts(text)[index];
     if (!conflict) return false;
@@ -464,6 +487,20 @@ export class Editor {
     this.view.setHiddenCharacters(mode);
   }
 
+  setEditability(editability: EditorEditability): void {
+    const next = normalizeEditorEditability(editability);
+    if (this.editability === next) return;
+
+    this.editability = next;
+    this.syncViewEditability();
+    this.notifyChange(null);
+  }
+
+  setRangeDecorations(decorations: readonly EditorRangeDecoration[]): void {
+    this.rangeDecorations = [...decorations];
+    this.applyRangeDecorations();
+  }
+
   setRowDecorations(decorations: ReadonlyMap<number, VirtualizedTextRowDecoration>): void {
     this.view.setRowDecorations(decorations);
     this.notifyViewContributions("layout", null);
@@ -519,6 +556,7 @@ export class Editor {
     this.documentVersion += 1;
     const documentVersion = this.documentVersion;
     this.documentId = options.documentId ?? null;
+    this.documentMode = "session";
     this.languageId = options.languageId ?? null;
     this.disposeSyntaxSession();
     this.disposeHighlighterSession();
@@ -534,7 +572,7 @@ export class Editor {
     });
     this.syntaxSession = this.createSyntaxSession(internalDocumentId, text);
     this.syntaxStatus = this.syntaxSession ? "loading" : "plain";
-    this.view.setEditable(true);
+    this.syncViewEditability();
     this.setDocument({ text: session.getText(), tokens: session.getTokens() });
     this.applyDocumentScrollPosition(options.scrollPosition);
     this.syncDomSelection();
@@ -553,6 +591,7 @@ export class Editor {
   clear(): void {
     this.documentVersion += 1;
     this.documentId = null;
+    this.documentMode = normalizeEditorDocumentMode(this.options.documentMode);
     this.languageId = null;
     this.syntaxStatus = "plain";
     this.disposeSyntaxSession();
@@ -585,12 +624,15 @@ export class Editor {
     this.documentId =
       options.documentId ??
       (options.persistentIdentity ? this.generatedDocumentId(documentVersion) : null);
+    this.documentMode = normalizeEditorDocumentMode(
+      document.documentMode ?? this.options.documentMode,
+    );
     this.languageId = document.languageId ?? null;
     this.disposeSyntaxSession();
     this.disposeHighlighterSession();
 
     const internalDocumentId = this.documentId ?? this.generatedOpenSessionId(documentVersion);
-    this.session = createDocumentSession(document.text);
+    this.session = createEditorDocumentSession(document.text, this.documentMode);
     this.sessionOptions = {};
     this.highlighterSession = this.pluginHost.createHighlighterSession({
       documentId: internalDocumentId,
@@ -600,8 +642,9 @@ export class Editor {
     });
     this.syntaxSession = this.createSyntaxSession(internalDocumentId, document.text);
     this.syntaxStatus = this.syntaxSession ? "loading" : "plain";
-    this.view.setEditable(true);
+    this.syncViewEditability();
     this.setDocument({ text: this.session.getText(), tokens: [] });
+    this.applyRangeDecorations();
     this.applyDocumentScrollPosition(options.scrollPosition);
     this.syncDomSelection();
     this.notifyViewContributions("document", null);
@@ -629,7 +672,11 @@ export class Editor {
     if (this.options.defaultText === undefined) return;
 
     this.resetOwnedDocument(
-      { text: this.options.defaultText, languageId: null },
+      {
+        text: this.options.defaultText,
+        documentMode: normalizeEditorDocumentMode(this.options.documentMode),
+        languageId: null,
+      },
       {
         documentId: null,
         persistentIdentity: false,
@@ -860,6 +907,38 @@ export class Editor {
     };
   }
 
+  private canEditDocument(): boolean {
+    return this.editability === "editable" && this.documentMode === "session";
+  }
+
+  private syncViewEditability(): void {
+    this.view.setEditable(this.canEditDocument());
+  }
+
+  private applyRangeDecorations(): void {
+    this.clearAppliedRangeDecorations();
+    const names: string[] = [];
+
+    this.rangeDecorations.forEach((decoration, index) => {
+      const name = this.rangeDecorationName(decoration, index);
+      names.push(name);
+      this.view.setRangeHighlight(name, [decoration], rangeDecorationStyle(decoration));
+    });
+
+    this.appliedRangeDecorationNames = names;
+  }
+
+  private clearAppliedRangeDecorations(): void {
+    for (const name of this.appliedRangeDecorationNames) this.view.clearRangeHighlight(name);
+    this.appliedRangeDecorationNames = [];
+  }
+
+  private rangeDecorationName(decoration: EditorRangeDecoration, index: number): string {
+    const semanticName = sanitizedHighlightName(decoration.className);
+    if (semanticName) return `${this.highlightPrefix}-range-${semanticName}-${index}`;
+    return `${this.highlightPrefix}-range-decoration-${index}`;
+  }
+
   private createViewSnapshot(): EditorViewSnapshot {
     const viewState = this.view.getState();
     const viewport = {
@@ -1006,6 +1085,7 @@ export class Editor {
       capture: true,
     });
     this.el.addEventListener("copy", this.handleCopy);
+    this.el.addEventListener("drop", this.handleDrop);
     this.el.addEventListener("paste", this.handlePaste);
     this.el.addEventListener("keydown", this.handleKeyDown);
     this.el.addEventListener("keyup", this.syncSessionSelectionFromDom);
@@ -1025,6 +1105,7 @@ export class Editor {
       capture: true,
     });
     this.el.removeEventListener("copy", this.handleCopy);
+    this.el.removeEventListener("drop", this.handleDrop);
     this.el.removeEventListener("paste", this.handlePaste);
     this.el.removeEventListener("keydown", this.handleKeyDown);
     this.el.removeEventListener("keyup", this.syncSessionSelectionFromDom);
@@ -1257,6 +1338,10 @@ export class Editor {
 
   private handleBeforeInput = (event: InputEvent): void => {
     if (!this.session) return;
+    if (!this.canEditDocument()) {
+      event.preventDefault();
+      return;
+    }
 
     const text = event.data ?? "";
     if (event.inputType !== "insertText" && event.inputType !== "insertLineBreak") return;
@@ -1274,6 +1359,10 @@ export class Editor {
 
   private handlePaste = (event: ClipboardEvent): void => {
     if (!this.session) return;
+    if (!this.canEditDocument()) {
+      event.preventDefault();
+      return;
+    }
 
     const text = event.clipboardData?.getData("text/plain") ?? "";
     if (text.length === 0) return;
@@ -1288,6 +1377,12 @@ export class Editor {
     });
   };
 
+  private handleDrop = (event: DragEvent): void => {
+    if (this.canEditDocument()) return;
+
+    event.preventDefault();
+  };
+
   private handleCopy = (event: ClipboardEvent): void => {
     const text = this.selectedTextForClipboard();
     if (text === null) return;
@@ -1299,6 +1394,7 @@ export class Editor {
 
   private handleKeyDown = (event: KeyboardEvent): void => {
     if (!this.session) return;
+    if (!this.canEditDocument()) return;
 
     const fallbackText = keyboardFallbackText(event);
     if (fallbackText === null) return;
@@ -1319,6 +1415,7 @@ export class Editor {
 
     this.el.ownerDocument.defaultView?.setTimeout(() => {
       if (!this.session) return;
+      if (!this.canEditDocument()) return;
       if (this.nativeInputGeneration !== nativeInputGeneration) return;
 
       const selectionChange = this.selectionChangeBeforeEdit();
@@ -1333,6 +1430,7 @@ export class Editor {
 
   private applyHistoryCommand(command: "undo" | "redo", context: EditorCommandContext): boolean {
     if (!this.session) return false;
+    if (!this.canEditDocument()) return false;
 
     const start = context.event ? eventStartMs(context.event) : nowMs();
     const change = command === "undo" ? this.session.undo() : this.session.redo();
@@ -1345,6 +1443,7 @@ export class Editor {
     context: EditorCommandContext,
   ): boolean {
     if (!this.session) return false;
+    if (!this.canEditDocument()) return false;
 
     const start = context.event ? eventStartMs(context.event) : nowMs();
     const selectionChange = this.selectionChangeBeforeEdit();
@@ -1363,6 +1462,7 @@ export class Editor {
     context: EditorCommandContext,
   ): boolean {
     if (!this.session) return false;
+    if (!this.canEditDocument()) return false;
 
     const start = context.event ? eventStartMs(context.event) : nowMs();
     const selectionChange = this.selectionChangeBeforeEdit();
@@ -1382,6 +1482,7 @@ export class Editor {
     context: EditorCommandContext,
   ): boolean {
     if (!this.session) return false;
+    if (!this.canEditDocument()) return false;
 
     const start = context.event ? eventStartMs(context.event) : nowMs();
     const selectionChange = this.selectionChangeBeforeEdit();
@@ -1740,6 +1841,7 @@ export class Editor {
     selection?: EditorSelectionRange,
   ): void {
     if (!this.session) return;
+    if (!this.canEditDocument()) return;
     if (edits.length === 0) return;
 
     const start = nowMs();
@@ -2407,6 +2509,46 @@ function occurrenceSelectTimingName(
 ): string {
   if (command === "editor.action.selectHighlights") return "input.selectHighlights";
   return "input.changeAll";
+}
+
+function createEditorDocumentSession(
+  text: string,
+  documentMode: EditorDocumentMode,
+): DocumentSession {
+  if (documentMode === "static") return createStaticDocumentSession(text);
+  return createDocumentSession(text);
+}
+
+function normalizeEditorEditability(value: EditorEditability | undefined): EditorEditability {
+  if (value === "readonly") return "readonly";
+  return DEFAULT_EDITABILITY;
+}
+
+function normalizeEditorDocumentMode(value: EditorDocumentMode | undefined): EditorDocumentMode {
+  if (value === "static") return "static";
+  return DEFAULT_DOCUMENT_MODE;
+}
+
+function rangeDecorationStyle(decoration: EditorRangeDecoration): {
+  readonly backgroundColor?: string;
+  readonly color?: string;
+  readonly textDecoration?: string;
+} {
+  return {
+    backgroundColor: decoration.style?.backgroundColor || undefined,
+    color: decoration.style?.color || undefined,
+    textDecoration: decoration.style?.textDecoration || undefined,
+  };
+}
+
+function sanitizedHighlightName(value: string | undefined): string | null {
+  const firstClassName = value?.split(/\s+/).find(Boolean);
+  if (!firstClassName) return null;
+
+  const sanitized = firstClassName.replaceAll(/[^a-zA-Z0-9_-]/g, "-");
+  if (sanitized.length === 0) return null;
+  if (/^[a-zA-Z_]/.test(sanitized)) return sanitized;
+  return `_${sanitized}`;
 }
 
 function capitalize(value: string): string {
