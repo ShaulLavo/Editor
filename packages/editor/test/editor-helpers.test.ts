@@ -139,16 +139,6 @@ describe("default editor keybindings", () => {
     expect(bindings).toEqual([{ hotkey: { key: "K", mod: true }, command: "selectAll" }]);
   });
 
-  it("keeps compatibility bindings as the last layer", () => {
-    const bindings = editorKeyBindings({
-      defaultBindings: false,
-      bindings: [{ hotkey: "Mod+K", command: "selectAll" }],
-      layers: [{ id: "base", bindings: [{ hotkey: "Mod+K", command: "find" }] }],
-    });
-
-    expect(bindings).toEqual([{ hotkey: "Mod+K", command: "selectAll" }]);
-  });
-
   it("builds readonly-safe command pack layers without edit commands", () => {
     const commands = editorKeymapLayersForCommandPacks(readonlySafeEditorCommandPacks, "linux")
       .flatMap((layer) => layer.bindings)

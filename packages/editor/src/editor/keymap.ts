@@ -38,7 +38,6 @@ export type EditorKeymapLayer = {
 export type EditorKeymapOptions = {
   readonly enabled?: boolean;
   readonly defaultBindings?: boolean;
-  readonly bindings?: readonly EditorKeyBinding[];
   readonly layers?: readonly EditorKeymapLayer[];
 };
 
@@ -97,9 +96,8 @@ export function editorKeymapLayers(
   options: EditorKeymapOptions = {},
 ): readonly EditorKeymapLayer[] {
   const defaults = options.defaultBindings === false ? [] : defaultEditorKeymapLayers();
-  const customBindings = editorCustomBindingLayer(options.bindings);
 
-  return [...defaults, ...(options.layers ?? []), ...customBindings];
+  return [...defaults, ...(options.layers ?? [])];
 }
 
 export function editorKeyBindingsFromLayers(
@@ -227,14 +225,6 @@ function editorKeyBindingsForCommandPack(
   if (pack === "lsp-navigation") return lspNavigationBindings();
 
   return [];
-}
-
-function editorCustomBindingLayer(
-  bindings: readonly EditorKeyBinding[] | undefined,
-): readonly EditorKeymapLayer[] {
-  if (!bindings || bindings.length === 0) return [];
-
-  return [{ id: "custom.bindings", source: "app", bindings }];
 }
 
 function editorHotkeyKey(hotkey: RegisterableHotkey, platform: EditorPlatform): string {
