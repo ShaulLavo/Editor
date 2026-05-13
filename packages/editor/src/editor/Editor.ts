@@ -359,6 +359,30 @@ export class Editor {
     this.refreshSyntax(documentVersion, null);
   }
 
+  syncText(text: string, options: EditorSetTextOptions = {}): void {
+    const documentMode = normalizeEditorDocumentMode(options.documentMode ?? this.documentMode);
+    const languageId = options.languageId ?? null;
+    if (!this.session || documentMode !== this.documentMode || languageId !== this.languageId) {
+      this.setText(text, options);
+      return;
+    }
+    if (this.getText() === text) return;
+
+    const scrollPosition = preservedScrollPosition(
+      this.getScrollPosition(),
+      options.scrollPosition,
+    );
+    const change = this.session.applyEdits([{ from: 0, to: this.text.length, text }], {
+      history: "skip",
+    });
+    if (change.kind === "none") return;
+
+    this.applySessionChange(change, "editor.syncText", nowMs(), {
+      syncDomSelection: false,
+    });
+    this.applyDocumentScrollPosition(scrollPosition);
+  }
+
   edit(editOrEdits: EditorEditInput, options: EditorEditOptions = {}): void {
     if (!this.canEditDocument()) return;
 

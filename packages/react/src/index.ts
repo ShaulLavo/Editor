@@ -41,7 +41,10 @@ export type ReactEditorDocument = {
   readonly documentMode?: EditorDocumentMode;
   readonly languageId?: EditorSyntaxLanguageId | null;
   readonly scrollPosition?: EditorScrollPosition;
+  readonly textSyncMode?: ReactEditorDocumentTextSyncMode;
 };
+
+export type ReactEditorDocumentTextSyncMode = "open" | "incremental";
 
 export type ReactEditorSelection = {
   readonly anchor: number;
@@ -127,7 +130,8 @@ type ReactEditorSelectorSubscription<T> = {
 
 type ReactEditorDocumentState = {
   key(): ReactEditorDocumentKey;
-  setKey(key: ReactEditorDocumentKey): void;
+  identityKey(): ReactEditorDocumentKey;
+  setKey(key: ReactEditorDocumentKey, identityKey?: ReactEditorDocumentKey): void;
   clear(): void;
 };
 
@@ -515,8 +519,10 @@ function syncDocument(
 
   const key = documentKey(document);
   if (key === state.key()) return;
+  const identityKey = documentIdentityKey(document);
+  const previousIdentityKey = state.identityKey();
 
-  state.setKey(key);
+  state.setKey(key, identityKey);
   if (!document) {
     editor.clearDocument();
     return;
@@ -531,6 +537,15 @@ function syncDocument(
     return;
   }
 
+  if (canSyncDocumentTextIncrementally(document, previousIdentityKey, identityKey)) {
+    editor.syncText(document.text, {
+      documentMode: document.documentMode,
+      languageId: document.languageId,
+      scrollPosition: document.scrollPosition,
+    });
+    return;
+  }
+
   editor.openDocument({
     documentId: document.documentId,
     documentMode: document.documentMode,
@@ -538,6 +553,17 @@ function syncDocument(
     scrollPosition: document.scrollPosition,
     text: document.text,
   });
+}
+
+function canSyncDocumentTextIncrementally(
+  document: ReactEditorDocument,
+  previousIdentityKey: ReactEditorDocumentKey,
+  identityKey: ReactEditorDocumentKey,
+): boolean {
+  if (document.textSyncMode !== "incremental") return false;
+  if (previousIdentityKey === NO_DOCUMENT) return false;
+
+  return previousIdentityKey === identityKey;
 }
 
 function syncTheme(editor: Editor | null, theme: EditorTheme | null | undefined): void {
@@ -641,7 +667,7 @@ function createCommands(
   return {
     focus: () => editor()?.focus(),
     openDocument: (document) => {
-      documentState.setKey(documentKey(document));
+      documentState.setKey(documentKey(document), documentIdentityKey(document));
       editor()?.openDocument(document);
     },
     setText: (text, options) => editor()?.setText(text, options),
@@ -662,14 +688,18 @@ function createCommands(
 
 function createDocumentState(): ReactEditorDocumentState {
   let key: ReactEditorDocumentKey = NO_DOCUMENT;
+  let identityKey: ReactEditorDocumentKey = NO_DOCUMENT;
 
   return {
     key: () => key,
-    setKey: (nextKey) => {
+    identityKey: () => identityKey,
+    setKey: (nextKey, nextIdentityKey = nextKey) => {
       key = nextKey;
+      identityKey = nextIdentityKey;
     },
     clear: () => {
       key = NO_DOCUMENT;
+      identityKey = NO_DOCUMENT;
     },
   };
 }
@@ -679,7 +709,31 @@ function documentKey(
     | (Readonly<{
         readonly documentId?: string;
         readonly documentMode?: EditorDocumentMode;
+        readonly languageId?: EditorSyntaxLanguageId | null;
         readonly revision?: string | number;
+        readonly session?: DocumentSession | null;
+        readonly text?: string;
+        readonly textSyncMode?: ReactEditorDocumentTextSyncMode;
+      }> &
+        object)
+    | null
+    | undefined,
+): ReactEditorDocumentKey {
+  if (!document) return NO_DOCUMENT;
+
+  const textVersion = document.textSyncMode === "incremental" ? (document.text ?? "") : "";
+  const identityKey = documentIdentityKey(document);
+  if (identityKey === NO_DOCUMENT) return NO_DOCUMENT;
+
+  return `${identityKey}\u0000${document.revision ?? ""}\u0000${textVersion}`;
+}
+
+function documentIdentityKey(
+  document:
+    | (Readonly<{
+        readonly documentId?: string;
+        readonly documentMode?: EditorDocumentMode;
+        readonly languageId?: EditorSyntaxLanguageId | null;
         readonly session?: DocumentSession | null;
       }> &
         object)
@@ -690,7 +744,7 @@ function documentKey(
 
   const session = "session" in document ? document.session : null;
   return `${document.documentId ?? ""}\u0000${document.documentMode ?? ""}\u0000${
-    document.revision ?? ""
+    document.languageId ?? ""
   }\u0000${sessionIdentity(session)}`;
 }
 

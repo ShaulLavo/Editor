@@ -2661,6 +2661,35 @@ describe("Editor", () => {
       });
     });
 
+    it("syncs static document text through an editor change", () => {
+      const changes: DocumentSessionChange[] = [];
+      editor.dispose();
+      editor = new Editor(container, {
+        onChange: (_state, change) => {
+          if (change) changes.push(change);
+        },
+      });
+      editor.openDocument({
+        documentId: "generated:/note.txt",
+        documentMode: "static",
+        text: "abc",
+      });
+
+      editor.syncText("abcdef", { documentMode: "static" });
+
+      expect(editor.getText()).toBe("abcdef");
+      expect(editorRoot().textContent).toBe("abcdef");
+      expect(changes.at(-1)).toMatchObject({
+        kind: "edit",
+        text: "abcdef",
+      });
+      expect(editor.getState()).toMatchObject({
+        canUndo: false,
+        documentMode: "static",
+        length: 6,
+      });
+    });
+
     it("opens editable documents and exposes editor state", () => {
       editor.openDocument({ documentId: "note.txt", text: "abc" });
 
@@ -2856,6 +2885,38 @@ describe("Editor", () => {
       ]);
       expect(editor.getState().syntaxStatus).toBe("ready");
       expect(highlightsMap.size).toBe(1);
+    });
+
+    it("applies syncText changes through incremental syntax sessions", async () => {
+      const appliedChanges: DocumentSessionChange[] = [];
+      setEditorSyntaxSessionFactory(() =>
+        createMockSyntaxSession({
+          applyChange: async (change) => {
+            appliedChanges.push(change);
+            return createSyntaxResult();
+          },
+        }),
+      );
+
+      editor.openDocument({
+        documentId: "generated:/main.ts",
+        documentMode: "static",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
+      await flushMicrotasks();
+
+      editor.syncText("const ab = 1;", {
+        documentMode: "static",
+        languageId: "typescript",
+      });
+      await flushSyntaxDebounce();
+
+      expect(appliedChanges).toHaveLength(1);
+      expect(appliedChanges[0]).toMatchObject({
+        kind: "edit",
+        text: "const ab = 1;",
+      });
     });
 
     it("does not infer language from document ids", async () => {

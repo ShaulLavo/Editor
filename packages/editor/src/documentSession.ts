@@ -469,8 +469,8 @@ class PieceTableDocumentSession implements DocumentSession {
 }
 
 class StaticDocumentSession implements DocumentSession {
-  private readonly snapshot: PieceTableSnapshot;
-  private readonly text: string;
+  private snapshot: PieceTableSnapshot;
+  private text: string;
   private selections: SelectionSet<PieceTableAnchor>;
   private tokens: readonly EditorToken[] = [];
 
@@ -497,10 +497,25 @@ class StaticDocumentSession implements DocumentSession {
   }
 
   public applyEdits(
-    _edits: readonly TextEdit[],
-    _options: DocumentSessionApplyEditsOptions = {},
+    edits: readonly TextEdit[],
+    options: DocumentSessionApplyEditsOptions = {},
   ): DocumentSessionChange {
-    return this.createChange("none", []);
+    const start = nowMs();
+    const normalizedEdits = normalizeTextEdits(edits);
+    if (normalizedEdits.length === 0) {
+      return appendTiming(this.createChange("none", []), "session.applyEdits", start);
+    }
+
+    const nextSnapshot = applyBatchToPieceTable(this.snapshot, normalizedEdits);
+    const effectiveEdits = normalizedEdits.filter(isEffectiveTextEdit);
+    if (effectiveEdits.length === 0) {
+      return appendTiming(this.createChange("none", []), "session.applyEdits", start);
+    }
+
+    this.snapshot = nextSnapshot;
+    this.text = getPieceTableText(nextSnapshot);
+    this.selections = this.selectionsAfterProgrammaticEdit(nextSnapshot, options);
+    return appendTiming(this.createChange("edit", effectiveEdits), "session.applyEdits", start);
   }
 
   public backspace(): DocumentSessionChange {
@@ -629,6 +644,34 @@ class StaticDocumentSession implements DocumentSession {
     return createAnchorSelection(this.snapshot, anchorOffset, headOffset, {
       goal: options.goal,
     });
+  }
+
+  private selectionsAfterProgrammaticEdit(
+    snapshot: PieceTableSnapshot,
+    options: DocumentSessionApplyEditsOptions,
+  ): SelectionSet<PieceTableAnchor> {
+    if (options.selections) {
+      return this.createNormalizedSelectionSetForSnapshot(snapshot, options.selections, {});
+    }
+    if (options.selection) {
+      return this.createNormalizedSelectionSetForSnapshot(snapshot, [options.selection], {});
+    }
+
+    return markSelectionSetDirty(this.selections);
+  }
+
+  private createNormalizedSelectionSetForSnapshot(
+    snapshot: PieceTableSnapshot,
+    selections: readonly DocumentSessionSelectionRange[],
+    options: DocumentSessionSelectionOptions,
+  ): SelectionSet<PieceTableAnchor> {
+    const anchorSelections = selections.map((selection) => {
+      const head = selection.head ?? selection.anchor;
+      return createAnchorSelection(snapshot, selection.anchor, head, {
+        goal: selection.goal ?? options.goal,
+      });
+    });
+    return normalizeSelectionSet(snapshot, createSelectionSet(anchorSelections));
   }
 
   private createChange(

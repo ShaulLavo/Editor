@@ -153,6 +153,49 @@ describe("useEditor", () => {
     mounted.dispose();
   });
 
+  it("incrementally syncs controlled generated document text without reopening", () => {
+    const mounted = mountReactEditor({
+      document: {
+        documentId: "generated:/a.ts",
+        documentMode: "static",
+        languageId: "typescript",
+        text: "alpha",
+        textSyncMode: "incremental",
+      },
+    });
+    const instance = mounted.controller.getEditor();
+    expect(instance).not.toBeNull();
+    const openSpy = vi.spyOn(instance as Editor, "openDocument");
+    const syncSpy = vi.spyOn(instance as Editor, "syncText");
+
+    mounted.render({
+      document: {
+        documentId: "generated:/a.ts",
+        documentMode: "static",
+        languageId: "typescript",
+        text: "alpha beta",
+        textSyncMode: "incremental",
+      },
+    });
+
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(syncSpy).toHaveBeenCalledWith(
+      "alpha beta",
+      expect.objectContaining({
+        documentMode: "static",
+        languageId: "typescript",
+      }),
+    );
+    expect(mounted.controller.getText()).toBe("alpha beta");
+    expect(mounted.controller.getLastChange()?.kind).toBe("edit");
+    expect(mounted.controller.getState()).toMatchObject({
+      documentId: "generated:/a.ts",
+      documentMode: "static",
+    });
+
+    mounted.dispose();
+  });
+
   it("reattaches cached document sessions with text and undo history intact", () => {
     const alphaSession = createDocumentSession("alpha");
     const betaSession = createDocumentSession("beta");
