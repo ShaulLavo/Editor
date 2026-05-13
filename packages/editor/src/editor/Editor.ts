@@ -998,8 +998,10 @@ export class Editor {
   }
 
   private applyRangeDecorations(): void {
-    this.clearAppliedRangeDecorations();
-    if (this.text.length === 0) return;
+    if (this.text.length === 0 || this.rangeDecorations.length === 0) {
+      this.clearAppliedRangeDecorations();
+      return;
+    }
 
     const groups = groupedRangeDecorations(this.rangeDecorations, this.highlightPrefix);
     const names: string[] = [];
@@ -1009,12 +1011,19 @@ export class Editor {
       this.view.setRangeHighlight(group.name, group.ranges, group.style);
     }
 
+    this.clearStaleAppliedRangeDecorations(new Set(names));
     this.appliedRangeDecorationNames = names;
   }
 
   private clearAppliedRangeDecorations(): void {
     for (const name of this.appliedRangeDecorationNames) this.view.clearRangeHighlight(name);
     this.appliedRangeDecorationNames = [];
+  }
+
+  private clearStaleAppliedRangeDecorations(nextNames: ReadonlySet<string>): void {
+    for (const name of this.appliedRangeDecorationNames) {
+      if (!nextNames.has(name)) this.view.clearRangeHighlight(name);
+    }
   }
 
   private createViewSnapshot(): EditorViewSnapshot {

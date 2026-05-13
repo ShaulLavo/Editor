@@ -175,6 +175,7 @@ function findGutterCells(id: string): HTMLElement[] {
 function installDom(): () => void {
   const previous = captureDomGlobals();
   const window = new Window() as TestWindow;
+  Object.assign(window, { SyntaxError });
 
   Object.assign(globalThis, {
     window,

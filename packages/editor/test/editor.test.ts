@@ -741,7 +741,7 @@ describe("Editor", () => {
       );
     });
 
-    it("does not rebuild unchanged semantic range highlights", () => {
+    it("updates semantic range highlights in place", () => {
       editor.openDocument({ documentId: "main.ts", text: "alpha beta gamma" });
 
       editor.setRangeDecorations([
@@ -776,7 +776,8 @@ describe("Editor", () => {
       ]);
       const thirdEntry = [...highlightsMap].find(([name]) => name.includes("search-result-match"));
 
-      expect(thirdEntry?.[1]).not.toBe(secondEntry?.[1]);
+      expect(thirdEntry?.[1]).toBe(secondEntry?.[1]);
+      expect(thirdEntry?.[1].size).toBe(1);
 
       editor.setRangeDecorations([
         {
@@ -787,8 +788,47 @@ describe("Editor", () => {
         },
       ]);
       const fourthEntry = [...highlightsMap].find(([name]) => name.includes("search-result-match"));
+      const styleText = [...document.head.querySelectorAll("style")]
+        .map((style) => style.textContent ?? "")
+        .join("\n");
 
-      expect(fourthEntry?.[1]).not.toBe(thirdEntry?.[1]);
+      expect(fourthEntry?.[1]).toBe(thirdEntry?.[1]);
+      expect(styleText).toContain("background-color: orange");
+    });
+
+    it("updates appended semantic range highlights without replacing registry entries", () => {
+      editor.openDocument({ documentId: "main.ts", text: "alpha beta gamma" });
+
+      editor.setRangeDecorations([
+        {
+          start: 0,
+          end: 5,
+          className: "search-result-match",
+          style: { backgroundColor: "yellow" },
+        },
+      ]);
+
+      const firstEntry = [...highlightsMap].find(([name]) => name.includes("search-result-match"));
+
+      editor.setRangeDecorations([
+        {
+          start: 0,
+          end: 5,
+          className: "search-result-match",
+          style: { backgroundColor: "yellow" },
+        },
+        {
+          start: 6,
+          end: 10,
+          className: "search-result-match",
+          style: { backgroundColor: "yellow" },
+        },
+      ]);
+
+      const secondEntry = [...highlightsMap].find(([name]) => name.includes("search-result-match"));
+
+      expect(secondEntry?.[1]).toBe(firstEntry?.[1]);
+      expect(secondEntry?.[1].size).toBe(2);
     });
 
     it("batches equivalent semantic range highlights into one registry entry", () => {
@@ -809,9 +849,7 @@ describe("Editor", () => {
         },
       ]);
 
-      const entries = [...highlightsMap].filter(([name]) =>
-        name.includes("search-result-match"),
-      );
+      const entries = [...highlightsMap].filter(([name]) => name.includes("search-result-match"));
 
       expect(entries).toHaveLength(1);
       expect(entries[0]?.[1].size).toBe(2);
