@@ -286,7 +286,10 @@ function syncGutterRows(
   view: VirtualizedTextViewInternal,
   previousContributions: ReadonlyMap<string, EditorGutterContribution>,
 ): void {
-  for (const row of allRows(view)) syncGutterRow(view, row, previousContributions);
+  const currentContributions = contributionMap(view.gutterContributions);
+  for (const row of allRows(view)) {
+    syncGutterRow(view, row, previousContributions, currentContributions);
+  }
 }
 
 function allRows(view: VirtualizedTextViewInternal): readonly MountedVirtualizedTextRow[] {
@@ -297,8 +300,9 @@ function syncGutterRow(
   view: VirtualizedTextViewInternal,
   row: MountedVirtualizedTextRow,
   previousContributions: ReadonlyMap<string, EditorGutterContribution>,
+  currentContributions: ReadonlyMap<string, EditorGutterContribution>,
 ): void {
-  removeStaleGutterCells(row, previousContributions, view.gutterContributions);
+  removeStaleGutterCells(row, previousContributions, currentContributions);
   addCurrentGutterCells(view, row);
   syncGutterRowElement(view, row);
 }
@@ -306,9 +310,8 @@ function syncGutterRow(
 function removeStaleGutterCells(
   row: MountedVirtualizedTextRow,
   previousContributions: ReadonlyMap<string, EditorGutterContribution>,
-  contributions: readonly EditorGutterContribution[],
+  currentContributions: ReadonlyMap<string, EditorGutterContribution>,
 ): void {
-  const currentContributions = contributionMap(contributions);
   for (const [id, cell] of row.gutterCells) {
     if (currentContributions.get(id) === previousContributions.get(id)) continue;
 
