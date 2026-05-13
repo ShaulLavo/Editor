@@ -11,6 +11,7 @@ import {
   type EditorOpenDocumentOptions,
   type EditorOptions,
   type EditorRangeDecoration,
+  type EditorSelectionRevealTarget,
   type EditorPlugin,
   type EditorScrollPosition,
   type EditorSetTextOptions,
@@ -45,6 +46,7 @@ export type ReactEditorDocument = {
 export type ReactEditorSelection = {
   readonly anchor: number;
   readonly head?: number;
+  readonly reveal?: boolean;
   readonly revealOffset?: number;
 };
 
@@ -65,7 +67,7 @@ export type ReactEditorCommands = {
   openDocument(document: EditorOpenDocumentOptions): void;
   setText(text: string, options?: EditorSetTextOptions): void;
   edit(editOrEdits: EditorEditInput, options?: EditorEditOptions): void;
-  setSelection(anchor: number, head?: number, revealOffset?: number): void;
+  setSelection(anchor: number, head?: number, reveal?: EditorSelectionRevealTarget): void;
   setScrollPosition(scrollPosition: EditorScrollPosition): void;
   dispatchCommand(command: EditorCommandId, context?: EditorCommandContext): boolean;
   openFind(): boolean;
@@ -478,7 +480,7 @@ function useControlledOptionSync(
   useEditorLayoutEffect(() => controller.syncRowGapOption(), [controller, options.rowGap]);
   useEditorLayoutEffect(
     () => controller.syncSelectionOption(),
-    [controller, selection?.anchor, selection?.head, selection?.revealOffset],
+    [controller, selection?.anchor, selection?.head, selection?.reveal, selection?.revealOffset],
   );
   useEditorLayoutEffect(
     () => controller.syncScrollPositionOption(),
@@ -583,7 +585,15 @@ function syncSelection(
 ): void {
   if (!editor || !selection) return;
 
-  editor.setSelection(selection.anchor, selection.head, selection.revealOffset);
+  editor.setSelection(selection.anchor, selection.head, reactSelectionRevealTarget(selection));
+}
+
+function reactSelectionRevealTarget(
+  selection: ReactEditorSelection,
+): EditorSelectionRevealTarget | undefined {
+  if (selection.reveal === false) return { reveal: false };
+
+  return selection.revealOffset;
 }
 
 function syncScrollPosition(
@@ -636,8 +646,7 @@ function createCommands(
     },
     setText: (text, options) => editor()?.setText(text, options),
     edit: (editOrEdits, options) => editor()?.edit(editOrEdits, options),
-    setSelection: (anchor, head, revealOffset) =>
-      editor()?.setSelection(anchor, head, revealOffset),
+    setSelection: (anchor, head, reveal) => editor()?.setSelection(anchor, head, reveal),
     setScrollPosition: (scrollPosition) => editor()?.setScrollPosition(scrollPosition),
     dispatchCommand: (command, context) => editor()?.dispatchCommand(command, context) ?? false,
     openFind: () => editor()?.openFind() ?? false,

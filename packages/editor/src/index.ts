@@ -50,6 +50,8 @@ export type {
   EditorOpenDocumentOptions,
   EditorOptions,
   EditorRangeDecoration,
+  EditorSelectionRevealOptions,
+  EditorSelectionRevealTarget,
   EditorSetTextOptions,
   EditorScrollPosition,
   EditorState,

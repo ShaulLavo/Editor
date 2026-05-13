@@ -115,11 +115,28 @@ const syntaxRefreshDelay = (change: DocumentSessionChange | null): number => {
   return SYNTAX_EDIT_DEBOUNCE_MS;
 };
 
+const selectionRevealOffset = (
+  reveal: EditorSelectionRevealTarget | undefined,
+  fallback: number | undefined,
+): number | undefined => {
+  if (typeof reveal === "number") return reveal;
+  if (reveal?.reveal === false) return undefined;
+
+  return reveal?.revealOffset ?? fallback;
+};
+
 type SessionChangeOptions = {
   readonly syncDomSelection?: boolean;
   readonly revealOffset?: number;
   readonly revealBlock?: "nearest" | "end";
 };
+
+export type EditorSelectionRevealOptions = {
+  readonly reveal?: boolean;
+  readonly revealOffset?: number;
+};
+
+export type EditorSelectionRevealTarget = number | EditorSelectionRevealOptions;
 
 type ResetOwnedDocumentOptions = {
   readonly documentId: string | null;
@@ -449,7 +466,8 @@ export class Editor {
     this.view.focusInput();
   }
 
-  setSelection(anchor: number, head = anchor, revealOffset = head): void {
+  setSelection(anchor: number, head = anchor, reveal?: EditorSelectionRevealTarget): void {
+    const revealOffset = selectionRevealOffset(reveal, head);
     this.applyFindSelection(anchor, head, "editor.setSelection", revealOffset);
   }
 

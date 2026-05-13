@@ -89,6 +89,27 @@ describe("useEditor", () => {
     mounted.dispose();
   });
 
+  it("can update selection without revealing it through commands", () => {
+    const text = Array.from({ length: 80 }, (_value, index) => `line ${index}`).join("\n");
+    const mounted = mountReactEditor({
+      document: { text, documentId: "long.txt", revision: 1 },
+    });
+    const editor = editorElement(mounted.host);
+    expect(editor).not.toBeNull();
+    mockEditorViewport(editor!, 80, 40, 2_000);
+
+    act(() => mounted.controller.commands.setSelection(0));
+    editor!.scrollTop = 0;
+    act(() =>
+      mounted.controller.commands.setSelection(text.length, text.length, { reveal: false }),
+    );
+
+    expect(mounted.controller.getState()?.cursor).toEqual({ row: 79, column: 7 });
+    expect(editor!.scrollTop).toBe(0);
+
+    mounted.dispose();
+  });
+
   it("can skip React store snapshot sync for lightweight editor hosts", () => {
     const mounted = mountReactEditor({
       document: { text: "alpha", documentId: "a.ts", revision: 1 },
@@ -386,6 +407,30 @@ function mountReactEditor(options: ReactEditorOptions = {}): MountedEditor {
 
 function editorElement(host: HTMLElement): HTMLElement | null {
   return host.querySelector<HTMLElement>(".editor");
+}
+
+function mockEditorViewport(
+  element: HTMLElement,
+  width: number,
+  height: number,
+  scrollHeight = 200,
+): void {
+  Object.defineProperty(element, "clientHeight", { configurable: true, value: height });
+  Object.defineProperty(element, "scrollHeight", { configurable: true, value: scrollHeight });
+  Object.defineProperty(element, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({
+      bottom: height,
+      height,
+      left: 0,
+      right: width,
+      top: 0,
+      width,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }),
+  });
 }
 
 function selectionsEqual(

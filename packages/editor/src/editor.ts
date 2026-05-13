@@ -11,6 +11,7 @@ export {
   parseMergeConflicts,
   resolveMergeConflict,
 } from "./mergeConflicts";
+export type { EditorSelectionRevealOptions, EditorSelectionRevealTarget } from "./editor/Editor";
 export type {
   EditorChangeHandler,
   EditorDocumentMode,

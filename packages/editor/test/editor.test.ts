@@ -592,6 +592,35 @@ describe("Editor", () => {
     });
   });
 
+  describe("setSelection", () => {
+    it("reveals the selection by default", () => {
+      const root = editorRoot();
+      const text = Array.from({ length: 80 }, (_value, index) => `line ${index}`).join("\n");
+      mockEditorViewport(root, 80, 40, 2_000);
+      editor.setText(text);
+      editor.setSelection(0);
+      root.scrollTop = 0;
+
+      editor.setSelection(text.length);
+
+      expect(root.scrollTop).toBeGreaterThan(0);
+    });
+
+    it("can update selection without revealing it", () => {
+      const root = editorRoot();
+      const text = Array.from({ length: 80 }, (_value, index) => `line ${index}`).join("\n");
+      mockEditorViewport(root, 80, 40, 2_000);
+      editor.setText(text);
+      editor.setSelection(0);
+      root.scrollTop = 0;
+
+      editor.setSelection(text.length, text.length, { reveal: false });
+
+      expect(editor.getState().cursor).toEqual({ row: 79, column: 7 });
+      expect(root.scrollTop).toBe(0);
+    });
+  });
+
   describe("readonly and static documents", () => {
     it("blocks user and programmatic edits while preserving selection and copy", async () => {
       editor.dispose();
