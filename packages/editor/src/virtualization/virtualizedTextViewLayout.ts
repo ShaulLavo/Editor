@@ -120,6 +120,8 @@ export function setBlockRowsLayout(
 export function updateVirtualizerRows(view: VirtualizedTextViewInternal): void {
   view.virtualizer.updateOptions({
     count: visibleLineCount(view),
+    rowGap: view.rowGap,
+    rowHeight: getRowHeight(view),
     rowSizes: rowSizes(view),
   });
 }
@@ -144,11 +146,9 @@ export function hasVariableRows(view: VirtualizedTextViewInternal): boolean {
 
 export function rowTop(view: VirtualizedTextViewInternal, row: number): number {
   const sizes = rowSizes(view);
-  if (!sizes) return row * getRowHeight(view);
+  if (!sizes) return row * rowStride(view);
 
-  let top = 0;
-  for (let index = 0; index < row; index += 1) top += sizes[index] ?? 0;
-  return top;
+  return sizedRowsTop(sizes, view.rowGap, row);
 }
 
 export function rowHeight(view: VirtualizedTextViewInternal, row: number): number {
@@ -273,15 +273,9 @@ export function bufferRowForOffset(view: VirtualizedTextViewInternal, offset: nu
 export function rowForViewportY(view: VirtualizedTextViewInternal, y: number): number {
   const offset = view.scrollElement.scrollTop + y;
   const sizes = rowSizes(view);
-  if (!sizes) return clamp(Math.floor(offset / getRowHeight(view)), 0, visibleLineCount(view) - 1);
+  if (!sizes) return fixedRowForOffset(view, offset);
 
-  let top = 0;
-  for (let row = 0; row < sizes.length; row += 1) {
-    top += sizes[row] ?? 0;
-    if (offset < top) return row;
-  }
-
-  return visibleLineCount(view) - 1;
+  return sizedRowForOffset(sizes, view.rowGap, offset);
 }
 
 export function visibleLineCount(view: VirtualizedTextViewInternal): number {
@@ -337,15 +331,52 @@ export function rowForSnapshotOffset(
 ): number {
   const offset = snapshot.scrollTop + y;
   const sizes = rowSizes(view);
-  if (!sizes) return clamp(Math.floor(offset / getRowHeight(view)), 0, visibleLineCount(view) - 1);
+  if (!sizes) return fixedRowForOffset(view, offset);
 
+  return sizedRowForOffset(sizes, view.rowGap, offset);
+}
+
+function rowStride(view: VirtualizedTextViewInternal): number {
+  return getRowHeight(view) + view.rowGap;
+}
+
+function fixedRowForOffset(view: VirtualizedTextViewInternal, offset: number): number {
+  const rowHeight = getRowHeight(view);
+  const stride = rowHeight + view.rowGap;
+  const row = clamp(Math.floor(offset / stride), 0, visibleLineCount(view) - 1);
+  const rowBottom = row * stride + rowHeight;
+  if (offset < rowBottom) return row;
+
+  return Math.min(row + 1, visibleLineCount(view) - 1);
+}
+
+function sizedRowsTop(sizes: readonly number[], rowGap: number, row: number): number {
   let top = 0;
-  for (let row = 0; row < sizes.length; row += 1) {
-    top += sizes[row] ?? 0;
-    if (offset < top) return row;
+  for (let index = 0; index < row; index += 1) {
+    top += sizes[index] ?? 0;
+    if (index < sizes.length - 1) top += rowGap;
   }
 
-  return visibleLineCount(view) - 1;
+  return top;
+}
+
+function sizedRowForOffset(sizes: readonly number[], rowGap: number, offset: number): number {
+  let top = 0;
+  for (let row = 0; row < sizes.length; row += 1) {
+    const bottom = top + (sizes[row] ?? 0);
+    if (offset < bottom) return row;
+
+    const nextTop = bottom + gapAfterSizedRow(row, sizes.length, rowGap);
+    if (offset < nextTop) return Math.min(row + 1, sizes.length - 1);
+    top = nextTop;
+  }
+
+  return Math.max(0, sizes.length - 1);
+}
+
+function gapAfterSizedRow(row: number, rowCount: number, rowGap: number): number {
+  if (row >= rowCount - 1) return 0;
+  return rowGap;
 }
 
 function usesDisplayRowTransforms(view: VirtualizedTextViewInternal): boolean {

@@ -540,6 +540,31 @@ describe("Editor", () => {
       expect(editorRoot().style.getPropertyValue("--editor-background")).toBe("");
       expect(editorRoot().style.getPropertyValue("--editor-foreground")).toBe("");
     });
+
+    it("does not reload highlighter sessions when the configured theme is unchanged", async () => {
+      const theme = { backgroundColor: "#ffffff", foregroundColor: "#24292e" };
+      const refresh = vi.fn(async () => createHighlightResult());
+      const dispose = vi.fn();
+      const highlighter = createMockHighlighterSession({ dispose, refresh });
+      editor.dispose();
+      editor = new Editor(container, {
+        plugins: withTestLanguagePlugins(createHighlighterPlugin(highlighter)),
+        theme,
+      });
+      setEditorSyntaxSessionFactory(() => createMockSyntaxSession());
+
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
+      await flushMicrotasks();
+      editor.setTheme(theme);
+      await flushMicrotasks();
+
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(dispose).not.toHaveBeenCalled();
+    });
   });
 
   describe("setLineHeight", () => {
@@ -735,6 +760,55 @@ describe("Editor", () => {
       const fourthEntry = [...highlightsMap].find(([name]) => name.includes("search-result-match"));
 
       expect(fourthEntry?.[1]).not.toBe(thirdEntry?.[1]);
+    });
+
+    it("batches equivalent semantic range highlights into one registry entry", () => {
+      editor.openDocument({ documentId: "main.ts", text: "alpha beta gamma" });
+
+      editor.setRangeDecorations([
+        {
+          start: 0,
+          end: 5,
+          className: "search-result-match",
+          style: { backgroundColor: "yellow" },
+        },
+        {
+          start: 6,
+          end: 10,
+          className: "search-result-match",
+          style: { backgroundColor: "yellow" },
+        },
+      ]);
+
+      const entries = [...highlightsMap].filter(([name]) =>
+        name.includes("search-result-match"),
+      );
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.[1].size).toBe(2);
+    });
+
+    it("defers constructor range highlights until text is available", () => {
+      editor.dispose();
+      editor = new Editor(container, {
+        rangeDecorations: [
+          {
+            start: 0,
+            end: 5,
+            className: "search-result-match",
+            style: { backgroundColor: "yellow" },
+          },
+        ],
+      });
+
+      expect([...highlightsMap.keys()].some((name) => name.includes("search-result-match"))).toBe(
+        false,
+      );
+
+      editor.openDocument({ documentId: "main.ts", text: "alpha beta gamma" });
+
+      const entry = [...highlightsMap].find(([name]) => name.includes("search-result-match"));
+      expect(entry?.[1].size).toBe(1);
     });
   });
 

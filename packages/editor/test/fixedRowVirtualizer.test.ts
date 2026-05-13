@@ -54,6 +54,23 @@ describe("fixed row virtualizer", () => {
     ]);
   });
 
+  it("computes fixed row gaps without adding a trailing gap", () => {
+    const virtualizer = new FixedRowVirtualizer({
+      count: 3,
+      rowHeight: 20,
+      rowGap: 4,
+      overscan: 0,
+    });
+
+    virtualizer.setScrollMetrics({ scrollTop: 21, viewportHeight: 25 });
+
+    expect(virtualizer.getSnapshot()).toMatchObject({
+      totalSize: 68,
+      visibleRange: { start: 1, end: 2 },
+      virtualItems: [{ index: 1, start: 24, size: 20 }],
+    });
+  });
+
   it("reuses stable virtual item records while a row remains mounted", () => {
     const virtualizer = new FixedRowVirtualizer({
       count: 100,
@@ -127,6 +144,24 @@ describe("fixed row virtualizer", () => {
       totalSize: 100,
       visibleRange: { start: 1, end: 2 },
       virtualItems: [{ index: 1, start: 20, size: 60 }],
+    });
+  });
+
+  it("applies row gaps between variable rows", () => {
+    const virtualizer = new FixedRowVirtualizer({
+      count: 3,
+      rowHeight: 20,
+      rowGap: 4,
+      rowSizes: [20, 60, 20],
+      overscan: 0,
+    });
+
+    virtualizer.setScrollMetrics({ scrollTop: 22, viewportHeight: 40 });
+
+    expect(virtualizer.getSnapshot()).toMatchObject({
+      totalSize: 108,
+      visibleRange: { start: 1, end: 2 },
+      virtualItems: [{ index: 1, start: 24, size: 60 }],
     });
   });
 });

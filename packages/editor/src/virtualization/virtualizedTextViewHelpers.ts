@@ -40,6 +40,11 @@ export function normalizeRowHeight(rowHeight: number): number {
   return rowHeight;
 }
 
+export function normalizeRowGap(rowGap: number | undefined): number {
+  if (!Number.isFinite(rowGap) || rowGap === undefined || rowGap < 0) return 0;
+  return rowGap;
+}
+
 export function normalizeChunkSize(size: number | undefined): number {
   if (!Number.isFinite(size) || size === undefined || size <= 0) {
     return DEFAULT_LONG_LINE_CHUNK_SIZE;
@@ -145,10 +150,12 @@ export function showFoldPlaceholder(element: HTMLSpanElement, key: string): void
 export function createVirtualizerOptions(
   rowHeight: number,
   overscan: number,
+  rowGap?: number,
 ): FixedRowVirtualizerOptions {
   return {
     count: 1,
     rowHeight,
+    rowGap: normalizeRowGap(rowGap),
     overscan,
     enabled: true,
   };

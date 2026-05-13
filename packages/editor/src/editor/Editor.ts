@@ -92,7 +92,7 @@ import {
 } from "../mergeConflicts";
 import type { FoldRange } from "../syntax/session";
 import type { EditorTheme } from "../theme";
-import { mergeEditorThemes } from "../theme";
+import { editorThemesEqual, mergeEditorThemes } from "../theme";
 import type { EditorDocument, EditorToken, TextEdit } from "../tokens";
 import { clamp } from "../style-utils";
 import {
@@ -125,6 +125,16 @@ type ResetOwnedDocumentOptions = {
   readonly documentId: string | null;
   readonly persistentIdentity: boolean;
   readonly scrollPosition?: EditorScrollPosition;
+};
+
+type RangeDecorationGroup = {
+  readonly name: string;
+  readonly ranges: EditorRangeDecoration[];
+  readonly style: ReturnType<typeof rangeDecorationStyle>;
+};
+
+type PendingRangeDecorationGroup = RangeDecorationGroup & {
+  readonly key: string;
 };
 
 const EDITOR_FIND_FEATURE_ID = "editor.find";
@@ -211,6 +221,7 @@ export class Editor {
       cursorLineHighlight: options.cursorLineHighlight,
       hiddenCharacters: options.hiddenCharacters,
       lineHeight: options.lineHeight,
+      rowGap: options.rowGap,
       tabSize: this.tabSize,
       onFoldToggle: this.handleFoldToggle,
       onViewportChange: this.handleViewportChange,
@@ -487,7 +498,10 @@ export class Editor {
   }
 
   setTheme(theme: EditorTheme | null | undefined): void {
-    this.configuredTheme = theme ?? null;
+    const nextTheme = theme ?? null;
+    if (editorThemesEqual(this.configuredTheme, nextTheme)) return;
+
+    this.configuredTheme = nextTheme;
     this.applyResolvedTheme();
     this.reloadHighlighterSession();
     this.notifyViewContributions("tokens", null);
@@ -520,6 +534,12 @@ export class Editor {
 
   setLineHeight(lineHeight: number): void {
     if (!this.view.setLineHeight(lineHeight)) return;
+
+    this.notifyViewContributions("layout", null);
+  }
+
+  setRowGap(rowGap: number): void {
+    if (!this.view.setRowGap(rowGap)) return;
 
     this.notifyViewContributions("layout", null);
   }
@@ -936,13 +956,15 @@ export class Editor {
 
   private applyRangeDecorations(): void {
     this.clearAppliedRangeDecorations();
+    if (this.text.length === 0) return;
+
+    const groups = groupedRangeDecorations(this.rangeDecorations, this.highlightPrefix);
     const names: string[] = [];
 
-    this.rangeDecorations.forEach((decoration, index) => {
-      const name = this.rangeDecorationName(decoration, index);
-      names.push(name);
-      this.view.setRangeHighlight(name, [decoration], rangeDecorationStyle(decoration));
-    });
+    for (const group of groups) {
+      names.push(group.name);
+      this.view.setRangeHighlight(group.name, group.ranges, group.style);
+    }
 
     this.appliedRangeDecorationNames = names;
   }
@@ -950,12 +972,6 @@ export class Editor {
   private clearAppliedRangeDecorations(): void {
     for (const name of this.appliedRangeDecorationNames) this.view.clearRangeHighlight(name);
     this.appliedRangeDecorationNames = [];
-  }
-
-  private rangeDecorationName(decoration: EditorRangeDecoration, index: number): string {
-    const semanticName = sanitizedHighlightName(decoration.className);
-    if (semanticName) return `${this.highlightPrefix}-range-${semanticName}-${index}`;
-    return `${this.highlightPrefix}-range-decoration-${index}`;
   }
 
   private createViewSnapshot(): EditorViewSnapshot {
@@ -2177,12 +2193,18 @@ export class Editor {
   }
 
   private setHighlighterTheme(theme: EditorTheme | null | undefined): void {
-    this.highlighterTheme = theme ?? null;
+    const nextTheme = theme ?? null;
+    if (editorThemesEqual(this.highlighterTheme, nextTheme)) return;
+
+    this.highlighterTheme = nextTheme;
     this.applyResolvedTheme();
   }
 
   private setProviderHighlighterTheme(theme: EditorTheme | null | undefined): void {
-    this.providerHighlighterTheme = theme ?? null;
+    const nextTheme = theme ?? null;
+    if (editorThemesEqual(this.providerHighlighterTheme, nextTheme)) return;
+
+    this.providerHighlighterTheme = nextTheme;
     this.applyResolvedTheme();
   }
 
@@ -2595,6 +2617,64 @@ function rangeDecorationStyle(decoration: EditorRangeDecoration): {
     color: decoration.style?.color || undefined,
     textDecoration: decoration.style?.textDecoration || undefined,
   };
+}
+
+function groupedRangeDecorations(
+  decorations: readonly EditorRangeDecoration[],
+  highlightPrefix: string,
+): readonly RangeDecorationGroup[] {
+  const groups: PendingRangeDecorationGroup[] = [];
+
+  for (const decoration of decorations) {
+    const style = rangeDecorationStyle(decoration);
+    const key = rangeDecorationGroupKey(decoration.className, style);
+    const previous = groups.at(-1);
+    if (!previous || previous.key !== key) {
+      groups.push(rangeDecorationGroup(highlightPrefix, decoration, style, key, groups.length));
+      continue;
+    }
+
+    previous.ranges.push(decoration);
+  }
+
+  return groups;
+}
+
+function rangeDecorationGroup(
+  highlightPrefix: string,
+  decoration: EditorRangeDecoration,
+  style: ReturnType<typeof rangeDecorationStyle>,
+  key: string,
+  index: number,
+): PendingRangeDecorationGroup {
+  return {
+    key,
+    name: rangeDecorationGroupName(highlightPrefix, decoration.className, index),
+    ranges: [decoration],
+    style,
+  };
+}
+
+function rangeDecorationGroupName(
+  highlightPrefix: string,
+  className: string | undefined,
+  index: number,
+): string {
+  const semanticName = sanitizedHighlightName(className);
+  if (semanticName) return `${highlightPrefix}-range-${semanticName}-${index}`;
+  return `${highlightPrefix}-range-decoration-${index}`;
+}
+
+function rangeDecorationGroupKey(
+  className: string | undefined,
+  style: ReturnType<typeof rangeDecorationStyle>,
+): string {
+  return [
+    className ?? "",
+    style.backgroundColor ?? "",
+    style.color ?? "",
+    style.textDecoration ?? "",
+  ].join("\u0000");
 }
 
 function sameEditorRangeDecorations(

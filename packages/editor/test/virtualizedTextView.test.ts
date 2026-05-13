@@ -132,6 +132,28 @@ describe("VirtualizedTextView", () => {
     });
   });
 
+  it("spaces rows with rowGap without adding a trailing gap", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      rowGap: 4,
+      overscan: 0,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+    });
+    view.setText("alpha\nbeta\ngamma");
+    view.setScrollMetrics(0, 80);
+
+    expect(view.getState()).toMatchObject({
+      totalHeight: 68,
+      mountedRows: [
+        { index: 0, top: 0, height: 20 },
+        { index: 1, top: 24, height: 20 },
+        { index: 2, top: 48, height: 20 },
+      ],
+    });
+  });
+
   it("renders gutter rows with CSS counter line numbers", () => {
     view.dispose();
     view = new VirtualizedTextView(container, {

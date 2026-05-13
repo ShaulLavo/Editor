@@ -20,6 +20,7 @@ import {
   normalizeChunkSize,
   normalizeChunkThreshold,
   normalizeHorizontalOverscan,
+  normalizeRowGap,
   normalizeRowHeight,
 } from "./virtualizedTextViewHelpers";
 import {
@@ -52,7 +53,6 @@ import {
   refreshDisplayRowsForWrapWidth,
   rowForOffset,
   rowForViewportY,
-  rowSizes,
   sameLineEditPatch,
   scrollableHeight,
   setBlockRowsLayout,
@@ -151,6 +151,7 @@ export class VirtualizedTextView {
     const measuredMetrics = measureBrowserTextMetrics(scrollElement);
     const lineHeightOverride = options.lineHeight ?? options.rowHeight ?? null;
     const rowHeight = normalizeRowHeight(lineHeightOverride ?? measuredMetrics.rowHeight);
+    const rowGap = normalizeRowGap(options.rowGap);
     const inputElement = createInputElement(container);
     const spacer = container.ownerDocument.createElement("div");
     const gutterElement = container.ownerDocument.createElement("div");
@@ -162,7 +163,9 @@ export class VirtualizedTextView {
       longLineChunkSize,
     );
     const tabSize = normalizeTabSize(options.tabSize);
-    const virtualizer = new FixedRowVirtualizer(createVirtualizerOptions(rowHeight, overscan));
+    const virtualizer = new FixedRowVirtualizer(
+      createVirtualizerOptions(rowHeight, overscan, rowGap),
+    );
 
     this.scrollElement = scrollElement;
     this.inputElement = inputElement;
@@ -229,6 +232,7 @@ export class VirtualizedTextView {
       lastWidthScanEnd: -1,
       tokenRangesFollowLastTextEdit: false,
       lineHeightOverride,
+      rowGap,
       metrics: { ...measuredMetrics, rowHeight },
       hiddenCharacters: normalizeHiddenCharactersMode(options.hiddenCharacters),
     };
@@ -333,6 +337,18 @@ export class VirtualizedTextView {
     return this.setLineHeight(rowHeight);
   }
 
+  public setRowGap(rowGap: number): boolean {
+    const view = this.view;
+    const nextRowGap = normalizeRowGap(rowGap);
+    if (view.rowGap === nextRowGap) return false;
+
+    view.rowGap = nextRowGap;
+    clearRowGeometryCaches(view);
+    view.lastRenderedRowsKey = "";
+    updateVirtualizerRows(view);
+    return true;
+  }
+
   private applyMetrics(metrics: BrowserTextMetrics): void {
     const view = this.view;
     view.metrics = metrics;
@@ -342,7 +358,7 @@ export class VirtualizedTextView {
     view.gutterWidthDirty = true;
     this.refreshWrapWidth();
     view.lastRenderedRowsKey = "";
-    view.virtualizer.updateOptions({ rowHeight: rowHeightValue, rowSizes: rowSizes(view) });
+    updateVirtualizerRows(view);
   }
 
   public applyEdit(edit: TextEdit, nextText: string): void {

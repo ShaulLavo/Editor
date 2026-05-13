@@ -1726,5 +1726,9 @@ export function caretPosition(
 
 export function pageRowDelta(view: VirtualizedTextViewInternal): number {
   const { viewportHeight } = view.virtualizer.getSnapshot();
-  return Math.max(1, Math.floor(viewportHeight / getRowHeight(view)) - 1);
+  return Math.max(1, Math.floor(viewportHeight / rowStride(view)) - 1);
+}
+
+function rowStride(view: VirtualizedTextViewInternal): number {
+  return getRowHeight(view) + view.rowGap;
 }

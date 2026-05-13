@@ -79,6 +79,7 @@ export type EditorOptions = {
   readonly hiddenCharacters?: HiddenCharactersMode;
   readonly lineHeight?: number;
   readonly rangeDecorations?: readonly EditorRangeDecoration[];
+  readonly rowGap?: number;
   readonly tabSize?: number;
 };
 

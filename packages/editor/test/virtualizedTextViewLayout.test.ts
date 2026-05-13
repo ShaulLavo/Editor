@@ -7,6 +7,7 @@ import {
   rowHeight,
   rowForOffset,
   rowSizes,
+  rowTop,
   scrollableHeight,
   virtualRowForBufferRow,
 } from "../src/virtualization/virtualizedTextViewLayout";
@@ -83,6 +84,23 @@ describe("virtualized text view layout", () => {
     expect(rowSizes(view)).toBeUndefined();
   });
 
+  it("positions fixed rows with row gaps without treating them as variable rows", () => {
+    const view = layoutView({
+      text: "a\nb\nc",
+      lineStarts: [0, 2, 4],
+      displayRows: [textRow(0, 0, 0, 1), textRow(1, 1, 2, 3), textRow(2, 2, 4, 5)],
+      foldMap: null,
+      blockRows: [],
+      wrapEnabled: false,
+    });
+    view.rowGap = 4;
+
+    expect(hasVariableRows(view)).toBe(false);
+    expect(rowSizes(view)).toBeUndefined();
+    expect(rowHeight(view, 0)).toBe(20);
+    expect(rowTop(view, 2)).toBe(48);
+  });
+
   it("detects variable block heights from block row config", () => {
     const blockRows: BlockRow[] = [
       { id: "panel", anchorBufferRow: 0, placement: "after", heightRows: 2 },
@@ -98,6 +116,8 @@ describe("virtualized text view layout", () => {
 
     expect(hasVariableRows(view)).toBe(true);
     expect(rowSizes(view)).toEqual([20, 40]);
+    view.rowGap = 4;
+    expect(rowTop(view, 1)).toBe(24);
   });
 
   it("uses measured row metrics without re-entering the virtualizer", () => {
@@ -125,6 +145,7 @@ function layoutView(fields: LayoutFields): VirtualizedTextViewInternal {
     ...fields,
     virtualizer: throwingVirtualizer(),
     metrics: { rowHeight: 20, characterWidth: 8 },
+    rowGap: 0,
   } as VirtualizedTextViewInternal;
 }
 

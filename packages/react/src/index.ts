@@ -285,6 +285,10 @@ class ReactEditorControllerImplementation implements ReactEditorController {
     syncRangeDecorations(this.getEditor(), this.options.rangeDecorations);
   }
 
+  public syncRowGapOption(): void {
+    syncRowGap(this.getEditor(), this.options.rowGap);
+  }
+
   public syncSelectionOption(): void {
     syncSelection(this.getEditor(), this.options.selection);
   }
@@ -364,6 +368,7 @@ class ReactEditorControllerImplementation implements ReactEditorController {
     syncHiddenCharacters(editor, this.options.hiddenCharacters);
     syncEditability(editor, this.options.editability);
     syncRangeDecorations(editor, this.options.rangeDecorations);
+    syncRowGap(editor, this.options.rowGap);
     syncSelection(editor, this.options.selection);
     syncScrollPosition(editor, this.options.scrollPosition);
   }
@@ -470,6 +475,7 @@ function useControlledOptionSync(
     () => controller.syncRangeDecorationsOption(),
     [controller, options.rangeDecorations],
   );
+  useEditorLayoutEffect(() => controller.syncRowGapOption(), [controller, options.rowGap]);
   useEditorLayoutEffect(
     () => controller.syncSelectionOption(),
     [controller, selection?.anchor, selection?.head, selection?.revealOffset],
@@ -563,6 +569,12 @@ function syncRangeDecorations(
   if (!editor || rangeDecorations === undefined) return;
 
   editor.setRangeDecorations(rangeDecorations);
+}
+
+function syncRowGap(editor: Editor | null, rowGap: number | undefined): void {
+  if (!editor || rowGap === undefined) return;
+
+  editor.setRowGap(rowGap);
 }
 
 function syncSelection(

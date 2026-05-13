@@ -104,6 +104,22 @@ export function mergeEditorThemes(
   return merged;
 }
 
+export function editorThemesEqual(
+  left: EditorTheme | null | undefined,
+  right: EditorTheme | null | undefined,
+): boolean {
+  const normalizedLeft = left ?? null;
+  const normalizedRight = right ?? null;
+  if (normalizedLeft === normalizedRight) return true;
+  if (!normalizedLeft || !normalizedRight) return false;
+
+  for (const { key } of EDITOR_THEME_VARIABLES) {
+    if (normalizedLeft[key] !== normalizedRight[key]) return false;
+  }
+
+  return editorSyntaxThemesEqual(normalizedLeft.syntax, normalizedRight.syntax);
+}
+
 function clearEditorTheme(element: HTMLElement): void {
   for (const { variable } of EDITOR_THEME_VARIABLES) element.style.removeProperty(variable);
   for (const { variable } of EDITOR_SYNTAX_THEME_VARIABLES) element.style.removeProperty(variable);
@@ -131,4 +147,18 @@ function mergeSyntaxTheme(
 ): EditorSyntaxTheme | undefined {
   if (!next) return previous;
   return { ...previous, ...next };
+}
+
+function editorSyntaxThemesEqual(
+  left: EditorSyntaxTheme | undefined,
+  right: EditorSyntaxTheme | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+
+  for (const { key } of EDITOR_SYNTAX_THEME_VARIABLES) {
+    if (left[key] !== right[key]) return false;
+  }
+
+  return true;
 }

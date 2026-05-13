@@ -98,6 +98,60 @@ describe("gutter plugins", () => {
     expect(width).toBeGreaterThanOrEqual(36);
   });
 
+  it("renders custom line labels", () => {
+    const contribution = createLineGutterContribution({
+      labelForRow: (row) => (row.bufferRow === 1 ? null : 100 + row.bufferRow),
+      minDigits: 3,
+    });
+    const cell = contribution.createCell(document);
+
+    contribution.updateCell(cell, {
+      index: 0,
+      bufferRow: 0,
+      startOffset: 0,
+      endOffset: 0,
+      text: "",
+      kind: "text",
+      primaryText: true,
+      cursorLine: true,
+      cursorLineHighlight: {
+        gutterBackground: true,
+        gutterNumber: true,
+        rowBackground: true,
+      },
+      foldMarker: null,
+      lineCount: 3,
+      toggleFold: vi.fn(),
+    });
+
+    expect(cell.textContent).toBe("100");
+    expect(cell.style.counterSet).toBe("");
+    expect(cell.classList.contains("editor-virtualized-line-number-active")).toBe(true);
+
+    contribution.updateCell(cell, {
+      index: 1,
+      bufferRow: 1,
+      startOffset: 0,
+      endOffset: 0,
+      text: "",
+      kind: "text",
+      primaryText: true,
+      cursorLine: true,
+      cursorLineHighlight: {
+        gutterBackground: true,
+        gutterNumber: true,
+        rowBackground: true,
+      },
+      foldMarker: null,
+      lineCount: 3,
+      toggleFold: vi.fn(),
+    });
+
+    expect(cell.hidden).toBe(true);
+    expect(cell.textContent).toBe("");
+    expect(cell.classList.contains("editor-virtualized-line-number-active")).toBe(false);
+  });
+
   it("renders fold gutter icons from DOM factories", () => {
     const contribution = createFoldGutterContribution({
       icon: ({ document }) => {

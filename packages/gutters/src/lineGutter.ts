@@ -4,11 +4,14 @@ import "./lineGutter.css";
 
 export type LineGutterPluginOptions = {
   readonly counterStyle?: string;
+  readonly labelForRow?: (row: EditorGutterRowContext) => LineGutterLabel;
   readonly minLabelColumns?: number;
   readonly minDigits?: number;
   readonly minWidth?: number;
   readonly startLine?: number;
 };
+
+export type LineGutterLabel = number | string | null | undefined;
 
 const DEFAULT_COUNTER_STYLE = "decimal";
 const DEFAULT_LINE_GUTTER_MIN_COLUMNS = 3;
@@ -37,26 +40,33 @@ export function createLineGutterContribution(
   );
   const minWidth = normalizeNonNegativeNumber(options.minWidth, DEFAULT_LINE_GUTTER_MIN_WIDTH);
   const startLine = normalizePositiveInteger(options.startLine, DEFAULT_START_LINE);
+  const labelForRow = options.labelForRow ?? null;
 
   return {
     id: "line-gutter",
     createCell(document) {
       const element = document.createElement("span");
-      element.className = "editor-virtualized-gutter-label editor-virtualized-line-number";
+      element.className = labelForRow
+        ? "editor-virtualized-gutter-label editor-virtualized-line-label"
+        : "editor-virtualized-gutter-label editor-virtualized-line-number";
       element.setAttribute("aria-hidden", "true");
-      element.style.setProperty("--editor-line-gutter-counter-style", counterStyle);
+      if (!labelForRow) {
+        element.style.setProperty("--editor-line-gutter-counter-style", counterStyle);
+      }
       return element;
     },
     width(context) {
       const endLine = startLine + context.lineCount - 1;
-      const columns = Math.max(minLabelColumns, decimalDigitCount(endLine));
+      const columns = labelForRow
+        ? minLabelColumns
+        : Math.max(minLabelColumns, decimalDigitCount(endLine));
       return Math.max(
         minWidth,
         Math.ceil(columns * context.metrics.characterWidth + LINE_GUTTER_PADDING_PX),
       );
     },
     updateCell(element, row) {
-      updateLineGutterCell(element, row, startLine);
+      updateLineGutterCell(element, row, startLine, labelForRow);
     },
   };
 }
@@ -65,20 +75,41 @@ function updateLineGutterCell(
   element: HTMLElement,
   row: EditorGutterRowContext,
   startLine: number,
+  labelForRow: ((row: EditorGutterRowContext) => LineGutterLabel) | null,
 ): void {
-  setElementHidden(element, !row.primaryText);
+  const label = row.primaryText && labelForRow ? labelForRow(row) : null;
+  const hidden = !row.primaryText || (labelForRow !== null && !hasLineGutterLabel(label));
+  setElementHidden(element, hidden);
   element.classList.toggle(
     "editor-virtualized-line-number-active",
-    row.primaryText && row.cursorLine && row.cursorLineHighlight.gutterNumber,
+    !hidden && row.cursorLine && row.cursorLineHighlight.gutterNumber,
   );
-  if (!row.primaryText) return;
+  if (hidden) {
+    if (labelForRow) setTextContent(element, "");
+    return;
+  }
+
+  if (labelForRow) {
+    setTextContent(element, String(label));
+    return;
+  }
 
   setCounterSet(element, `editor-line ${startLine + row.bufferRow}`);
+}
+
+function hasLineGutterLabel(label: LineGutterLabel): boolean {
+  if (label === null || label === undefined) return false;
+  return String(label).length > 0;
 }
 
 function setCounterSet(element: HTMLElement, value: string): void {
   if (element.style.counterSet === value) return;
   element.style.counterSet = value;
+}
+
+function setTextContent(element: HTMLElement, value: string): void {
+  if (element.textContent === value) return;
+  element.textContent = value;
 }
 
 function decimalDigitCount(value: number): number {
