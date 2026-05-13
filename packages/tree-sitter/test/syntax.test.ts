@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   applyBatchToPieceTable,
+  createDocumentSession,
   createPieceTableSnapshot,
   EditorPluginHost,
   styleForTreeSitterCapture,
@@ -14,9 +15,17 @@ import {
   TreeSitterLanguageRegistry,
   type TreeSitterLanguageContribution,
 } from "../src";
-import { createTextDiffEdit, createTreeSitterEditPayload } from "../src/session";
+import {
+  createTextDiffEdit,
+  createTreeSitterEditPayload,
+  TreeSitterSyntaxSession,
+} from "../src/session";
 import { createTreeSitterSourceDescriptor } from "../src/treeSitter/source";
 import type { TreeSitterEditRequest, TreeSitterParseRequest } from "../src/treeSitter/types";
+import type {
+  TreeSitterBackend,
+  TreeSitterEditPayload,
+} from "../src/treeSitter/workerClient";
 
 describe("Tree-sitter syntax capture conversion", () => {
   it("maps known capture names to editor token styles", () => {
@@ -297,7 +306,74 @@ describe("Tree-sitter syntax capture conversion", () => {
       },
     ]);
   });
+
+  it("reuses document change edits when they apply to the cached syntax snapshot", async () => {
+    const backend = createCapturingTreeSitterBackend();
+    const text = "const a = 1;";
+    const document = createDocumentSession(text);
+    const session = new TreeSitterSyntaxSession({
+      backend,
+      documentId: "file.ts",
+      languageId: "typescript",
+      snapshot: document.getSnapshot(),
+      text,
+    });
+    const change = document.applyEdits([
+      { from: text.length, text: "\nconst b = 2;", to: text.length },
+    ]);
+
+    await session.applyChange(change);
+
+    expect(backend.latestEdit?.edits).toEqual([
+      { from: text.length, text: "\nconst b = 2;", to: text.length },
+    ]);
+  });
+
+  it("falls back to a cached-text diff when document edits do not apply", async () => {
+    const backend = createCapturingTreeSitterBackend();
+    const session = new TreeSitterSyntaxSession({
+      backend,
+      documentId: "file.ts",
+      languageId: "typescript",
+      snapshot: createPieceTableSnapshot("abc"),
+      text: "abc",
+    });
+    const staleDocument = createDocumentSession("abc!");
+    const change = staleDocument.applyEdits([{ from: 4, text: "?", to: 4 }]);
+
+    await session.applyChange(change);
+
+    expect(backend.latestEdit?.edits).toEqual([
+      { from: 3, text: "!?", to: 3 },
+    ]);
+  });
 });
+
+function createCapturingTreeSitterBackend() {
+  const backend = {
+    latestEdit: null as TreeSitterEditPayload | null,
+    disposeDocument: () => undefined,
+    edit: async (payload: TreeSitterEditPayload) => {
+      backend.latestEdit = payload;
+      return {
+        brackets: [],
+        captures: [],
+        documentId: payload.documentId,
+        errors: [],
+        folds: [],
+        injections: [],
+        languageId: payload.languageId,
+        snapshotVersion: payload.snapshotVersion,
+        timings: [],
+      };
+    },
+    parse: async () => undefined,
+    registerLanguages: async () => undefined,
+    select: async () => undefined,
+  } satisfies TreeSitterBackend & { latestEdit: TreeSitterEditPayload | null };
+
+  return backend;
+}
 
 function createTestLanguageRegistry(): TreeSitterLanguageRegistry {
   const registry = new TreeSitterLanguageRegistry();

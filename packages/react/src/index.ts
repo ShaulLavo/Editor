@@ -721,11 +721,13 @@ function documentKey(
 ): ReactEditorDocumentKey {
   if (!document) return NO_DOCUMENT;
 
-  const textVersion = document.textSyncMode === "incremental" ? (document.text ?? "") : "";
+  const incremental = document.textSyncMode === "incremental";
+  const revision = incremental ? "" : (document.revision ?? "");
+  const textVersion = incremental ? (document.text ?? "") : "";
   const identityKey = documentIdentityKey(document);
   if (identityKey === NO_DOCUMENT) return NO_DOCUMENT;
 
-  return `${identityKey}\u0000${document.revision ?? ""}\u0000${textVersion}`;
+  return `${identityKey}\u0000${revision}\u0000${textVersion}`;
 }
 
 function documentIdentityKey(

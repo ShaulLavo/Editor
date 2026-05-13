@@ -2914,6 +2914,7 @@ describe("Editor", () => {
 
       expect(appliedChanges).toHaveLength(1);
       expect(appliedChanges[0]).toMatchObject({
+        edits: [{ from: 7, text: "b", to: 7 }],
         kind: "edit",
         text: "const ab = 1;",
       });
