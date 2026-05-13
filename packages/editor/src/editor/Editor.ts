@@ -736,6 +736,7 @@ export class Editor {
       viewState.scrollLeft,
       viewState.scrollWidth - viewState.viewportWidth,
     );
+    if (scrollTop === viewState.scrollTop && scrollLeft === viewState.scrollLeft) return;
 
     this.el.scrollTop = scrollTop;
     this.el.scrollLeft = scrollLeft;

@@ -962,6 +962,19 @@ describe("Editor", () => {
       expect(events.at(-1)?.snapshot?.viewport.clientWidth).toBe(0);
     });
 
+    it("does not write scrollTop when opening an initial document at the cached origin", () => {
+      const scrollTopWrites = trackScrollTopWrites(editorRoot());
+
+      try {
+        editor.openDocument({ documentId: "test.ts", text: "const a = 1;" });
+      } finally {
+        scrollTopWrites.restore();
+      }
+
+      expect(scrollTopWrites.values).toHaveLength(0);
+      expect(editor.getScrollPosition()).toEqual({ top: 0, left: 0 });
+    });
+
     it("resets scroll when opening a new document without an explicit position", () => {
       const events: ViewContributionEvent[] = [];
       editor.dispose();
