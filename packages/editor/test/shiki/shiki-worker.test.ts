@@ -124,6 +124,9 @@ describe("shiki worker", () => {
           gutterForegroundColor: "#6e7781",
           caretColor: "#044289",
           minimapBackgroundColor: "#ffffff",
+          syntax: {
+            bracket: "#24292e",
+          },
         },
       },
     } satisfies ShikiWorkerResponse);
@@ -163,6 +166,9 @@ describe("shiki worker", () => {
           gutterForegroundColor: undefined,
           caretColor: "#24292e",
           minimapBackgroundColor: "#ffffff",
+          syntax: {
+            bracket: "#24292e",
+          },
         },
       },
     } satisfies ShikiWorkerResponse);
@@ -210,6 +216,7 @@ describe("shiki worker", () => {
           caretColor: "#c9d1d9",
           minimapBackgroundColor: "#0d1117",
           syntax: {
+            bracket: "#c9d1d9",
             comment: "#8b949e",
             function: "#d2a8ff",
             keyword: "#ff7b72",
@@ -217,6 +224,69 @@ describe("shiki worker", () => {
             string: "#a5d6ff",
             type: "#ffa657",
             typeDefinition: "#ffa657",
+          },
+        },
+      },
+    } satisfies ShikiWorkerResponse);
+  });
+
+  it("prefers editor-relevant Shiki scopes over later specialized child scopes", async () => {
+    const postMessage = vi.fn();
+    const getTheme = vi.fn(() => ({
+      bg: "#0d1117",
+      fg: "#c9d1d9",
+      tokenColors: [
+        { scope: "keyword", settings: { foreground: "#f97583" } },
+        { scope: "entity, entity.name", settings: { foreground: "#b392f0" } },
+        { scope: "string", settings: { foreground: "#9ecbff" } },
+        { scope: "meta.property-name", settings: { foreground: "#79b8ff" } },
+        { scope: "support", settings: { foreground: "#79b8ff" } },
+        { scope: "string.other.link", settings: { foreground: "#dbedff" } },
+        { scope: "punctuation.definition.changed", settings: { foreground: "#ffab70" } },
+        { scope: "storage.modifier.import", settings: { foreground: "#e1e4e8" } },
+      ],
+    }));
+    (globalThis as { self?: unknown }).self = { postMessage };
+    createHighlighter.mockResolvedValue({ getTheme });
+    await import("../../src/shiki/shiki.worker");
+
+    const onmessage = (globalThis as { self: { onmessage: (event: MessageEvent) => void } }).self
+      .onmessage;
+    onmessage(
+      new MessageEvent("message", {
+        data: request("theme", {
+          theme: "github-dark",
+          themes: [],
+        }),
+      }),
+    );
+    await waitFor(() => postMessage.mock.calls.length > 0);
+
+    expect(postMessage).toHaveBeenCalledWith({
+      id: 1,
+      ok: true,
+      result: {
+        theme: {
+          backgroundColor: "#0d1117",
+          foregroundColor: "#c9d1d9",
+          gutterBackgroundColor: "#0d1117",
+          gutterForegroundColor: undefined,
+          caretColor: "#c9d1d9",
+          minimapBackgroundColor: "#0d1117",
+          syntax: {
+            attribute: "#b392f0",
+            bracket: "#c9d1d9",
+            function: "#b392f0",
+            keyword: "#f97583",
+            keywordDeclaration: "#f97583",
+            keywordImport: "#f97583",
+            namespace: "#b392f0",
+            property: "#79b8ff",
+            string: "#9ecbff",
+            type: "#79b8ff",
+            typeDefinition: "#b392f0",
+            typeParameter: "#b392f0",
+            variableBuiltin: "#79b8ff",
           },
         },
       },

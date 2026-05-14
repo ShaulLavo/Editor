@@ -63,11 +63,11 @@ const SYNTAX_SCOPE_MAPPINGS: readonly SyntaxScopeMapping[] = [
   },
   {
     key: "keyword",
-    scopes: ["keyword", "storage.modifier", "storage.type"],
+    scopes: ["keyword", "storage.modifier", "storage.type", "storage"],
   },
   {
     key: "keywordDeclaration",
-    scopes: ["storage.type", "keyword.declaration", "keyword.operator.new"],
+    scopes: ["keyword.declaration", "storage.type", "storage", "keyword.operator.new"],
   },
   {
     key: "keywordImport",
@@ -87,15 +87,20 @@ const SYNTAX_SCOPE_MAPPINGS: readonly SyntaxScopeMapping[] = [
   },
   {
     key: "property",
-    scopes: ["variable.other.property", "meta.object-literal.key", "support.type.property-name"],
+    scopes: [
+      "meta.property-name",
+      "variable.other.property",
+      "meta.object-literal.key",
+      "support.type.property-name",
+    ],
   },
   {
     key: "string",
-    scopes: ["string"],
+    scopes: ["string", "string.quoted"],
   },
   {
     key: "type",
-    scopes: ["entity.name.type", "entity.name.class", "support.type", "support.class"],
+    scopes: ["support.type", "support.class", "entity.name.type", "entity.name.class"],
   },
   {
     key: "typeDefinition",
@@ -297,6 +302,7 @@ function editorThemeFromShikiTheme(theme: ShikiThemeLike): EditorTheme {
     gutterBackgroundColor: theme.colors?.["editorGutter.background"] ?? backgroundColor,
     gutterForegroundColor: theme.colors?.["editorLineNumber.foreground"],
     caretColor: theme.colors?.["editorCursor.foreground"] ?? foregroundColor,
+    minimapBackgroundColor: backgroundColor,
     ...(syntax ? { syntax } : {}),
   };
 }
@@ -309,6 +315,8 @@ function editorSyntaxThemeFromShikiTheme(
     const color = themeColorForScopes(theme, mapping.scopes);
     if (color !== undefined) syntax[mapping.key] = color;
   }
+  const bracketColor = theme.fg ?? theme.colors?.["editor.foreground"];
+  if (syntax.bracket === undefined && bracketColor !== undefined) syntax.bracket = bracketColor;
   if (Object.keys(syntax).length === 0) return undefined;
   return syntax;
 }
@@ -318,35 +326,51 @@ function themeColorForScopes(
   targetScopes: readonly string[],
 ): string | undefined {
   const settings = shikiThemeSettings(theme);
-  for (let index = settings.length - 1; index >= 0; index -= 1) {
-    const color = settingColorForScopes(settings[index], targetScopes);
-    if (color !== undefined) return color;
+  let bestMatch: ScopeColorMatch | null = null;
+  for (let index = 0; index < settings.length; index += 1) {
+    const match = settingColorMatch(settings[index], targetScopes, index);
+    if (!match) continue;
+    if (!isBetterScopeColorMatch(match, bestMatch)) continue;
+
+    bestMatch = match;
   }
-  return undefined;
+  return bestMatch?.color;
 }
+
+type ScopeColorMatch = {
+  readonly color: string;
+  readonly order: number;
+  readonly score: number;
+};
 
 function shikiThemeSettings(theme: ShikiThemeLike): readonly ShikiThemeSettingLike[] {
   return theme.tokenColors ?? theme.settings ?? [];
 }
 
-function settingColorForScopes(
+function settingColorMatch(
   setting: ShikiThemeSettingLike | undefined,
   targetScopes: readonly string[],
-): string | undefined {
-  if (!setting?.settings?.foreground) return undefined;
-  if (!settingMatchesAnyScope(setting, targetScopes)) return undefined;
-  return setting.settings.foreground;
+  order: number,
+): ScopeColorMatch | null {
+  const color = setting?.settings?.foreground;
+  if (!color) return null;
+
+  const score = settingScopeMatchScore(setting, targetScopes);
+  if (score === 0) return null;
+
+  return { color, order, score };
 }
 
-function settingMatchesAnyScope(
+function settingScopeMatchScore(
   setting: ShikiThemeSettingLike,
   targetScopes: readonly string[],
-): boolean {
+): number {
+  let bestScore = 0;
   const scopes = normalizedSettingScopes(setting.scope);
   for (const scope of scopes) {
-    if (scopeMatchesAnyTarget(scope, targetScopes)) return true;
+    bestScore = Math.max(bestScore, scopeMatchScore(scope, targetScopes));
   }
-  return false;
+  return bestScore;
 }
 
 function normalizedSettingScopes(scope: string | readonly string[] | undefined): readonly string[] {
@@ -362,15 +386,30 @@ function splitScopeList(scope: string): string[] {
     .filter((part) => part.length > 0);
 }
 
-function scopeMatchesAnyTarget(scope: string, targetScopes: readonly string[]): boolean {
-  for (const target of targetScopes) {
-    if (scopeMatchesTarget(scope, target)) return true;
+function scopeMatchScore(scope: string, targetScopes: readonly string[]): number {
+  let bestScore = 0;
+  for (let index = 0; index < targetScopes.length; index += 1) {
+    bestScore = Math.max(bestScore, scopeTargetMatchScore(scope, targetScopes[index], index));
   }
-  return false;
+  return bestScore;
 }
 
-function scopeMatchesTarget(scope: string, target: string): boolean {
-  if (scope === target) return true;
-  if (scope.startsWith(`${target}.`)) return true;
-  return target.startsWith(`${scope}.`);
+function scopeTargetMatchScore(scope: string, target: string, targetIndex: number): number {
+  const targetPriority = Math.max(0, 20 - targetIndex);
+  if (scope === target) return 300 + targetPriority + scopeDepth(scope);
+  if (target.startsWith(`${scope}.`)) return 100 + targetPriority + scopeDepth(scope);
+  return 0;
+}
+
+function scopeDepth(scope: string): number {
+  return scope.split(".").length;
+}
+
+function isBetterScopeColorMatch(
+  candidate: ScopeColorMatch,
+  current: ScopeColorMatch | null,
+): boolean {
+  if (!current) return true;
+  if (candidate.score !== current.score) return candidate.score > current.score;
+  return candidate.order > current.order;
 }
