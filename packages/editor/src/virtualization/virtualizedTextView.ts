@@ -148,7 +148,8 @@ export class VirtualizedTextView {
 
     const styleEl = container.ownerDocument.createElement("style");
     const scrollElement = createScrollElement(container, options.className);
-    const measuredMetrics = measureBrowserTextMetrics(scrollElement);
+    const textMetrics = options.textMetrics ?? null;
+    const measuredMetrics = textMetrics ?? measureBrowserTextMetrics(scrollElement);
     const lineHeightOverride = options.lineHeight ?? options.rowHeight ?? null;
     const rowHeight = normalizeRowHeight(lineHeightOverride ?? measuredMetrics.rowHeight);
     const rowGap = normalizeRowGap(options.rowGap);
@@ -234,6 +235,7 @@ export class VirtualizedTextView {
       lineHeightOverride,
       rowGap,
       metrics: { ...measuredMetrics, rowHeight },
+      textMetrics,
       hiddenCharacters: normalizeHiddenCharactersMode(options.hiddenCharacters),
     };
 
@@ -251,9 +253,13 @@ export class VirtualizedTextView {
     scrollElement.appendChild(spacer);
     scrollElement.appendChild(inputElement);
 
-    virtualizer.attachScrollElement(scrollElement, (snapshot) => {
-      this.renderSnapshot(snapshot);
-    });
+    virtualizer.attachScrollElement(
+      scrollElement,
+      (snapshot) => {
+        this.renderSnapshot(snapshot);
+      },
+      { readInitialScrollPosition: false },
+    );
     rebuildStyleRules(this.view);
   }
 
@@ -317,7 +323,7 @@ export class VirtualizedTextView {
 
   public refreshMetrics(): BrowserTextMetrics {
     const view = this.view;
-    const measured = measureBrowserTextMetrics(this.scrollElement);
+    const measured = view.textMetrics ?? measureBrowserTextMetrics(this.scrollElement);
     const rowHeightValue = normalizeRowHeight(view.lineHeightOverride ?? measured.rowHeight);
     this.applyMetrics({ rowHeight: rowHeightValue, characterWidth: measured.characterWidth });
     return view.metrics;

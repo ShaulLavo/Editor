@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   FixedRowVirtualizer,
   computeFixedRowTotalSize,
@@ -87,6 +87,25 @@ describe("fixed row virtualizer", () => {
     const nextRowTwo = second.find((item) => item.index === 2);
 
     expect(nextRowTwo).toBe(rowTwo);
+  });
+
+  it("can attach to a fresh scroll element without reading scroll offsets", () => {
+    const virtualizer = new FixedRowVirtualizer({
+      count: 100,
+      rowHeight: 20,
+    });
+    const element = document.createElement("div");
+    const scrollTop = vi.spyOn(element, "scrollTop", "get");
+    const scrollLeft = vi.spyOn(element, "scrollLeft", "get");
+
+    virtualizer.attachScrollElement(element, undefined, {
+      readInitialScrollPosition: false,
+    });
+
+    expect(scrollTop).not.toHaveBeenCalled();
+    expect(scrollLeft).not.toHaveBeenCalled();
+
+    virtualizer.dispose();
   });
 
   it("tracks the viewport border box separately from the content box", () => {

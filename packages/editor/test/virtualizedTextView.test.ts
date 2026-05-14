@@ -115,6 +115,38 @@ describe("VirtualizedTextView", () => {
     second.remove();
   });
 
+  it("uses supplied browser text metrics without measuring a probe", () => {
+    view.dispose();
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+
+    view = new VirtualizedTextView(container, {
+      highlightRegistry: mockRegistry,
+      overscan: 0,
+      selectionHighlightName: "test-selection",
+      textMetrics: {
+        characterWidth: 7,
+        rowHeight: 18,
+      },
+    });
+
+    expect(rectSpy).not.toHaveBeenCalled();
+    rectSpy.mockRestore();
+
+    view.setText("alpha\nbeta");
+    view.setScrollMetrics(0, 36);
+
+    expect(view.getState()).toMatchObject({
+      metrics: {
+        characterWidth: 7,
+        rowHeight: 18,
+      },
+      mountedRows: [
+        { index: 0, top: 0, height: 18 },
+        { index: 1, top: 18, height: 18 },
+      ],
+    });
+  });
+
   it("adds bottom scroll padding so the final row can align with the viewport top", () => {
     view.setText(createLines(10));
     view.setScrollMetrics(0, 100);

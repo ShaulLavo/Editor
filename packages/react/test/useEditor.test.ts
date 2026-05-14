@@ -278,6 +278,32 @@ describe("useEditor", () => {
     mounted.dispose();
   });
 
+  it("applies keymap changes without recreating the editor", () => {
+    const mounted = mountReactEditor({
+      document: { text: "alpha", documentId: "a.ts", revision: 1 },
+      keymap: { enabled: false },
+    });
+    const instance = mounted.controller.getEditor();
+
+    expect(instance).not.toBeNull();
+
+    const setKeymapSpy = vi.spyOn(instance as Editor, "setKeymap");
+    const keymap = {
+      defaultBindings: false,
+      layers: [],
+    };
+
+    mounted.render({
+      document: { text: "alpha", documentId: "a.ts", revision: 1 },
+      keymap,
+    });
+
+    expect(mounted.controller.getEditor()).toBe(instance);
+    expect(setKeymapSpy).toHaveBeenCalledWith(keymap);
+
+    mounted.dispose();
+  });
+
   it("exports a command facade that safely handles missing editor instances", () => {
     const mounted = mountReactEditor();
     const { controller } = mounted;

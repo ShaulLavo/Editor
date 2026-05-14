@@ -240,6 +240,7 @@ export class Editor {
       lineHeight: options.lineHeight,
       rowGap: options.rowGap,
       tabSize: this.tabSize,
+      textMetrics: options.textMetrics,
       onFoldToggle: this.handleFoldToggle,
       onViewportChange: this.handleViewportChange,
       selectionHighlightName: `${this.highlightPrefix}-selection`,
@@ -551,6 +552,10 @@ export class Editor {
 
   setHiddenCharacters(mode: HiddenCharactersMode): void {
     this.view.setHiddenCharacters(mode);
+  }
+
+  setKeymap(keymap: EditorOptions["keymap"]): void {
+    this.keymap.setKeymap(keymap);
   }
 
   setEditability(editability: EditorEditability): void {
@@ -2275,6 +2280,7 @@ export class Editor {
   private syncDomSelection(): void {
     if (!this.session) return;
 
+    // TODO: Move readonly embedded editors to fully custom browser-free selection/copy.
     const selection = this.session.getSelections().selections[0];
     if (!selection) return;
 

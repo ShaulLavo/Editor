@@ -10,6 +10,7 @@ import type {
   EditorCursorLineHighlightOptions,
   HiddenCharactersMode,
 } from "../virtualization/virtualizedTextViewTypes";
+import type { BrowserTextMetrics } from "../virtualization/browserMetrics";
 import type { EditorKeymapOptions } from "./keymap";
 import type { TextEdit } from "../tokens";
 
@@ -81,6 +82,7 @@ export type EditorOptions = {
   readonly rangeDecorations?: readonly EditorRangeDecoration[];
   readonly rowGap?: number;
   readonly tabSize?: number;
+  readonly textMetrics?: BrowserTextMetrics;
 };
 
 export type EditorSetTextOptions = {

@@ -34,6 +34,7 @@ export type VirtualizedTextViewOptions = {
   readonly cursorLineHighlight?: EditorCursorLineHighlightOptions;
   readonly hiddenCharacters?: HiddenCharactersMode;
   readonly tabSize?: number;
+  readonly textMetrics?: BrowserTextMetrics;
 };
 
 export type HiddenCharactersMode = "hidden" | "show" | "show-on-selection";

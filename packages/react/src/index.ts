@@ -287,6 +287,10 @@ class ReactEditorControllerImplementation implements ReactEditorController {
     syncEditability(this.getEditor(), this.options.editability);
   }
 
+  public syncKeymapOption(): void {
+    syncKeymap(this.getEditor(), this.options.keymap);
+  }
+
   public syncRangeDecorationsOption(): void {
     syncRangeDecorations(this.getEditor(), this.options.rangeDecorations);
   }
@@ -477,6 +481,7 @@ function useControlledOptionSync(
     () => controller.syncEditabilityOption(),
     [controller, options.editability],
   );
+  useEditorLayoutEffect(() => controller.syncKeymapOption(), [controller, options.keymap]);
   useEditorLayoutEffect(
     () => controller.syncRangeDecorationsOption(),
     [controller, options.rangeDecorations],
@@ -588,6 +593,12 @@ function syncEditability(
   if (!editor || editability === undefined) return;
 
   editor.setEditability(editability);
+}
+
+function syncKeymap(editor: Editor | null, keymap: ReactEditorOptions["keymap"]): void {
+  if (!editor) return;
+
+  editor.setKeymap(keymap);
 }
 
 function syncRangeDecorations(

@@ -41,6 +41,10 @@ export type FixedRowScrollMetrics = {
 
 export type FixedRowVirtualizerChangeHandler = (snapshot: FixedRowVirtualizerSnapshot) => void;
 
+export type FixedRowVirtualizerAttachOptions = {
+  readonly readInitialScrollPosition?: boolean;
+};
+
 type AttachedScrollElement = {
   readonly element: HTMLElement;
   readonly onScroll: () => void;
@@ -136,6 +140,7 @@ export class FixedRowVirtualizer {
   public attachScrollElement(
     element: HTMLElement,
     onChange?: FixedRowVirtualizerChangeHandler,
+    options: FixedRowVirtualizerAttachOptions = {},
   ): void {
     this.detachScrollElement();
     this.changeHandler = onChange ?? null;
@@ -146,7 +151,9 @@ export class FixedRowVirtualizer {
 
     element.addEventListener("scroll", onScroll, { passive: true });
     resizeObserver?.observe(element);
-    this.syncScrollPositionFromElement();
+    if (options.readInitialScrollPosition !== false) {
+      this.syncScrollPositionFromElement();
+    }
   }
 
   public detachScrollElement(): void {

@@ -49,12 +49,25 @@ export type EditorKeymapControllerOptions = {
 
 export class EditorKeymapController {
   private readonly handles: HotkeyRegistrationHandle[] = [];
+  private readonly dispatch: (command: EditorCommandId, context: EditorCommandContext) => boolean;
+  private readonly target: HTMLElement;
+  private keymap: EditorKeymapOptions | undefined | null = null;
 
   public constructor(options: EditorKeymapControllerOptions) {
-    if (options.keymap?.enabled === false) return;
+    this.dispatch = options.dispatch;
+    this.target = options.target;
+    this.setKeymap(options.keymap);
+  }
 
-    const bindings = editorKeyBindings(options.keymap);
-    for (const binding of bindings) this.registerBinding(options.target, binding, options.dispatch);
+  public setKeymap(keymap: EditorKeymapOptions | undefined): void {
+    if (this.keymap === keymap) return;
+
+    this.dispose();
+    this.keymap = keymap;
+    if (keymap?.enabled === false) return;
+
+    const bindings = editorKeyBindings(keymap);
+    for (const binding of bindings) this.registerBinding(this.target, binding, this.dispatch);
   }
 
   public dispose(): void {

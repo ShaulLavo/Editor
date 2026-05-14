@@ -124,5 +124,6 @@ export interface VirtualizedTextViewInternal {
   lineHeightOverride: number | null;
   rowGap: number;
   metrics: BrowserTextMetrics;
+  textMetrics: BrowserTextMetrics | null;
   hiddenCharacters: HiddenCharactersMode;
 }
