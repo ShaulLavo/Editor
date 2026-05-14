@@ -66,6 +66,7 @@ import {
 import { clearRowGeometryCaches, xToOffset } from "./virtualizedTextViewGeometry";
 import {
   applyRowHeight,
+  disposeBlockRowMounts,
   disposeGutterCells,
   ensureOffsetMounted,
   getMountedRows,
@@ -113,6 +114,9 @@ export type {
   HiddenCharactersMode,
   HighlightRegistry,
   NativeGeometryValidation,
+  VirtualizedBlockRowDisposable,
+  VirtualizedBlockRowMount,
+  VirtualizedBlockRowMountContext,
   VirtualizedFoldMarker,
   VirtualizedTextChunk,
   VirtualizedTextRowDecoration,
@@ -187,6 +191,7 @@ export class VirtualizedTextView {
       horizontalOverscanColumns: normalizeHorizontalOverscan(options.horizontalOverscanColumns),
       onFoldToggle: options.onFoldToggle ?? null,
       onViewportChange: options.onViewportChange ?? null,
+      blockRowMount: options.blockRowMount ?? null,
       cursorLineHighlight: normalizeCursorLineHighlight(options.cursorLineHighlight),
       rowElements: new Map(),
       rowPool: [],
@@ -269,6 +274,7 @@ export class VirtualizedTextView {
     for (const name of view.rangeHighlightGroups.keys()) clearRangeHighlight(view, name);
     clearTokenHighlights(view);
     view.virtualizer.dispose();
+    disposeBlockRowMounts(view);
     disposeGutterCells(view);
     this.scrollElement.remove();
     view.styleEl.remove();

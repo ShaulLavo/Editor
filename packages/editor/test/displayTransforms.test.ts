@@ -92,6 +92,29 @@ describe("display transform core", () => {
     ]);
   });
 
+  it("sorts block rows by anchor, placement, and id", () => {
+    const text = "a\nb";
+    const rows = createDisplayRows({
+      text,
+      lineStarts: computeLineStarts(text),
+      visibleLineCount: 2,
+      bufferRowForVisibleRow: (row) => row,
+      blocks: [
+        { id: "row-1", anchorBufferRow: 1, placement: "before", heightRows: 1 },
+        { id: "row-0-z", anchorBufferRow: 0, placement: "after", heightRows: 1 },
+        { id: "row-0-a", anchorBufferRow: 0, placement: "before", heightRows: 1 },
+      ],
+    });
+
+    expect(rows.map((row) => (row.kind === "block" ? row.id : row.text))).toEqual([
+      "row-0-a",
+      "a",
+      "row-0-z",
+      "row-1",
+      "b",
+    ]);
+  });
+
   it("maps block rows back to nearby buffer rows", () => {
     const text = "abc\ndef";
     const rows = createDisplayRows({

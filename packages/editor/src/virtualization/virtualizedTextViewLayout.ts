@@ -131,13 +131,14 @@ export function rowSizes(view: VirtualizedTextViewInternal): readonly number[] |
 
   const rowHeight = view.metrics.rowHeight;
   return view.displayRows.map((row) => {
-    if (row.kind === "block") return row.heightRows * rowHeight;
+    if (row.kind === "block") return blockRowHeightPx(row, rowHeight);
     return rowHeight;
   });
 }
 
 export function hasVariableRows(view: VirtualizedTextViewInternal): boolean {
   for (const row of view.blockRows) {
+    if (row.heightPx !== undefined && row.heightPx !== view.metrics.rowHeight) return true;
     if (normalizeBlockHeightRows(row.heightRows) !== 1) return true;
   }
 
@@ -387,6 +388,11 @@ function usesDisplayRowTransforms(view: VirtualizedTextViewInternal): boolean {
 function normalizeBlockHeightRows(heightRows: number): number {
   if (!Number.isFinite(heightRows) || heightRows <= 0) return 1;
   return Math.max(1, Math.floor(heightRows));
+}
+
+function blockRowHeightPx(row: DisplayRow, rowHeight: number): number {
+  if (row.kind !== "block") return rowHeight;
+  return row.heightPx ?? row.heightRows * rowHeight;
 }
 
 function textDisplayRowForOffset(

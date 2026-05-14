@@ -3,6 +3,7 @@ import type { EditorCommandContext, EditorCommandId } from "./editor/commands";
 import type { PieceTableSnapshot } from "./pieceTable/pieceTableTypes";
 import type { EditorTheme } from "./theme";
 import type { EditorToken, TextEdit } from "./tokens";
+import type { EditorBlockProvider } from "./editorBlocks";
 import {
   type EditorSyntaxLanguageId,
   type EditorSyntaxProvider,
@@ -215,6 +216,7 @@ export type EditorPluginContext = {
   registerViewContribution(provider: EditorViewContributionProvider): EditorDisposable;
   registerEditorFeatureContribution(provider: EditorFeatureContributionProvider): EditorDisposable;
   registerGutterContribution(contribution: EditorGutterContribution): EditorDisposable;
+  registerBlockProvider(provider: EditorBlockProvider): EditorDisposable;
 };
 
 export type EditorPlugin = {
@@ -230,6 +232,7 @@ export type EditorPluginHostEvents = {
   onEditorFeatureContributionProviderAdded?(provider: EditorFeatureContributionProvider): void;
   onEditorFeatureContributionProviderRemoved?(provider: EditorFeatureContributionProvider): void;
   onGutterContributionsChanged?(): void;
+  onBlockProvidersChanged?(): void;
 };
 
 type ActiveEditorPlugin = {
@@ -243,6 +246,11 @@ export class EditorPluginHost implements EditorDisposable {
   private readonly viewContributions: EditorViewContributionProvider[] = [];
   private readonly editorFeatureContributions: EditorFeatureContributionProvider[] = [];
   private readonly gutterContributions: EditorGutterContribution[] = [];
+  private readonly blockProviders: EditorBlockProvider[] = [];
+  private readonly blockProviderInvalidationDisposables = new Map<
+    EditorBlockProvider,
+    EditorDisposable
+  >();
   private readonly activePlugins = new Map<EditorPlugin, ActiveEditorPlugin>();
   private readonly managedPlugins = new Set<EditorPlugin>();
   private readonly manualPluginReferences = new Map<EditorPlugin, number>();
@@ -353,6 +361,10 @@ export class EditorPluginHost implements EditorDisposable {
     return this.gutterContributions;
   }
 
+  public getBlockProviders(): readonly EditorBlockProvider[] {
+    return this.blockProviders;
+  }
+
   public getViewContributionProviders(): readonly EditorViewContributionProvider[] {
     return this.viewContributions;
   }
@@ -375,6 +387,11 @@ export class EditorPluginHost implements EditorDisposable {
     this.viewContributions.length = 0;
     this.editorFeatureContributions.length = 0;
     this.gutterContributions.length = 0;
+    for (const disposable of this.blockProviderInvalidationDisposables.values()) {
+      disposable.dispose();
+    }
+    this.blockProviderInvalidationDisposables.clear();
+    this.blockProviders.length = 0;
   }
 
   private retainPlugin(plugin: EditorPlugin): void {
@@ -457,6 +474,7 @@ export class EditorPluginHost implements EditorDisposable {
       registerEditorFeatureContribution: (provider) =>
         this.registerEditorFeatureContribution(provider),
       registerGutterContribution: (contribution) => this.registerGutterContribution(contribution),
+      registerBlockProvider: (provider) => this.registerBlockProvider(provider),
     };
   }
 
@@ -545,6 +563,31 @@ export class EditorPluginHost implements EditorDisposable {
 
     this.gutterContributions.splice(index, 1);
     this.events.onGutterContributionsChanged?.();
+  }
+
+  private registerBlockProvider(provider: EditorBlockProvider): EditorDisposable {
+    this.blockProviders.push(provider);
+    const invalidationDisposable = provider.onDidChangeBlocks?.(() => {
+      this.events.onBlockProvidersChanged?.();
+    });
+    if (invalidationDisposable) {
+      this.blockProviderInvalidationDisposables.set(provider, invalidationDisposable);
+    }
+    this.events.onBlockProvidersChanged?.();
+
+    return {
+      dispose: () => this.unregisterBlockProvider(provider),
+    };
+  }
+
+  private unregisterBlockProvider(provider: EditorBlockProvider): void {
+    const index = this.blockProviders.indexOf(provider);
+    if (index === -1) return;
+
+    this.blockProviders.splice(index, 1);
+    this.blockProviderInvalidationDisposables.get(provider)?.dispose();
+    this.blockProviderInvalidationDisposables.delete(provider);
+    this.events.onBlockProvidersChanged?.();
   }
 }
 

@@ -1,4 +1,8 @@
-import { bufferColumnToVisualColumn, visualColumnToBufferColumn } from "../displayTransforms";
+import {
+  bufferColumnToVisualColumn,
+  visualColumnToBufferColumn,
+  type DisplayBlockRow,
+} from "../displayTransforms";
 import { clamp } from "../style-utils";
 import type {
   EditorGutterContribution,
@@ -76,6 +80,7 @@ type RowUpdatePass = {
 };
 
 type RowUpdateState = EditorGutterRowContext & {
+  readonly blockRow: DisplayBlockRow | null;
   readonly cursorVirtualLine: boolean;
 };
 
@@ -141,6 +146,7 @@ function createRow(view: VirtualizedTextViewInternal): MountedVirtualizedTextRow
   const selectionLayerElement = document.createElement("div");
   const foldPlaceholderElement = document.createElement("span");
   const hiddenCharactersLayerElement = document.createElement("div");
+  const blockContainerElement = document.createElement("div");
   const textNode = document.createTextNode("");
   const gutterCells = createGutterCells(view, document);
 
@@ -152,6 +158,7 @@ function createRow(view: VirtualizedTextViewInternal): MountedVirtualizedTextRow
   foldPlaceholderElement.className = "editor-virtualized-fold-placeholder";
   hiddenCharactersLayerElement.className = "editor-virtualized-hidden-character-layer";
   hiddenCharactersLayerElement.setAttribute("aria-hidden", "true");
+  blockContainerElement.className = "editor-virtualized-block-surface";
   foldPlaceholderElement.textContent = "...";
   foldPlaceholderElement.hidden = true;
   for (const cell of gutterCells.values()) gutterElement.appendChild(cell);
@@ -183,6 +190,9 @@ function createRow(view: VirtualizedTextViewInternal): MountedVirtualizedTextRow
     selectionLayerElement,
     foldPlaceholderElement,
     hiddenCharactersLayerElement,
+    blockContainerElement,
+    blockMountDisposable: null,
+    blockMountKey: "",
     textNode,
     selectionLayerKey: "",
     hiddenCharactersKey: "",
@@ -223,6 +233,10 @@ function createGutterCell(
 export function disposeGutterCells(view: VirtualizedTextViewInternal): void {
   const rows = [...view.rowElements.values(), ...view.rowPool];
   for (const row of rows) disposeRowGutterCells(view, row);
+}
+
+export function disposeBlockRowMounts(view: VirtualizedTextViewInternal): void {
+  for (const row of allRows(view)) disposeBlockRowMount(row);
 }
 
 export function updateGutterContributions(
@@ -374,6 +388,7 @@ function rowUpdateState(
   const primaryText = displayRow?.kind === "text" && displayRow.sourceStartColumn === 0;
 
   return {
+    blockRow: displayRow?.kind === "block" ? displayRow : null,
     index,
     bufferRow,
     startOffset: displayRow?.startOffset ?? view.text.length,
@@ -400,6 +415,7 @@ function mountedRowUpdateState(
 ): RowUpdateState {
   const primaryText = isPrimaryTextRow(view, row.index);
   return {
+    blockRow: blockDisplayRowForIndex(view, row.index),
     index: row.index,
     bufferRow: row.bufferRow,
     startOffset: row.startOffset,
@@ -424,6 +440,21 @@ function bufferRowForDisplayRow(view: VirtualizedTextViewInternal, index: number
   if (displayRow?.kind === "text") return displayRow.bufferRow;
   if (displayRow?.kind === "block") return displayRow.anchorBufferRow;
   return bufferRowForVirtualRow(view, index);
+}
+
+function updateRowFrame(
+  row: MountedVirtualizedTextRow,
+  item: FixedRowVirtualItem,
+  kind: "text" | "block",
+): void {
+  if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
+  if (row.element.dataset.editorVirtualRowKind !== kind)
+    row.element.dataset.editorVirtualRowKind = kind;
+  if (row.top !== item.start) row.element.style.transform = rowTranslateY(item.start);
+
+  const height = `${item.size}px`;
+  if (row.element.style.height !== height) row.element.style.height = height;
+  if (row.gutterElement.style.height !== height) row.gutterElement.style.height = height;
 }
 
 function updateRow(
@@ -465,19 +496,17 @@ function updateRowElement(
   state: RowUpdateState,
   snapshot: FixedRowVirtualizerSnapshot,
 ): void {
-  if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
+  updateRowFrame(row, item, state.kind);
   applyRowDecoration(view, row, state.bufferRow);
   updateCursorLineContentClass(view, row, state.cursorVirtualLine);
   updateGutterRowElement(view, row, item, state);
-  if (row.top !== item.start) {
-    row.element.style.transform = rowTranslateY(item.start);
-  }
   if (state.kind === "block") {
-    setBlockRowText(row, state.text, state.startOffset);
+    setBlockRowContent(view, row, item, state);
     updateRowFoldPresentation(row, state.foldMarker);
     return;
   }
 
+  disposeBlockRowMount(row);
   updateRowTextChunks(view, row, state.text, state.startOffset, snapshot);
   updateRowFoldPresentation(row, state.foldMarker);
 }
@@ -532,20 +561,84 @@ function updateRowElementForSameLineEdit(
   patch: SameLineEditPatch,
   snapshot: FixedRowVirtualizerSnapshot,
 ): void {
-  if (row.index !== item.index) row.element.dataset.editorVirtualRow = String(item.index);
+  updateRowFrame(row, item, state.kind);
   applyRowDecoration(view, row, state.bufferRow);
   updateGutterRowElement(view, row, item, state);
-  if (row.top !== item.start) {
-    row.element.style.transform = rowTranslateY(item.start);
-  }
   if (state.kind === "block") {
-    setBlockRowText(row, state.text, state.startOffset);
+    setBlockRowContent(view, row, item, state);
     updateRowFoldPresentation(row, state.foldMarker);
     return;
   }
 
+  disposeBlockRowMount(row);
   updateRowTextForSameLineEdit(view, row, item, state.text, patch, state.startOffset, snapshot);
   updateRowFoldPresentation(row, state.foldMarker);
+}
+
+function setBlockRowContent(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
+  item: FixedRowVirtualItem,
+  state: RowUpdateState,
+): void {
+  const blockRow = state.blockRow;
+  if (!blockRow || !view.blockRowMount) {
+    setBlockRowText(row, state.text, state.startOffset);
+    return;
+  }
+
+  if (row.element.firstChild !== row.blockContainerElement || row.element.childNodes.length !== 1)
+    row.element.replaceChildren(row.blockContainerElement);
+  if (row.blockContainerElement.style.height !== `${item.size}px`)
+    row.blockContainerElement.style.height = `${item.size}px`;
+
+  syncBlockRowMount(view, row, blockRow);
+  updateMutableRowChunks(row, []);
+}
+
+function syncBlockRowMount(
+  view: VirtualizedTextViewInternal,
+  row: MountedVirtualizedTextRow,
+  blockRow: DisplayBlockRow,
+): void {
+  if (row.blockMountKey === blockRow.id) return;
+
+  disposeBlockRowMount(row);
+  const disposable = view.blockRowMount?.(row.blockContainerElement, {
+    id: blockRow.id,
+    anchorBufferRow: blockRow.anchorBufferRow,
+    placement: blockRow.placement,
+    startOffset: blockRow.startOffset,
+    endOffset: blockRow.endOffset,
+  });
+  setBlockRowMount(row, blockRow.id, disposable ?? null);
+}
+
+function disposeBlockRowMount(row: MountedVirtualizedTextRow): void {
+  row.blockMountDisposable?.dispose();
+  resetBlockContainerElement(row.blockContainerElement);
+  setBlockRowMount(row, "", null);
+}
+
+function resetBlockContainerElement(element: HTMLDivElement): void {
+  const height = element.style.height;
+  element.replaceChildren();
+  while (element.attributes.length > 0) element.removeAttribute(element.attributes[0]!.name);
+  element.className = "editor-virtualized-block-surface";
+  if (height) element.style.height = height;
+}
+
+function setBlockRowMount(
+  row: MountedVirtualizedTextRow,
+  key: string,
+  disposable: MountedVirtualizedTextRow["blockMountDisposable"],
+): void {
+  const mutable = row as {
+    blockMountDisposable: MountedVirtualizedTextRow["blockMountDisposable"];
+    blockMountKey: string;
+  };
+  mutable.blockMountDisposable = disposable;
+  mutable.blockMountKey = key;
 }
 
 function updateRowTextForSameLineEdit(
@@ -736,17 +829,25 @@ function isReusableRenderedDirectChunk(
 }
 
 function rowHasInlineAttachments(row: MountedVirtualizedTextRow): boolean {
+  if (row.element.firstChild === row.blockContainerElement) return true;
   if (row.foldCollapsed) return true;
   return row.hiddenCharactersKey.length > 0;
 }
 
 function setBlockRowText(row: MountedVirtualizedTextRow, text: string, startOffset: number): void {
-  if (row.textRenderMode !== "simple" || rowHasInlineAttachments(row)) {
+  disposeBlockRowMount(row);
+  if (shouldReplaceBlockTextChildren(row)) {
     row.element.replaceChildren(row.textNode);
     setTextRenderMode(row, "simple");
   }
   if (row.textNode.data !== text) row.textNode.data = text;
   syncSimpleDirectRowChunk(row, text, startOffset);
+}
+
+function shouldReplaceBlockTextChildren(row: MountedVirtualizedTextRow): boolean {
+  if (row.textRenderMode !== "simple") return true;
+  if (rowHasInlineAttachments(row)) return true;
+  return row.element.firstChild !== row.textNode || row.element.childNodes.length !== 1;
 }
 
 function setChunkedRowText(
@@ -1121,6 +1222,7 @@ function isRowCurrent(
 
   const rowKind = displayRowKind(view, item.index);
   if (row.displayKind !== rowKind) return false;
+  if (row.blockMountKey !== blockMountKeyForIndex(view, item.index)) return false;
 
   const text = lineText(view, item.index);
   if (row.text !== text) return false;
@@ -1146,6 +1248,20 @@ function applyRowDecoration(
   setRowDecorationClass(row, decoration?.className ?? "");
   setRowDecorationGutterClass(row, decoration?.gutterClassName ?? "");
   setRowDecorationKey(row, rowDecorationKeyForDecoration(decoration));
+}
+
+function blockDisplayRowForIndex(
+  view: VirtualizedTextViewInternal,
+  index: number,
+): DisplayBlockRow | null {
+  const displayRow = view.displayRows[index];
+  if (displayRow?.kind !== "block") return null;
+  return displayRow;
+}
+
+function blockMountKeyForIndex(view: VirtualizedTextViewInternal, index: number): string {
+  if (!view.blockRowMount) return "";
+  return blockDisplayRowForIndex(view, index)?.id ?? "";
 }
 
 function rowDecorationKey(view: VirtualizedTextViewInternal, virtualRow: number): string {
@@ -1276,6 +1392,7 @@ function removeReusableRows(
   for (const row of rows) {
     onRemoveSlot(row.tokenHighlightSlotId);
     view.rowTokenSignatures.delete(row.tokenHighlightSlotId);
+    disposeBlockRowMount(row);
     clearHiddenCharactersForRow(row);
   }
 

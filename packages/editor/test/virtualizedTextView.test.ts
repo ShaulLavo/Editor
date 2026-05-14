@@ -664,6 +664,29 @@ describe("VirtualizedTextView", () => {
     expect(view.textOffsetFromViewportPoint(100, 25)).toBe(3);
   });
 
+  it("uses fixed pixel block row heights for visible range calculations", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 0,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+    });
+    view.setText("abc\ndef\nghi");
+    view.setBlockRows([
+      { id: "before-second", anchorBufferRow: 1, placement: "before", heightRows: 1, heightPx: 32 },
+    ]);
+    view.setScrollMetrics(21, 10);
+
+    const rows = view.getState().mountedRows;
+    const element = container.querySelector<HTMLElement>('[data-editor-virtual-row="1"]');
+    expect(view.getState().totalHeight).toBe(92);
+    expect(view.getState().visibleRange).toEqual({ start: 1, end: 2 });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: "block", top: 20, height: 32 });
+    expect(element?.style.height).toBe("32px");
+  });
+
   it("maps chunked DOM boundaries back to document offsets", () => {
     view.dispose();
     view = new VirtualizedTextView(container, {

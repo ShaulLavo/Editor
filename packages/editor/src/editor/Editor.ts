@@ -51,9 +51,19 @@ import type {
 } from "./types";
 import { EditorViewContributionController } from "./viewContributions";
 import type { FoldMap } from "../foldMap";
-import { normalizeTabSize } from "../displayTransforms";
+import { normalizeTabSize, type BlockRow } from "../displayTransforms";
 import { offsetToPoint } from "../pieceTable/positions";
 import { getPieceTableText } from "../pieceTable/reads";
+import type {
+  EditorBlock,
+  EditorBlockAnchor,
+  EditorBlockHorizontalSurface,
+  EditorBlockMountContext,
+  EditorBlockProvider,
+  EditorBlockProviderContext,
+  EditorBlockSize,
+  EditorBlockSurfaceSlot,
+} from "../editorBlocks";
 import {
   EditorPluginHost,
   type EditorCommandHandler,
@@ -173,6 +183,64 @@ type EditorFindFeature = {
 
 type FoldOperation = "fold" | "unfold" | "toggle";
 
+type ResolvedEditorBlockSurface = {
+  readonly rowId: string;
+  readonly block: EditorBlock;
+  readonly surface: EditorBlockHorizontalSurface;
+  readonly slot: "top" | "bottom";
+  readonly anchorBufferRow: number;
+  readonly heightPx: number;
+};
+
+function editorBlockSurfaceRowId(
+  revision: number,
+  providerIndex: number,
+  blockId: string,
+  slot: EditorBlockSurfaceSlot,
+): string {
+  return `${revision}:${providerIndex}:${blockId}:${slot}`;
+}
+
+function fixedEditorBlockSizePx(size: EditorBlockSize | undefined): number | null {
+  if (!size || typeof size.px !== "number") return null;
+  if (!Number.isFinite(size.px) || size.px <= 0) return null;
+  return size.px;
+}
+
+function validEditorBlockId(id: string): boolean {
+  return id.length > 0;
+}
+
+function editorBlockSurfaceAnchorRow(
+  anchor: EditorBlockAnchor,
+  slot: "top" | "bottom",
+  lineCount: number,
+): number | null {
+  if (!validEditorBlockAnchor(anchor, lineCount)) return null;
+  if ("row" in anchor) return anchor.row;
+  if (slot === "top") return anchor.startRow;
+  return anchor.endRow;
+}
+
+function validEditorBlockAnchor(anchor: EditorBlockAnchor, lineCount: number): boolean {
+  const maxRow = Math.max(0, lineCount - 1);
+  if ("row" in anchor) return validEditorBlockRow(anchor.row, maxRow);
+  if (!validEditorBlockRow(anchor.startRow, maxRow)) return false;
+  if (!validEditorBlockRow(anchor.endRow, maxRow)) return false;
+  return anchor.startRow <= anchor.endRow;
+}
+
+function validEditorBlockRow(row: number, maxRow: number): boolean {
+  if (!Number.isInteger(row)) return false;
+  if (row < 0) return false;
+  return row <= maxRow;
+}
+
+function editorBlockSurfacePlacement(slot: "top" | "bottom"): BlockRow["placement"] {
+  if (slot === "top") return "before";
+  return "after";
+}
+
 export class Editor {
   private readonly container: HTMLElement;
   private readonly view: VirtualizedTextView;
@@ -194,6 +262,9 @@ export class Editor {
   private readonly keymap: EditorKeymapController;
   private readonly viewContributions: EditorViewContributionController;
   private readonly highlightPrefix: string;
+  private readonly editorBlockSurfaces = new Map<string, ResolvedEditorBlockSurface>();
+  private editorBlockRows: readonly BlockRow[] = [];
+  private editorBlockRevision = 0;
   private text = "";
   private session: DocumentSession | null = null;
   private sessionOptions: EditorSessionOptions = {};
@@ -245,6 +316,7 @@ export class Editor {
       rowGap: options.rowGap,
       tabSize: this.tabSize,
       textMetrics: options.textMetrics,
+      blockRowMount: this.mountEditorBlockRow,
       onFoldToggle: this.handleFoldToggle,
       onViewportChange: this.handleViewportChange,
       selectionHighlightName: `${this.highlightPrefix}-selection`,
@@ -276,6 +348,7 @@ export class Editor {
       onEditorFeatureContributionProviderRemoved: (provider) =>
         this.removeEditorFeatureContributionProvider(provider),
       onGutterContributionsChanged: () => this.syncGutterContributions(),
+      onBlockProvidersChanged: () => this.handleBlockProvidersChanged(),
     });
     this.installEditingHandlers();
     this.initializeDefaultText();
@@ -286,6 +359,7 @@ export class Editor {
   setContent(text: string): void {
     this.text = text;
     this.view.setText(text);
+    this.syncEditorBlocks();
     this.setTokens([]);
     this.clearSyntaxFolds();
     this.applyRangeDecorations();
@@ -302,6 +376,7 @@ export class Editor {
     const { from, to, text } = edit;
     this.text = `${this.text.slice(0, from)}${text}${this.text.slice(to)}`;
     this.view.applyEdit(edit, this.text);
+    this.syncEditorBlocks();
     this.setTokens(tokens);
   }
 
@@ -951,6 +1026,160 @@ export class Editor {
 
   private currentGutterContributions(): readonly EditorGutterContribution[] {
     return [...this.pluginHost.getGutterContributions()];
+  }
+
+  private handleBlockProvidersChanged(): void {
+    this.syncEditorBlocks();
+    this.notifyViewContributions("layout", null);
+  }
+
+  private syncEditorBlocks(): void {
+    const providers = this.pluginHost.getBlockProviders();
+    if (providers.length === 0) {
+      this.clearEditorBlockRows();
+      return;
+    }
+
+    const context = this.createEditorBlockProviderContext();
+    const resolution = this.resolveEditorBlockRows(providers, context);
+    this.applyEditorBlockRows(resolution.rows, resolution.surfaces);
+  }
+
+  private clearEditorBlockRows(): void {
+    if (this.editorBlockRows.length === 0) return;
+
+    this.editorBlockRows = [];
+    this.editorBlockSurfaces.clear();
+    this.view.setBlockRows([]);
+  }
+
+  private createEditorBlockProviderContext(): EditorBlockProviderContext {
+    return {
+      documentId: this.documentId,
+      text: this.text,
+      lineCount: this.view.getLineStarts().length,
+    };
+  }
+
+  private resolveEditorBlockRows(
+    providers: readonly EditorBlockProvider[],
+    context: EditorBlockProviderContext,
+  ): {
+    readonly rows: readonly BlockRow[];
+    readonly surfaces: ReadonlyMap<string, ResolvedEditorBlockSurface>;
+  } {
+    const revision = this.nextEditorBlockRevision();
+    const rows: BlockRow[] = [];
+    const surfaces = new Map<string, ResolvedEditorBlockSurface>();
+
+    providers.forEach((provider, providerIndex) => {
+      this.appendProviderBlockRows(provider, providerIndex, revision, context, rows, surfaces);
+    });
+
+    return { rows, surfaces };
+  }
+
+  private nextEditorBlockRevision(): number {
+    this.editorBlockRevision += 1;
+    return this.editorBlockRevision;
+  }
+
+  private appendProviderBlockRows(
+    provider: EditorBlockProvider,
+    providerIndex: number,
+    revision: number,
+    context: EditorBlockProviderContext,
+    rows: BlockRow[],
+    surfaces: Map<string, ResolvedEditorBlockSurface>,
+  ): void {
+    for (const block of provider.getBlocks(context)) {
+      this.appendEditorBlockSurfaceRow(
+        block,
+        "top",
+        providerIndex,
+        revision,
+        context.lineCount,
+        rows,
+        surfaces,
+      );
+      this.appendEditorBlockSurfaceRow(
+        block,
+        "bottom",
+        providerIndex,
+        revision,
+        context.lineCount,
+        rows,
+        surfaces,
+      );
+    }
+  }
+
+  private appendEditorBlockSurfaceRow(
+    block: EditorBlock,
+    slot: "top" | "bottom",
+    providerIndex: number,
+    revision: number,
+    lineCount: number,
+    rows: BlockRow[],
+    surfaces: Map<string, ResolvedEditorBlockSurface>,
+  ): void {
+    const surface = block[slot];
+    const heightPx = fixedEditorBlockSizePx(surface?.height);
+    if (!surface || heightPx === null) return;
+    if (!validEditorBlockId(block.id)) return;
+
+    const rowId = editorBlockSurfaceRowId(revision, providerIndex, block.id, slot);
+    const anchorBufferRow = editorBlockSurfaceAnchorRow(block.anchor, slot, lineCount);
+    if (anchorBufferRow === null) return;
+
+    surfaces.set(rowId, { rowId, block, surface, slot, anchorBufferRow, heightPx });
+    rows.push({
+      id: rowId,
+      anchorBufferRow,
+      placement: editorBlockSurfacePlacement(slot),
+      heightRows: 1,
+      heightPx,
+    });
+  }
+
+  private applyEditorBlockRows(
+    rows: readonly BlockRow[],
+    surfaces: ReadonlyMap<string, ResolvedEditorBlockSurface>,
+  ): void {
+    this.editorBlockRows = rows;
+    this.editorBlockSurfaces.clear();
+    for (const [rowId, surface] of surfaces) this.editorBlockSurfaces.set(rowId, surface);
+    this.view.setBlockRows(rows);
+  }
+
+  private readonly mountEditorBlockRow = (
+    container: HTMLElement,
+    row: { readonly id: string },
+  ): void | EditorDisposable => {
+    const surface = this.editorBlockSurfaces.get(row.id);
+    if (!surface) return undefined;
+
+    return surface.surface.mount(container, this.createEditorBlockMountContext(surface));
+  };
+
+  private createEditorBlockMountContext(
+    surface: ResolvedEditorBlockSurface,
+  ): EditorBlockMountContext {
+    return {
+      blockId: surface.block.id,
+      surface: surface.slot,
+      anchor: surface.block.anchor,
+      documentId: this.documentId,
+      text: this.text,
+      focusEditor: () => this.focus(),
+      setSelection: (anchor, head) =>
+        this.applyFindSelection(anchor, head, "editor.block.setSelection", head),
+      requestMeasure: () => this.handleEditorBlockMeasureRequest(),
+    };
+  }
+
+  private handleEditorBlockMeasureRequest(): void {
+    this.notifyViewContributions("layout", null);
   }
 
   private createViewContributionContext(container: HTMLElement): EditorViewContributionContext {

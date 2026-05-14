@@ -151,6 +151,19 @@
   white-space: pre;
 }
 
+.editor-virtualized-row[data-editor-virtual-row-kind="block"] {
+  line-height: normal;
+  white-space: normal;
+}
+
+.editor-virtualized-block-surface {
+  box-sizing: border-box;
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
 .editor-virtualized-row-chunk {
   white-space: pre;
 }

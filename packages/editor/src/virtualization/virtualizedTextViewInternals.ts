@@ -10,6 +10,7 @@ import type {
   HighlightRegistry,
   MountedVirtualizedTextRow,
   TokenGroup,
+  VirtualizedBlockRowMount,
   VirtualizedFoldMarker,
   VirtualizedTextRowDecoration,
 } from "./virtualizedTextViewTypes";
@@ -76,6 +77,7 @@ export interface VirtualizedTextViewInternal {
   readonly horizontalOverscanColumns: number;
   readonly onFoldToggle: ((marker: VirtualizedFoldMarker) => void) | null;
   readonly onViewportChange: (() => void) | null;
+  readonly blockRowMount: VirtualizedBlockRowMount | null;
   readonly cursorLineHighlight: Required<EditorCursorLineHighlightOptions>;
   readonly rowElements: Map<number, MountedVirtualizedTextRow>;
   readonly rowPool: MountedVirtualizedTextRow[];

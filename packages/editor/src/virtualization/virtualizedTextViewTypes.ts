@@ -1,6 +1,6 @@
 import type { EditorGutterContribution, EditorGutterWidthContext } from "../plugins";
 import type { EditorTokenStyle } from "../tokens";
-import type { BlockRow } from "../displayTransforms";
+import type { BlockRow, BlockRowPlacement } from "../displayTransforms";
 import type { BrowserTextMetrics } from "./browserMetrics";
 import type { FixedRowVisibleRange } from "./fixedRowVirtualizer";
 
@@ -30,11 +30,29 @@ export type VirtualizedTextViewOptions = {
   readonly onViewportChange?: () => void;
   readonly wrap?: boolean;
   readonly blockRows?: readonly BlockRow[];
+  readonly blockRowMount?: VirtualizedBlockRowMount;
   readonly gutterContributions?: readonly EditorGutterContribution[];
   readonly cursorLineHighlight?: EditorCursorLineHighlightOptions;
   readonly hiddenCharacters?: HiddenCharactersMode;
   readonly tabSize?: number;
   readonly textMetrics?: BrowserTextMetrics;
+};
+
+export type VirtualizedBlockRowMount = (
+  container: HTMLElement,
+  context: VirtualizedBlockRowMountContext,
+) => void | VirtualizedBlockRowDisposable;
+
+export type VirtualizedBlockRowDisposable = {
+  dispose(): void;
+};
+
+export type VirtualizedBlockRowMountContext = {
+  readonly id: string;
+  readonly anchorBufferRow: number;
+  readonly placement: BlockRowPlacement;
+  readonly startOffset: number;
+  readonly endOffset: number;
 };
 
 export type HiddenCharactersMode = "hidden" | "show" | "show-on-selection";
@@ -173,6 +191,9 @@ export type MountedVirtualizedTextRow = VirtualizedTextRow & {
   readonly selectionLayerElement: HTMLDivElement;
   readonly foldPlaceholderElement: HTMLSpanElement;
   readonly hiddenCharactersLayerElement: HTMLDivElement;
+  readonly blockContainerElement: HTMLDivElement;
+  readonly blockMountDisposable: VirtualizedBlockRowDisposable | null;
+  readonly blockMountKey: string;
   readonly top: number;
   readonly height: number;
   readonly textRevision: number;

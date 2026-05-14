@@ -10,7 +10,10 @@ import {
   resolveSelection,
   setEditorSyntaxSessionFactory,
   setHighlightRegistry,
+  type EditorBlock,
+  type EditorBlockAnchor,
   type DocumentSessionChange,
+  type EditorBlockProviderContext,
   type EditorHighlightResult,
   type EditorHighlighterSession,
   type EditorPlugin,
@@ -198,6 +201,26 @@ function hiddenCharacterKinds(): string[] {
   return [
     ...document.querySelectorAll<HTMLElement>(".editor-virtualized-hidden-character-marker"),
   ].map((marker) => marker.dataset.editorHiddenCharacter!);
+}
+
+function blockSurfaceTexts(): string[] {
+  return [...document.querySelectorAll<HTMLElement>("[data-test-block-surface]")].map(
+    (surface) => surface.textContent ?? "",
+  );
+}
+
+function blockFixture(id: string, anchor: EditorBlockAnchor) {
+  return {
+    id,
+    anchor,
+    top: {
+      height: { px: 24 },
+      mount: (container, context) => {
+        container.dataset.testBlockSurface = context.surface;
+        container.textContent = context.blockId;
+      },
+    },
+  } satisfies EditorBlock;
 }
 
 function rowTextNode(row = 0): Text {
@@ -1264,6 +1287,171 @@ describe("Editor", () => {
       editor.dispose();
 
       expect(events.at(-1)?.kind).toBe("dispose");
+    });
+  });
+
+  describe("editor block provider plugins", () => {
+    it("mounts fixed top and bottom block surfaces in the editor layout", () => {
+      const events: ViewContributionEvent[] = [];
+      const mounted: string[] = [];
+      let providerContext: EditorBlockProviderContext | null = null;
+      const plugin: EditorPlugin = {
+        activate: (context) =>
+          context.registerBlockProvider({
+            getBlocks: (context) => {
+              providerContext = context;
+              return [
+                {
+                  id: "file",
+                  anchor: { row: 0 },
+                  top: {
+                    height: { px: 30 },
+                    mount: (container, context) => {
+                      mounted.push(`${context.surface}:${context.documentId}:${context.text}`);
+                      container.dataset.testBlockSurface = context.surface;
+                      container.textContent = `${context.surface}:${context.blockId}`;
+                    },
+                  },
+                },
+                {
+                  id: "range",
+                  anchor: { startRow: 0, endRow: 1 },
+                  bottom: {
+                    height: { px: 26 },
+                    mount: (container, context) => {
+                      mounted.push(`${context.surface}:${context.documentId}:${context.text}`);
+                      container.dataset.testBlockSurface = context.surface;
+                      container.textContent = `${context.surface}:${context.blockId}`;
+                    },
+                  },
+                },
+              ];
+            },
+          }),
+      };
+      editor.dispose();
+      editor = new Editor(container, {
+        lineHeight: 20,
+        plugins: [plugin, createViewContributionPlugin(events)],
+      });
+
+      editor.openDocument({ documentId: "doc.txt", text: "one\ntwo" });
+
+      const snapshot = events.at(-1)?.snapshot;
+      expect(providerContext).toMatchObject({
+        documentId: "doc.txt",
+        lineCount: 2,
+        text: "one\ntwo",
+      });
+      expect(mounted).toEqual(["top:doc.txt:one\ntwo", "bottom:doc.txt:one\ntwo"]);
+      expect(blockSurfaceTexts()).toEqual(["top:file", "bottom:range"]);
+      expect(snapshot?.totalHeight).toBe(96);
+      expect(snapshot?.visibleRows.map((row) => row.kind)).toEqual([
+        "block",
+        "text",
+        "text",
+        "block",
+      ]);
+    });
+
+    it("disposes mounted block surfaces when providers are removed", () => {
+      const disposed: string[] = [];
+      let invalidationDisposed = false;
+      const plugin: EditorPlugin = {
+        activate: (context) =>
+          context.registerBlockProvider({
+            getBlocks: () => [
+              {
+                id: "file",
+                anchor: { row: 0 },
+                top: {
+                  height: { px: 24 },
+                  mount: (container, context) => {
+                    container.dataset.testBlockSurface = context.surface;
+                    container.textContent = context.blockId;
+                    return {
+                      dispose: () => disposed.push(context.blockId),
+                    };
+                  },
+                },
+              },
+            ],
+            onDidChangeBlocks: () => ({
+              dispose: () => {
+                invalidationDisposed = true;
+              },
+            }),
+          }),
+      };
+      editor.dispose();
+      editor = new Editor(container, { defaultText: "one\ntwo", plugins: [plugin] });
+
+      expect(blockSurfaceTexts()).toEqual(["file"]);
+
+      editor.setPlugins([]);
+
+      expect(disposed).toEqual(["file"]);
+      expect(invalidationDisposed).toBe(true);
+      expect(blockSurfaceTexts()).toEqual([]);
+    });
+
+    it("recomputes block rows when a provider invalidates", () => {
+      let listener: () => void = () => undefined;
+      let blockId = "first";
+      const disposed: string[] = [];
+      const plugin: EditorPlugin = {
+        activate: (context) =>
+          context.registerBlockProvider({
+            getBlocks: () => [
+              {
+                id: blockId,
+                anchor: { row: 0 },
+                top: {
+                  height: { px: 24 },
+                  mount: (container, context) => {
+                    container.dataset.testBlockSurface = context.surface;
+                    container.textContent = context.blockId;
+                    return {
+                      dispose: () => disposed.push(context.blockId),
+                    };
+                  },
+                },
+              },
+            ],
+            onDidChangeBlocks: (nextListener) => {
+              listener = nextListener;
+              return { dispose: () => undefined };
+            },
+          }),
+      };
+      editor.dispose();
+      editor = new Editor(container, { defaultText: "one\ntwo", plugins: [plugin] });
+
+      blockId = "second";
+      listener();
+
+      expect(disposed).toEqual(["first"]);
+      expect(blockSurfaceTexts()).toEqual(["second"]);
+    });
+
+    it("ignores blocks with invalid ids or anchors", () => {
+      const plugin: EditorPlugin = {
+        activate: (context) =>
+          context.registerBlockProvider({
+            getBlocks: () => [
+              blockFixture("", { row: 0 }),
+              blockFixture("negative", { row: -1 }),
+              blockFixture("past-end", { row: 2 }),
+              blockFixture("fractional", { row: 0.5 }),
+              blockFixture("reversed", { startRow: 1, endRow: 0 }),
+              blockFixture("valid", { row: 1 }),
+            ],
+          }),
+      };
+      editor.dispose();
+      editor = new Editor(container, { defaultText: "one\ntwo", plugins: [plugin] });
+
+      expect(blockSurfaceTexts()).toEqual(["valid"]);
     });
   });
 

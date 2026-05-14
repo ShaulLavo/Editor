@@ -54,6 +54,7 @@ export type DisplayBlockRow = {
   readonly placement: BlockRowPlacement;
   readonly unitIndex: number;
   readonly heightRows: number;
+  readonly heightPx?: number;
   readonly startOffset: number;
   readonly endOffset: number;
   readonly text: string;
@@ -68,6 +69,7 @@ export type BlockRow = {
   readonly anchorBufferRow: number;
   readonly placement: BlockRowPlacement;
   readonly heightRows: number;
+  readonly heightPx?: number;
   readonly text?: string;
 };
 
@@ -307,6 +309,7 @@ const appendBlockRows = (
 
 const appendBlockRowUnits = (rows: DisplayRow[], block: BlockRow, offset: number): void => {
   const heightRows = normalizeHeightRows(block.heightRows);
+  const heightPx = normalizeHeightPx(block.heightPx);
   rows.push({
     kind: "block",
     id: block.id,
@@ -315,6 +318,7 @@ const appendBlockRowUnits = (rows: DisplayRow[], block: BlockRow, offset: number
     placement: block.placement,
     unitIndex: 0,
     heightRows,
+    ...(heightPx === undefined ? {} : { heightPx }),
     startOffset: offset,
     endOffset: offset,
     text: block.text ?? "",
@@ -497,6 +501,12 @@ const normalizeWrapColumn = (wrapColumn: number): number => {
 const normalizeHeightRows = (heightRows: number): number => {
   if (!Number.isFinite(heightRows) || heightRows <= 0) return 1;
   return Math.max(1, Math.floor(heightRows));
+};
+
+const normalizeHeightPx = (heightPx: number | undefined): number | undefined => {
+  if (heightPx === undefined) return undefined;
+  if (!Number.isFinite(heightPx) || heightPx <= 0) return undefined;
+  return heightPx;
 };
 
 const clampColumn = (value: number, max: number): number => {
