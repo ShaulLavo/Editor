@@ -12,6 +12,7 @@ import {
   setHighlightRegistry,
   type EditorBlock,
   type EditorBlockAnchor,
+  type EditorBlockMountContext,
   type DocumentSessionChange,
   type EditorBlockProviderContext,
   type EditorHighlightResult,
@@ -394,6 +395,12 @@ function tokenHighlightRanges(): AbstractRange[] {
 
 function selectionRanges(): HTMLElement[] {
   return [...document.querySelectorAll<HTMLElement>(".editor-virtualized-selection-range")];
+}
+
+function rowsContainingText(text: string): HTMLElement[] {
+  return [...document.querySelectorAll<HTMLElement>("[data-editor-virtual-row]")].filter((row) =>
+    row.textContent?.includes(text),
+  );
 }
 
 function foldToggle(): HTMLButtonElement {
@@ -1561,6 +1568,108 @@ describe("Editor", () => {
       expect(thirdRow?.style.paddingLeft).toBe("");
     });
 
+    it("composes notebook-shaped top, bottom, left, and right surfaces on one block", async () => {
+      let outputHeight = 86;
+      let outputContext: EditorBlockMountContext | null = null;
+      const events: ViewContributionEvent[] = [];
+      const mounted: string[] = [];
+      const plugin: EditorPlugin = {
+        activate: (context) =>
+          context.registerBlockProvider({
+            getBlocks: () => [
+              {
+                id: "cell:one",
+                anchor: { startRow: 1, endRow: 2 },
+                top: {
+                  height: { px: 34 },
+                  mount: (container, context) => {
+                    mounted.push(`${context.surface}:${context.blockId}:${context.documentId}`);
+                    container.dataset.testBlockSurface = context.surface;
+                    container.textContent = "toolbar";
+                  },
+                },
+                bottom: {
+                  height: { minPx: 48, maxPx: 96 },
+                  mount: (container, context) => {
+                    outputContext = context;
+                    mounted.push(`${context.surface}:${context.blockId}:${context.documentId}`);
+                    container.dataset.testBlockSurface = context.surface;
+                    container.textContent = "output";
+                    container.getBoundingClientRect = () =>
+                      ({ height: outputHeight, width: 0 }) as DOMRect;
+                  },
+                },
+                left: {
+                  width: { px: 40 },
+                  mount: (container, context) => {
+                    mounted.push(`${context.surface}:${context.blockId}:${context.documentId}`);
+                    container.dataset.testBlockSurface = context.surface;
+                    container.textContent = "run";
+                  },
+                },
+                right: {
+                  width: { px: 24 },
+                  mount: (container, context) => {
+                    mounted.push(`${context.surface}:${context.blockId}:${context.documentId}`);
+                    container.dataset.testBlockSurface = context.surface;
+                    container.textContent = "metadata";
+                  },
+                },
+              },
+            ],
+          }),
+      };
+      editor.dispose();
+      editor = new Editor(container, {
+        lineHeight: 20,
+        plugins: [plugin, createViewContributionPlugin(events)],
+      });
+
+      editor.openDocument({
+        documentId: "notebook.md",
+        text: "intro\ncode 1\ncode 2\noutro",
+      });
+      await flushTimers();
+
+      const snapshot = events.at(-1)?.snapshot;
+      const codeRows = rowsContainingText("code ");
+      expect(new Set(mounted)).toEqual(
+        new Set([
+          "top:cell:one:notebook.md",
+          "bottom:cell:one:notebook.md",
+          "left:cell:one:notebook.md",
+          "right:cell:one:notebook.md",
+        ]),
+      );
+      expect(blockSurfaceTexts().toSorted()).toEqual(["metadata", "output", "run", "toolbar"]);
+      expect(snapshot?.visibleRows.map((row) => row.kind)).toEqual([
+        "text",
+        "block",
+        "text",
+        "text",
+        "block",
+        "text",
+      ]);
+      expect(
+        snapshot?.visibleRows.filter((row) => row.kind === "block").map((row) => row.height),
+      ).toEqual([34, 86]);
+      expect(snapshot?.totalHeight).toBe(200);
+      expect(codeRows.map((row) => row.style.paddingLeft)).toEqual(["40px", "40px"]);
+      expect(codeRows.map((row) => row.style.paddingRight)).toEqual(["24px", "24px"]);
+
+      outputHeight = 128;
+      outputContext?.requestMeasure();
+      await flushTimers();
+
+      expect(
+        events
+          .at(-1)
+          ?.snapshot?.visibleRows.filter((row) => row.kind === "block")
+          .map((row) => row.height),
+      ).toEqual([34, 96]);
+      expect(events.at(-1)?.snapshot?.totalHeight).toBe(210);
+    });
+
     it("remeasures horizontal block lanes and clamps their reserved width", async () => {
       let measuredWidth = 34;
       let blockContext: EditorBlockMountContext | null = null;
@@ -1702,6 +1811,52 @@ describe("Editor", () => {
       editor = new Editor(container, { defaultText: "one\ntwo", plugins: [plugin] });
 
       expect(blockSurfaceTexts()).toEqual(["valid"]);
+    });
+
+    it("mounts blocks for readonly and editable documents", () => {
+      const plugin: EditorPlugin = {
+        activate: (context) =>
+          context.registerBlockProvider({
+            getBlocks: (providerContext) => [
+              {
+                id: "header",
+                anchor: { row: 0 },
+                top: {
+                  height: { px: 24 },
+                  mount: (container, context) => {
+                    container.dataset.testBlockSurface = context.surface;
+                    container.textContent = `${context.documentId}:${providerContext.text}`;
+                  },
+                },
+              },
+            ],
+          }),
+      };
+      editor.dispose();
+      editor = new Editor(container, {
+        editability: "readonly",
+        plugins: [plugin],
+      });
+
+      editor.openDocument({ documentId: "readonly.txt", text: "alpha" });
+      editor.edit({ from: 5, to: 5, text: "!" });
+
+      expect(editor.getState().editability).toBe("readonly");
+      expect(editor.getText()).toBe("alpha");
+      expect(blockSurfaceTexts()).toEqual(["readonly.txt:alpha"]);
+
+      editor.dispose();
+      editor = new Editor(container, {
+        editability: "editable",
+        plugins: [plugin],
+      });
+
+      editor.openDocument({ documentId: "editable.txt", text: "beta" });
+      editor.edit({ from: 4, to: 4, text: "!" });
+
+      expect(editor.getState().editability).toBe("editable");
+      expect(editor.getText()).toBe("beta!");
+      expect(blockSurfaceTexts()).toEqual(["editable.txt:beta!"]);
     });
   });
 

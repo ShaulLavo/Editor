@@ -1,5 +1,4 @@
 import type { DocumentSession, DocumentSessionChange } from "../documentSession";
-import { createDocumentSession, createStaticDocumentSession } from "../documentSession";
 import { childContainingNode, childNodeIndex, elementBoundaryToTextOffset } from "./domBoundary";
 import { projectSyntaxFoldsThroughLineEdit } from "./folds";
 import { EditorFoldState } from "./foldState";
@@ -23,17 +22,69 @@ import {
   getEditorSyntaxSessionFactory,
   getHighlightRegistry,
   nextEditorHighlightPrefix,
-  observeEditorMountTiming,
   recordEditorMountTiming,
-  resetEditorInstanceCount,
-  setEditorSyntaxSessionFactory,
-  setHighlightRegistry,
 } from "./runtime";
 import {
   DOCUMENT_START_SCROLL_POSITION,
   normalizeScrollOffset,
   preservedScrollPosition,
 } from "./scroll";
+import {
+  addEditorBlockMeasurementKey,
+  applyEditorBlockMeasurementBounds,
+  clampEditorBlockMeasuredSize,
+  createEditorBlockResizeObserver,
+  disposableOnce,
+  editorBlockSurfaceAnchorRange,
+  editorBlockSurfaceAnchorRow,
+  editorBlockSurfaceLaneId,
+  editorBlockSurfaceMeasureKey,
+  editorBlockSurfacePlacement,
+  editorBlockSurfaceRowId,
+  elementMeasuredEditorBlockSize,
+  initialMeasuredEditorBlockSize,
+  resizeObserverMeasuredSize,
+  resolveEditorBlockSize,
+  validEditorBlockId,
+  type EditorBlockMeasurement,
+  type ResolvedEditorBlockLaneSurface,
+  type ResolvedEditorBlockSize,
+  type ResolvedEditorBlockSurface,
+} from "./editorBlockSurfaces";
+import {
+  DEFAULT_DOCUMENT_MODE,
+  DEFAULT_EDITABILITY,
+  createEditorDocumentSession,
+  normalizeEditorDocumentMode,
+  normalizeEditorEditability,
+  normalizeEditorSelectionSyncMode,
+  type ResetOwnedDocumentOptions,
+} from "./editorDocument";
+import {
+  capitalize,
+  eventTargetInsideBlockSurface,
+  indentTimingName,
+  removeArrayItem,
+  selectionGoalColumn,
+  syntaxRefreshDelay,
+  viewContributionKindForChange,
+  type SessionChangeOptions,
+} from "./editorUtils";
+import { EDITOR_FIND_FEATURE_ID, type EditorFindFeature } from "./findFeature";
+import { foldCandidateAtLocation, type FoldOperation } from "./foldOperations";
+import {
+  findAllExactOccurrences,
+  findNextExactOccurrence,
+  findNextExactOccurrenceFromRange,
+  getOccurrenceQuery,
+  occurrenceQueryForSelection,
+  occurrenceSelectTimingName,
+  type OccurrenceQuery,
+  type OccurrenceSelectionChange,
+} from "./occurrences";
+import { groupedRangeDecorations, sameEditorRangeDecorations } from "./rangeDecorations";
+import { selectionRevealOffset, type EditorSelectionRevealTarget } from "./selectionReveal";
+import { syncTextEdit } from "./textEdits";
 import type {
   EditorDocumentMode,
   EditorEditInput,
@@ -56,14 +107,9 @@ import { offsetToPoint } from "../pieceTable/positions";
 import { getPieceTableText } from "../pieceTable/reads";
 import type {
   EditorBlock,
-  EditorBlockAnchor,
-  EditorBlockHorizontalSurface,
   EditorBlockMountContext,
   EditorBlockProvider,
   EditorBlockProviderContext,
-  EditorBlockSize,
-  EditorBlockSurfaceSlot,
-  EditorBlockVerticalSurface,
 } from "../editorBlocks";
 import {
   EditorPluginHost,
@@ -113,305 +159,6 @@ import {
   type VirtualizedFoldMarker,
   type VirtualizedTextRowDecoration,
 } from "../virtualization/virtualizedTextView";
-
-const SYNTAX_EDIT_DEBOUNCE_MS = 75;
-export {
-  observeEditorMountTiming,
-  resetEditorInstanceCount,
-  setEditorSyntaxSessionFactory,
-  setHighlightRegistry,
-};
-
-const syntaxRefreshDelay = (change: DocumentSessionChange | null): number => {
-  if (!change || change.edits.length === 0) return 0;
-  return SYNTAX_EDIT_DEBOUNCE_MS;
-};
-
-const selectionRevealOffset = (
-  reveal: EditorSelectionRevealTarget | undefined,
-  fallback: number | undefined,
-): number | undefined => {
-  if (typeof reveal === "number") return reveal;
-  if (reveal?.reveal === false) return undefined;
-
-  return reveal?.revealOffset ?? fallback;
-};
-
-type SessionChangeOptions = {
-  readonly syncDomSelection?: boolean;
-  readonly revealOffset?: number;
-  readonly revealBlock?: "nearest" | "end";
-};
-
-export type EditorSelectionRevealOptions = {
-  readonly reveal?: boolean;
-  readonly revealOffset?: number;
-};
-
-export type EditorSelectionRevealTarget = number | EditorSelectionRevealOptions;
-
-type ResetOwnedDocumentOptions = {
-  readonly documentId: string | null;
-  readonly persistentIdentity: boolean;
-  readonly scrollPosition?: EditorScrollPosition;
-};
-
-type RangeDecorationGroup = {
-  readonly name: string;
-  readonly ranges: EditorRangeDecoration[];
-  readonly style: ReturnType<typeof rangeDecorationStyle>;
-};
-
-type PendingRangeDecorationGroup = RangeDecorationGroup & {
-  readonly key: string;
-};
-
-const EDITOR_FIND_FEATURE_ID = "editor.find";
-const DEFAULT_EDITABILITY: EditorEditability = "editable";
-const DEFAULT_DOCUMENT_MODE: EditorDocumentMode = "session";
-const DEFAULT_SELECTION_SYNC_MODE: EditorSelectionSyncMode = "sync";
-
-type EditorFindFeature = {
-  openFind(): boolean;
-  openFindReplace(): boolean;
-  closeFind(): boolean;
-  findNext(): boolean;
-  findPrevious(): boolean;
-  replaceOne(): boolean;
-  replaceAll(): boolean;
-  selectAllMatches(): boolean;
-};
-
-type FoldOperation = "fold" | "unfold" | "toggle";
-
-type ResolvedEditorBlockSurface = {
-  readonly rowId: string;
-  readonly block: EditorBlock;
-  readonly surface: EditorBlockHorizontalSurface;
-  readonly slot: "top" | "bottom";
-  readonly anchorBufferRow: number;
-  readonly size: ResolvedEditorBlockSize;
-};
-
-type ResolvedEditorBlockLaneSurface = {
-  readonly laneId: string;
-  readonly block: EditorBlock;
-  readonly surface: EditorBlockVerticalSurface;
-  readonly slot: "left" | "right";
-  readonly startBufferRow: number;
-  readonly endBufferRow: number;
-  readonly size: ResolvedEditorBlockSize;
-};
-
-type ResolvedEditorBlockSize = {
-  readonly px: number;
-  readonly measure: EditorBlockMeasurement | null;
-};
-
-type EditorBlockMeasurement = {
-  readonly key: string;
-  readonly dimension: "height" | "width";
-  readonly minPx: number | null;
-  readonly maxPx: number | null;
-};
-
-function editorBlockSurfaceRowId(
-  revision: number,
-  providerIndex: number,
-  blockId: string,
-  slot: EditorBlockSurfaceSlot,
-): string {
-  return `${revision}:${providerIndex}:${blockId}:${slot}`;
-}
-
-function editorBlockSurfaceLaneId(
-  revision: number,
-  providerIndex: number,
-  blockId: string,
-  slot: EditorBlockSurfaceSlot,
-): string {
-  return `${revision}:${providerIndex}:${blockId}:${slot}`;
-}
-
-function editorBlockSurfaceMeasureKey(
-  providerIndex: number,
-  blockId: string,
-  slot: EditorBlockSurfaceSlot,
-): string {
-  return `${providerIndex}:${blockId}:${slot}`;
-}
-
-function resolveEditorBlockSize(
-  size: EditorBlockSize | undefined,
-  measureKey: string,
-  dimension: EditorBlockMeasurement["dimension"],
-  measuredSizes: ReadonlyMap<string, number>,
-): ResolvedEditorBlockSize | null {
-  if (!size) return null;
-
-  const fixedPx = positiveSizePx(size.px);
-  if (fixedPx !== null) return { px: fixedPx, measure: null };
-
-  const minPx = positiveSizePx(size.minPx);
-  const maxPx = positiveSizePx(size.maxPx);
-  if (minPx === null && maxPx === null) return null;
-  if (minPx !== null && maxPx !== null && maxPx < minPx) return null;
-
-  const measure = { key: measureKey, dimension, minPx, maxPx };
-  const measuredPx = measuredSizes.get(measureKey);
-  return { px: initialMeasuredEditorBlockSize(measure, measuredPx), measure };
-}
-
-function positiveSizePx(value: number | undefined): number | null {
-  if (typeof value !== "number") return null;
-  if (!Number.isFinite(value) || value <= 0) return null;
-  return value;
-}
-
-function initialMeasuredEditorBlockSize(
-  measurement: EditorBlockMeasurement,
-  measuredPx: number | undefined,
-): number {
-  if (measuredPx !== undefined) return clampEditorBlockMeasuredSize(measuredPx, measurement);
-  return measurement.minPx ?? measurement.maxPx ?? 1;
-}
-
-function clampEditorBlockMeasuredSize(value: number, measurement: EditorBlockMeasurement): number {
-  if (!Number.isFinite(value) || value < 0) return initialMeasuredEditorBlockSize(measurement, 0);
-
-  const min = measurement.minPx ?? 1;
-  const max = measurement.maxPx ?? Number.POSITIVE_INFINITY;
-  return Math.min(Math.max(value, min), max);
-}
-
-function addEditorBlockMeasurementKey(keys: Set<string>, size: ResolvedEditorBlockSize): void {
-  if (!size.measure) return;
-
-  keys.add(size.measure.key);
-}
-
-function applyEditorBlockMeasurementBounds(
-  container: HTMLElement,
-  measurement: EditorBlockMeasurement,
-): void {
-  const min = measurement.minPx === null ? "" : `${measurement.minPx}px`;
-  const max = measurement.maxPx === null ? "" : `${measurement.maxPx}px`;
-  if (measurement.dimension === "height") {
-    container.style.minHeight = min;
-    container.style.maxHeight = max;
-    return;
-  }
-
-  container.style.minWidth = min;
-  container.style.maxWidth = max;
-}
-
-function elementMeasuredEditorBlockSize(
-  container: HTMLElement,
-  dimension: EditorBlockMeasurement["dimension"],
-): number {
-  const rect = container.getBoundingClientRect();
-  const rectSize = dimension === "height" ? rect.height : rect.width;
-  if (rectSize > 0) return rectSize;
-
-  return dimension === "height" ? container.scrollHeight : container.scrollWidth;
-}
-
-function resizeObserverMeasuredSize(
-  entries: readonly ResizeObserverEntry[],
-  container: HTMLElement,
-  dimension: EditorBlockMeasurement["dimension"],
-): number | null {
-  const entry = resizeObserverEntryForElement(entries, container);
-  if (!entry) return null;
-
-  const boxSize = resizeObserverBoxSize(entry.contentBoxSize);
-  if (boxSize) return dimension === "height" ? boxSize.height : boxSize.width;
-
-  return dimension === "height" ? entry.contentRect.height : entry.contentRect.width;
-}
-
-function resizeObserverEntryForElement(
-  entries: readonly ResizeObserverEntry[],
-  container: HTMLElement,
-): ResizeObserverEntry | null {
-  for (const entry of entries) {
-    if (entry.target === container) return entry;
-  }
-
-  return entries[0] ?? null;
-}
-
-function resizeObserverBoxSize(
-  size: ResizeObserverEntry["contentBoxSize"],
-): { readonly width: number; readonly height: number } | null {
-  const box = Array.isArray(size) ? size[0] : size;
-  if (!box) return null;
-
-  return { width: box.inlineSize, height: box.blockSize };
-}
-
-function createEditorBlockResizeObserver(callback: ResizeObserverCallback): ResizeObserver | null {
-  if (typeof ResizeObserver === "undefined") return null;
-
-  return new ResizeObserver(callback);
-}
-
-function disposableOnce(dispose: () => void): EditorDisposable {
-  let disposed = false;
-
-  return {
-    dispose: () => {
-      if (disposed) return;
-
-      disposed = true;
-      dispose();
-    },
-  };
-}
-
-function validEditorBlockId(id: string): boolean {
-  return id.length > 0;
-}
-
-function editorBlockSurfaceAnchorRow(
-  anchor: EditorBlockAnchor,
-  slot: "top" | "bottom",
-  lineCount: number,
-): number | null {
-  if (!validEditorBlockAnchor(anchor, lineCount)) return null;
-  if ("row" in anchor) return anchor.row;
-  if (slot === "top") return anchor.startRow;
-  return anchor.endRow;
-}
-
-function editorBlockSurfaceAnchorRange(
-  anchor: EditorBlockAnchor,
-  lineCount: number,
-): { readonly startRow: number; readonly endRow: number } | null {
-  if (!validEditorBlockAnchor(anchor, lineCount)) return null;
-  if ("row" in anchor) return { startRow: anchor.row, endRow: anchor.row };
-  return { startRow: anchor.startRow, endRow: anchor.endRow };
-}
-
-function validEditorBlockAnchor(anchor: EditorBlockAnchor, lineCount: number): boolean {
-  const maxRow = Math.max(0, lineCount - 1);
-  if ("row" in anchor) return validEditorBlockRow(anchor.row, maxRow);
-  if (!validEditorBlockRow(anchor.startRow, maxRow)) return false;
-  if (!validEditorBlockRow(anchor.endRow, maxRow)) return false;
-  return anchor.startRow <= anchor.endRow;
-}
-
-function validEditorBlockRow(row: number, maxRow: number): boolean {
-  if (!Number.isInteger(row)) return false;
-  if (row < 0) return false;
-  return row <= maxRow;
-}
-
-function editorBlockSurfacePlacement(slot: "top" | "bottom"): BlockRow["placement"] {
-  if (slot === "top") return "before";
-  return "after";
-}
 
 export class Editor {
   private readonly container: HTMLElement;
@@ -3071,426 +2818,4 @@ export class Editor {
     if ((position & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return this.text.length;
     return null;
   }
-}
-
-function viewContributionKindForChange(
-  change: DocumentSessionChange,
-): EditorViewContributionUpdateKind {
-  if (change.kind === "selection") return "selection";
-  return "content";
-}
-
-function indentTimingName(direction: "indent" | "outdent"): string {
-  return direction === "indent" ? "input.indent" : "input.outdent";
-}
-
-function removeArrayItem<T>(items: T[], item: T): void {
-  const index = items.indexOf(item);
-  if (index === -1) return;
-
-  items.splice(index, 1);
-}
-
-function eventTargetInsideBlockSurface(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false;
-  return target.closest("[data-editor-block-surface]") !== null;
-}
-
-type ExactOccurrenceRange = {
-  readonly start: number;
-  readonly end: number;
-};
-
-type OccurrenceSelectionChange = {
-  readonly change: DocumentSessionChange;
-  readonly revealOffset: number;
-};
-
-type OccurrenceQuery = {
-  readonly query: string;
-  readonly range: ExactOccurrenceRange;
-};
-
-function getOccurrenceQuery(text: string, selections: readonly ResolvedSelection[]): string | null {
-  const selection = selections.find((candidate) => !candidate.collapsed);
-  if (!selection) return null;
-
-  return text.slice(selection.startOffset, selection.endOffset);
-}
-
-function occurrenceQueryForSelection(
-  text: string,
-  selection: ResolvedSelection,
-): OccurrenceQuery | null {
-  if (!selection.collapsed) {
-    const query = text.slice(selection.startOffset, selection.endOffset);
-    if (query.length === 0) return null;
-    return { query, range: { start: selection.startOffset, end: selection.endOffset } };
-  }
-
-  const range = wordRangeAtOffset(text, selection.headOffset);
-  if (range.start === range.end) return null;
-  return { query: text.slice(range.start, range.end), range };
-}
-
-function findAllExactOccurrences(text: string, query: string): readonly ExactOccurrenceRange[] {
-  if (query.length === 0) return [];
-
-  const ranges: ExactOccurrenceRange[] = [];
-  let index = text.indexOf(query);
-  while (index !== -1) {
-    ranges.push({ start: index, end: index + query.length });
-    index = text.indexOf(query, index + query.length);
-  }
-  return ranges;
-}
-
-function findNextExactOccurrence(
-  text: string,
-  query: string,
-  selections: readonly ResolvedSelection[],
-): ExactOccurrenceRange | null {
-  if (query.length === 0) return null;
-
-  const selected = selections.map((selection) => ({
-    start: selection.startOffset,
-    end: selection.endOffset,
-  }));
-  const searchStart = selected.reduce((offset, range) => Math.max(offset, range.end), 0);
-  return (
-    findExactOccurrenceFrom(text, query, selected, searchStart) ??
-    findExactOccurrenceFrom(text, query, selected, 0, searchStart)
-  );
-}
-
-function findNextExactOccurrenceFromRange(
-  text: string,
-  query: string,
-  selected: readonly ExactOccurrenceRange[],
-  range: ExactOccurrenceRange,
-): ExactOccurrenceRange | null {
-  if (query.length === 0) return null;
-
-  return (
-    findExactOccurrenceFrom(text, query, selected, range.end) ??
-    findExactOccurrenceFrom(text, query, selected, 0, range.end)
-  );
-}
-
-function findExactOccurrenceFrom(
-  text: string,
-  query: string,
-  selected: readonly ExactOccurrenceRange[],
-  start: number,
-  end = text.length,
-): ExactOccurrenceRange | null {
-  let index = text.indexOf(query, start);
-
-  while (index !== -1 && index < end) {
-    const range = { start: index, end: index + query.length };
-    if (!selected.some((selection) => rangesOverlap(selection, range))) return range;
-    index = text.indexOf(query, index + 1);
-  }
-
-  return null;
-}
-
-function rangesOverlap(left: ExactOccurrenceRange, right: ExactOccurrenceRange): boolean {
-  return left.start < right.end && right.start < left.end;
-}
-
-function foldCandidateAtLocation(
-  folds: readonly FoldRange[],
-  row: number,
-  offset: number,
-  isCollapsed: (fold: FoldRange) => boolean,
-  operation: FoldOperation,
-): FoldRange | null {
-  let candidate: FoldRange | null = null;
-
-  for (const fold of folds) {
-    if (!foldContainsLocation(fold, row, offset)) continue;
-    if (!foldMatchesOperation(fold, isCollapsed, operation)) continue;
-    if (candidate && compareFoldCandidates(candidate, fold, row, isCollapsed, operation) <= 0)
-      continue;
-    candidate = fold;
-  }
-
-  return candidate;
-}
-
-function foldContainsLocation(fold: FoldRange, row: number, offset: number): boolean {
-  if (fold.startLine === row) return true;
-  return offset >= fold.startIndex && offset < fold.endIndex;
-}
-
-function foldMatchesOperation(
-  fold: FoldRange,
-  isCollapsed: (fold: FoldRange) => boolean,
-  operation: FoldOperation,
-): boolean {
-  const collapsed = isCollapsed(fold);
-  if (operation === "fold") return !collapsed;
-  if (operation === "unfold") return collapsed;
-  return true;
-}
-
-function compareFoldCandidates(
-  left: FoldRange,
-  right: FoldRange,
-  row: number,
-  isCollapsed: (fold: FoldRange) => boolean,
-  operation: FoldOperation,
-): number {
-  const startRowDelta = foldStartRowScore(left, row) - foldStartRowScore(right, row);
-  if (startRowDelta !== 0) return startRowDelta;
-
-  const collapsedDelta =
-    foldCollapsedScore(left, isCollapsed, operation) -
-    foldCollapsedScore(right, isCollapsed, operation);
-  if (collapsedDelta !== 0) return collapsedDelta;
-
-  const spanDelta = foldSpanCandidateDelta(left, right, isCollapsed, operation);
-  if (spanDelta !== 0) return spanDelta;
-
-  return left.startIndex - right.startIndex;
-}
-
-function foldCollapsedScore(
-  fold: FoldRange,
-  isCollapsed: (fold: FoldRange) => boolean,
-  operation: FoldOperation,
-): number {
-  if (operation !== "toggle") return 0;
-  return isCollapsed(fold) ? 0 : 1;
-}
-
-function foldSpanCandidateDelta(
-  left: FoldRange,
-  right: FoldRange,
-  isCollapsed: (fold: FoldRange) => boolean,
-  operation: FoldOperation,
-): number {
-  if (shouldPreferOutermostFold(left, right, isCollapsed, operation)) {
-    return foldSpan(right) - foldSpan(left);
-  }
-
-  return foldSpan(left) - foldSpan(right);
-}
-
-function shouldPreferOutermostFold(
-  left: FoldRange,
-  right: FoldRange,
-  isCollapsed: (fold: FoldRange) => boolean,
-  operation: FoldOperation,
-): boolean {
-  if (operation === "unfold") return true;
-  if (operation !== "toggle") return false;
-  return isCollapsed(left) && isCollapsed(right);
-}
-
-function foldStartRowScore(fold: FoldRange, row: number): number {
-  return fold.startLine === row ? 0 : 1;
-}
-
-function foldSpan(fold: FoldRange): number {
-  return fold.endIndex - fold.startIndex;
-}
-
-type VisualColumnView = {
-  visualColumnForOffset(offset: number): number;
-};
-
-function selectionGoalColumn(selection: ResolvedSelection, view: VisualColumnView): number {
-  if (selection.goal.kind === "horizontal") return selection.goal.x;
-  if (selection.goal.kind === "horizontalRange") return selection.goal.headX;
-  return view.visualColumnForOffset(selection.headOffset);
-}
-
-function occurrenceSelectTimingName(
-  command: "editor.action.selectHighlights" | "editor.action.changeAll",
-): string {
-  if (command === "editor.action.selectHighlights") return "input.selectHighlights";
-  return "input.changeAll";
-}
-
-function createEditorDocumentSession(
-  text: string,
-  documentMode: EditorDocumentMode,
-): DocumentSession {
-  if (documentMode === "static") return createStaticDocumentSession(text);
-  return createDocumentSession(text);
-}
-
-function syncTextEdit(current: string, next: string): TextEdit {
-  const prefixLength = commonPrefixLength(current, next);
-  const suffixLength = commonSuffixLength(current, next, prefixLength);
-  const currentEnd = current.length - suffixLength;
-  const nextEnd = next.length - suffixLength;
-
-  return {
-    from: prefixLength,
-    to: currentEnd,
-    text: next.slice(prefixLength, nextEnd),
-  };
-}
-
-function commonPrefixLength(left: string, right: string): number {
-  const maxLength = Math.min(left.length, right.length);
-  let length = 0;
-  while (length < maxLength && left.charCodeAt(length) === right.charCodeAt(length)) {
-    length += 1;
-  }
-
-  return length;
-}
-
-function commonSuffixLength(left: string, right: string, prefixLength: number): number {
-  const maxLength = Math.min(left.length, right.length) - prefixLength;
-  let length = 0;
-  while (length < maxLength) {
-    const leftIndex = left.length - length - 1;
-    const rightIndex = right.length - length - 1;
-    if (left.charCodeAt(leftIndex) !== right.charCodeAt(rightIndex)) break;
-
-    length += 1;
-  }
-
-  return length;
-}
-
-function normalizeEditorEditability(value: EditorEditability | undefined): EditorEditability {
-  if (value === "readonly") return "readonly";
-  return DEFAULT_EDITABILITY;
-}
-
-function normalizeEditorDocumentMode(value: EditorDocumentMode | undefined): EditorDocumentMode {
-  if (value === "static") return "static";
-  return DEFAULT_DOCUMENT_MODE;
-}
-
-function normalizeEditorSelectionSyncMode(
-  value: EditorSelectionSyncMode | undefined,
-): EditorSelectionSyncMode {
-  if (value === "none") return "none";
-  return DEFAULT_SELECTION_SYNC_MODE;
-}
-
-function rangeDecorationStyle(decoration: EditorRangeDecoration): {
-  readonly backgroundColor?: string;
-  readonly color?: string;
-  readonly textDecoration?: string;
-} {
-  return {
-    backgroundColor: decoration.style?.backgroundColor || undefined,
-    color: decoration.style?.color || undefined,
-    textDecoration: decoration.style?.textDecoration || undefined,
-  };
-}
-
-function groupedRangeDecorations(
-  decorations: readonly EditorRangeDecoration[],
-  highlightPrefix: string,
-): readonly RangeDecorationGroup[] {
-  const groups: PendingRangeDecorationGroup[] = [];
-
-  for (const decoration of decorations) {
-    const style = rangeDecorationStyle(decoration);
-    const key = rangeDecorationGroupKey(decoration.className, style);
-    const previous = groups.at(-1);
-    if (!previous || previous.key !== key) {
-      groups.push(rangeDecorationGroup(highlightPrefix, decoration, style, key, groups.length));
-      continue;
-    }
-
-    previous.ranges.push(decoration);
-  }
-
-  return groups;
-}
-
-function rangeDecorationGroup(
-  highlightPrefix: string,
-  decoration: EditorRangeDecoration,
-  style: ReturnType<typeof rangeDecorationStyle>,
-  key: string,
-  index: number,
-): PendingRangeDecorationGroup {
-  return {
-    key,
-    name: rangeDecorationGroupName(highlightPrefix, decoration.className, index),
-    ranges: [decoration],
-    style,
-  };
-}
-
-function rangeDecorationGroupName(
-  highlightPrefix: string,
-  className: string | undefined,
-  index: number,
-): string {
-  const semanticName = sanitizedHighlightName(className);
-  if (semanticName) return `${highlightPrefix}-range-${semanticName}-${index}`;
-  return `${highlightPrefix}-range-decoration-${index}`;
-}
-
-function rangeDecorationGroupKey(
-  className: string | undefined,
-  style: ReturnType<typeof rangeDecorationStyle>,
-): string {
-  return [
-    className ?? "",
-    style.backgroundColor ?? "",
-    style.color ?? "",
-    style.textDecoration ?? "",
-  ].join("\u0000");
-}
-
-function sameEditorRangeDecorations(
-  left: readonly EditorRangeDecoration[],
-  right: readonly EditorRangeDecoration[],
-): boolean {
-  if (left.length !== right.length) return false;
-
-  return left.every((decoration, index) => {
-    const next = right[index];
-    return next ? sameEditorRangeDecoration(decoration, next) : false;
-  });
-}
-
-function sameEditorRangeDecoration(
-  left: EditorRangeDecoration,
-  right: EditorRangeDecoration,
-): boolean {
-  if (left.start !== right.start) return false;
-  if (left.end !== right.end) return false;
-  if (left.className !== right.className) return false;
-
-  return sameRangeDecorationStyle(left, right);
-}
-
-function sameRangeDecorationStyle(
-  left: EditorRangeDecoration,
-  right: EditorRangeDecoration,
-): boolean {
-  const leftStyle = rangeDecorationStyle(left);
-  const rightStyle = rangeDecorationStyle(right);
-  if (leftStyle.backgroundColor !== rightStyle.backgroundColor) return false;
-  if (leftStyle.color !== rightStyle.color) return false;
-
-  return leftStyle.textDecoration === rightStyle.textDecoration;
-}
-
-function sanitizedHighlightName(value: string | undefined): string | null {
-  const firstClassName = value?.split(/\s+/).find(Boolean);
-  if (!firstClassName) return null;
-
-  const sanitized = firstClassName.replaceAll(/[^a-zA-Z0-9_-]/g, "-");
-  if (sanitized.length === 0) return null;
-  if (/^[a-zA-Z_]/.test(sanitized)) return sanitized;
-  return `_${sanitized}`;
-}
-
-function capitalize(value: string): string {
-  return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
 }

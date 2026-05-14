@@ -1,17 +1,22 @@
 export { createMergeConflictPlugin, EDITOR_MERGE_CONFLICT_FEATURE_ID } from "./mergeConflictPlugin";
 export {
   Editor,
+} from "./editor/Editor";
+export {
   observeEditorMountTiming,
   resetEditorInstanceCount,
   setEditorSyntaxSessionFactory,
   setHighlightRegistry,
-} from "./editor/Editor";
+} from "./editor/runtime";
 export {
   createMergeConflictDocumentText,
   parseMergeConflicts,
   resolveMergeConflict,
 } from "./mergeConflicts";
-export type { EditorSelectionRevealOptions, EditorSelectionRevealTarget } from "./editor/Editor";
+export type {
+  EditorSelectionRevealOptions,
+  EditorSelectionRevealTarget,
+} from "./editor/selectionReveal";
 export type {
   EditorChangeHandler,
   EditorDocumentMode,
