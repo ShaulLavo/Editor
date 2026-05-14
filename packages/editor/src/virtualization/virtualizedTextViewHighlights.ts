@@ -912,10 +912,7 @@ export function rebuildStyleRules(view: VirtualizedTextViewInternal): void {
   syncStyleElementConnection(view, nextRules);
 }
 
-function syncStyleElementConnection(
-  view: VirtualizedTextViewInternal,
-  rules: string,
-): void {
+function syncStyleElementConnection(view: VirtualizedTextViewInternal, rules: string): void {
   if (rules.length === 0) {
     view.styleEl.remove();
     return;
@@ -926,10 +923,7 @@ function syncStyleElementConnection(
   view.scrollElement.ownerDocument.head.appendChild(view.styleEl);
 }
 
-function rangeHighlightRule(
-  name: string,
-  style: VirtualizedTextHighlightStyle,
-): string | null {
+function rangeHighlightRule(name: string, style: VirtualizedTextHighlightStyle): string | null {
   const declarations = [];
   if (style.backgroundColor) declarations.push(`background-color: ${style.backgroundColor};`);
   if (style.color) declarations.push(`color: ${style.color};`);

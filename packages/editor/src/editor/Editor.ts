@@ -190,7 +190,7 @@ type ResolvedEditorBlockSurface = {
   readonly surface: EditorBlockHorizontalSurface;
   readonly slot: "top" | "bottom";
   readonly anchorBufferRow: number;
-  readonly heightPx: number;
+  readonly size: ResolvedEditorBlockSize;
 };
 
 type ResolvedEditorBlockLaneSurface = {
@@ -200,7 +200,19 @@ type ResolvedEditorBlockLaneSurface = {
   readonly slot: "left" | "right";
   readonly startBufferRow: number;
   readonly endBufferRow: number;
-  readonly widthPx: number;
+  readonly size: ResolvedEditorBlockSize;
+};
+
+type ResolvedEditorBlockSize = {
+  readonly px: number;
+  readonly measure: EditorBlockMeasurement | null;
+};
+
+type EditorBlockMeasurement = {
+  readonly key: string;
+  readonly dimension: "height" | "width";
+  readonly minPx: number | null;
+  readonly maxPx: number | null;
 };
 
 function editorBlockSurfaceRowId(
@@ -221,10 +233,141 @@ function editorBlockSurfaceLaneId(
   return `${revision}:${providerIndex}:${blockId}:${slot}`;
 }
 
-function fixedEditorBlockSizePx(size: EditorBlockSize | undefined): number | null {
-  if (!size || typeof size.px !== "number") return null;
-  if (!Number.isFinite(size.px) || size.px <= 0) return null;
-  return size.px;
+function editorBlockSurfaceMeasureKey(
+  providerIndex: number,
+  blockId: string,
+  slot: EditorBlockSurfaceSlot,
+): string {
+  return `${providerIndex}:${blockId}:${slot}`;
+}
+
+function resolveEditorBlockSize(
+  size: EditorBlockSize | undefined,
+  measureKey: string,
+  dimension: EditorBlockMeasurement["dimension"],
+  measuredSizes: ReadonlyMap<string, number>,
+): ResolvedEditorBlockSize | null {
+  if (!size) return null;
+
+  const fixedPx = positiveSizePx(size.px);
+  if (fixedPx !== null) return { px: fixedPx, measure: null };
+
+  const minPx = positiveSizePx(size.minPx);
+  const maxPx = positiveSizePx(size.maxPx);
+  if (minPx === null && maxPx === null) return null;
+  if (minPx !== null && maxPx !== null && maxPx < minPx) return null;
+
+  const measure = { key: measureKey, dimension, minPx, maxPx };
+  const measuredPx = measuredSizes.get(measureKey);
+  return { px: initialMeasuredEditorBlockSize(measure, measuredPx), measure };
+}
+
+function positiveSizePx(value: number | undefined): number | null {
+  if (typeof value !== "number") return null;
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return value;
+}
+
+function initialMeasuredEditorBlockSize(
+  measurement: EditorBlockMeasurement,
+  measuredPx: number | undefined,
+): number {
+  if (measuredPx !== undefined) return clampEditorBlockMeasuredSize(measuredPx, measurement);
+  return measurement.minPx ?? measurement.maxPx ?? 1;
+}
+
+function clampEditorBlockMeasuredSize(value: number, measurement: EditorBlockMeasurement): number {
+  if (!Number.isFinite(value) || value < 0) return initialMeasuredEditorBlockSize(measurement, 0);
+
+  const min = measurement.minPx ?? 1;
+  const max = measurement.maxPx ?? Number.POSITIVE_INFINITY;
+  return Math.min(Math.max(value, min), max);
+}
+
+function addEditorBlockMeasurementKey(keys: Set<string>, size: ResolvedEditorBlockSize): void {
+  if (!size.measure) return;
+
+  keys.add(size.measure.key);
+}
+
+function applyEditorBlockMeasurementBounds(
+  container: HTMLElement,
+  measurement: EditorBlockMeasurement,
+): void {
+  const min = measurement.minPx === null ? "" : `${measurement.minPx}px`;
+  const max = measurement.maxPx === null ? "" : `${measurement.maxPx}px`;
+  if (measurement.dimension === "height") {
+    container.style.minHeight = min;
+    container.style.maxHeight = max;
+    return;
+  }
+
+  container.style.minWidth = min;
+  container.style.maxWidth = max;
+}
+
+function elementMeasuredEditorBlockSize(
+  container: HTMLElement,
+  dimension: EditorBlockMeasurement["dimension"],
+): number {
+  const rect = container.getBoundingClientRect();
+  const rectSize = dimension === "height" ? rect.height : rect.width;
+  if (rectSize > 0) return rectSize;
+
+  return dimension === "height" ? container.scrollHeight : container.scrollWidth;
+}
+
+function resizeObserverMeasuredSize(
+  entries: readonly ResizeObserverEntry[],
+  container: HTMLElement,
+  dimension: EditorBlockMeasurement["dimension"],
+): number | null {
+  const entry = resizeObserverEntryForElement(entries, container);
+  if (!entry) return null;
+
+  const boxSize = resizeObserverBoxSize(entry.contentBoxSize);
+  if (boxSize) return dimension === "height" ? boxSize.height : boxSize.width;
+
+  return dimension === "height" ? entry.contentRect.height : entry.contentRect.width;
+}
+
+function resizeObserverEntryForElement(
+  entries: readonly ResizeObserverEntry[],
+  container: HTMLElement,
+): ResizeObserverEntry | null {
+  for (const entry of entries) {
+    if (entry.target === container) return entry;
+  }
+
+  return entries[0] ?? null;
+}
+
+function resizeObserverBoxSize(
+  size: ResizeObserverEntry["contentBoxSize"],
+): { readonly width: number; readonly height: number } | null {
+  const box = Array.isArray(size) ? size[0] : size;
+  if (!box) return null;
+
+  return { width: box.inlineSize, height: box.blockSize };
+}
+
+function createEditorBlockResizeObserver(callback: ResizeObserverCallback): ResizeObserver | null {
+  if (typeof ResizeObserver === "undefined") return null;
+
+  return new ResizeObserver(callback);
+}
+
+function disposableOnce(dispose: () => void): EditorDisposable {
+  let disposed = false;
+
+  return {
+    dispose: () => {
+      if (disposed) return;
+
+      disposed = true;
+      dispose();
+    },
+  };
 }
 
 function validEditorBlockId(id: string): boolean {
@@ -293,9 +436,11 @@ export class Editor {
   private readonly highlightPrefix: string;
   private readonly editorBlockSurfaces = new Map<string, ResolvedEditorBlockSurface>();
   private readonly editorBlockLaneSurfaces = new Map<string, ResolvedEditorBlockLaneSurface>();
+  private readonly editorBlockMeasuredSizes = new Map<string, number>();
   private editorBlockRows: readonly BlockRow[] = [];
   private editorBlockLanes: readonly BlockLane[] = [];
   private editorBlockRevision = 0;
+  private editorBlockMeasureTimeout: ReturnType<typeof setTimeout> | null = null;
   private text = "";
   private session: DocumentSession | null = null;
   private sessionOptions: EditorSessionOptions = {};
@@ -793,6 +938,7 @@ export class Editor {
   }
 
   dispose(): void {
+    this.cancelScheduledEditorBlockMeasurementUpdate();
     this.uninstallEditingHandlers();
     this.viewContributions.dispose();
     this.disposeEditorFeatureContributions();
@@ -1083,12 +1229,18 @@ export class Editor {
   }
 
   private clearEditorBlockRows(): void {
-    if (this.editorBlockRows.length === 0 && this.editorBlockLanes.length === 0) return;
+    if (
+      this.editorBlockRows.length === 0 &&
+      this.editorBlockLanes.length === 0 &&
+      this.editorBlockMeasuredSizes.size === 0
+    )
+      return;
 
     this.editorBlockRows = [];
     this.editorBlockLanes = [];
     this.editorBlockSurfaces.clear();
     this.editorBlockLaneSurfaces.clear();
+    this.editorBlockMeasuredSizes.clear();
     this.view.setBlockRows([]);
     this.view.setBlockLanes([]);
   }
@@ -1197,21 +1349,30 @@ export class Editor {
     surfaces: Map<string, ResolvedEditorBlockSurface>,
   ): void {
     const surface = block[slot];
-    const heightPx = fixedEditorBlockSizePx(surface?.height);
-    if (!surface || heightPx === null) return;
+    if (!surface) return;
     if (!validEditorBlockId(block.id)) return;
+
+    const measureKey = editorBlockSurfaceMeasureKey(providerIndex, block.id, slot);
+    const size = resolveEditorBlockSize(
+      surface.height,
+      measureKey,
+      "height",
+      this.editorBlockMeasuredSizes,
+    );
+    if (!size) return;
 
     const rowId = editorBlockSurfaceRowId(revision, providerIndex, block.id, slot);
     const anchorBufferRow = editorBlockSurfaceAnchorRow(block.anchor, slot, lineCount);
     if (anchorBufferRow === null) return;
 
-    surfaces.set(rowId, { rowId, block, surface, slot, anchorBufferRow, heightPx });
+    surfaces.set(rowId, { rowId, block, surface, slot, anchorBufferRow, size });
     rows.push({
       id: rowId,
       anchorBufferRow,
       placement: editorBlockSurfacePlacement(slot),
       heightRows: 1,
-      heightPx,
+      heightPx: size.px,
+      ...(size.measure ? { heightMeasured: true } : {}),
     });
   }
 
@@ -1225,9 +1386,17 @@ export class Editor {
     laneSurfaces: Map<string, ResolvedEditorBlockLaneSurface>,
   ): void {
     const surface = block[slot];
-    const widthPx = fixedEditorBlockSizePx(surface?.width);
-    if (!surface || widthPx === null) return;
+    if (!surface) return;
     if (!validEditorBlockId(block.id)) return;
+
+    const measureKey = editorBlockSurfaceMeasureKey(providerIndex, block.id, slot);
+    const size = resolveEditorBlockSize(
+      surface.width,
+      measureKey,
+      "width",
+      this.editorBlockMeasuredSizes,
+    );
+    if (!size) return;
 
     const range = editorBlockSurfaceAnchorRange(block.anchor, lineCount);
     if (range === null) return;
@@ -1240,14 +1409,15 @@ export class Editor {
       slot,
       startBufferRow: range.startRow,
       endBufferRow: range.endRow,
-      widthPx,
+      size,
     });
     lanes.push({
       id: laneId,
       startBufferRow: range.startRow,
       endBufferRow: range.endRow,
       placement: slot,
-      widthPx,
+      widthPx: size.px,
+      ...(size.measure ? { widthMeasured: true } : {}),
     });
   }
 
@@ -1263,6 +1433,7 @@ export class Editor {
     this.editorBlockLaneSurfaces.clear();
     for (const [rowId, surface] of surfaces) this.editorBlockSurfaces.set(rowId, surface);
     for (const [laneId, surface] of laneSurfaces) this.editorBlockLaneSurfaces.set(laneId, surface);
+    this.pruneMeasuredEditorBlockSizes(surfaces, laneSurfaces);
     this.view.setBlockRows(rows);
     this.view.setBlockLanes(lanes);
   }
@@ -1275,7 +1446,9 @@ export class Editor {
     if (!surface) return undefined;
 
     container.dataset.editorBlockSurface = surface.slot;
-    return surface.surface.mount(container, this.createEditorBlockMountContext(surface));
+    return this.mountEditorBlockSurface(container, surface, () =>
+      surface.surface.mount(container, this.createEditorBlockMountContext(surface, container)),
+    );
   };
 
   private readonly mountEditorBlockLane = (
@@ -1286,11 +1459,14 @@ export class Editor {
     if (!surface) return undefined;
 
     container.dataset.editorBlockSurface = surface.slot;
-    return surface.surface.mount(container, this.createEditorBlockMountContext(surface));
+    return this.mountEditorBlockSurface(container, surface, () =>
+      surface.surface.mount(container, this.createEditorBlockMountContext(surface, container)),
+    );
   };
 
   private createEditorBlockMountContext(
     surface: ResolvedEditorBlockSurface | ResolvedEditorBlockLaneSurface,
+    container: HTMLElement,
   ): EditorBlockMountContext {
     return {
       blockId: surface.block.id,
@@ -1301,12 +1477,132 @@ export class Editor {
       focusEditor: () => this.focus(),
       setSelection: (anchor, head) =>
         this.applyFindSelection(anchor, head, "editor.block.setSelection", head),
-      requestMeasure: () => this.handleEditorBlockMeasureRequest(),
+      requestMeasure: () => this.measureEditorBlockSurface(surface, container),
     };
   }
 
-  private handleEditorBlockMeasureRequest(): void {
+  private mountEditorBlockSurface(
+    container: HTMLElement,
+    surface: ResolvedEditorBlockSurface | ResolvedEditorBlockLaneSurface,
+    mount: () => void | EditorDisposable,
+  ): EditorDisposable {
+    const measurement = surface.size.measure;
+    if (!measurement) {
+      const disposable = mount();
+      return disposableOnce(() => disposable?.dispose());
+    }
+
+    applyEditorBlockMeasurementBounds(container, measurement);
+    const disposable = mount();
+
+    const observer = createEditorBlockResizeObserver((entries) => {
+      const measuredSize = resizeObserverMeasuredSize(entries, container, measurement.dimension);
+      if (measuredSize === null) return;
+
+      this.setMeasuredEditorBlockSize(measurement, measuredSize);
+    });
+    observer?.observe(container);
+    this.measureEditorBlockSurface(surface, container);
+
+    return disposableOnce(() => {
+      observer?.disconnect();
+      disposable?.dispose();
+    });
+  }
+
+  private measureEditorBlockSurface(
+    surface: ResolvedEditorBlockSurface | ResolvedEditorBlockLaneSurface,
+    container: HTMLElement,
+  ): void {
+    const measurement = surface.size.measure;
+    if (!measurement) return;
+
+    this.setMeasuredEditorBlockSize(
+      measurement,
+      elementMeasuredEditorBlockSize(container, measurement.dimension),
+    );
+  }
+
+  private setMeasuredEditorBlockSize(
+    measurement: EditorBlockMeasurement,
+    measuredPx: number,
+  ): void {
+    const next = clampEditorBlockMeasuredSize(measuredPx, measurement);
+    if (this.editorBlockMeasuredSizes.get(measurement.key) === next) return;
+
+    this.editorBlockMeasuredSizes.set(measurement.key, next);
+    this.scheduleEditorBlockMeasurementUpdate();
+  }
+
+  private scheduleEditorBlockMeasurementUpdate(): void {
+    if (this.editorBlockMeasureTimeout !== null) return;
+
+    this.editorBlockMeasureTimeout = setTimeout(() => {
+      this.editorBlockMeasureTimeout = null;
+      this.applyMeasuredEditorBlockSizes();
+    }, 0);
+  }
+
+  private cancelScheduledEditorBlockMeasurementUpdate(): void {
+    if (this.editorBlockMeasureTimeout === null) return;
+
+    clearTimeout(this.editorBlockMeasureTimeout);
+    this.editorBlockMeasureTimeout = null;
+  }
+
+  private applyMeasuredEditorBlockSizes(): void {
+    let changed = false;
+    const rows = this.editorBlockRows.map((row) => {
+      const surface = this.editorBlockSurfaces.get(row.id);
+      if (!surface) return row;
+
+      const heightPx = this.currentEditorBlockSizePx(surface.size);
+      if (row.heightPx === heightPx) return row;
+
+      changed = true;
+      return { ...row, heightPx };
+    });
+    const lanes = this.editorBlockLanes.map((lane) => {
+      const surface = this.editorBlockLaneSurfaces.get(lane.id);
+      if (!surface) return lane;
+
+      const widthPx = this.currentEditorBlockSizePx(surface.size);
+      if (lane.widthPx === widthPx) return lane;
+
+      changed = true;
+      return { ...lane, widthPx };
+    });
+    if (!changed) return;
+
+    this.editorBlockRows = rows;
+    this.editorBlockLanes = lanes;
+    this.view.setBlockRows(rows);
+    this.view.setBlockLanes(lanes);
     this.notifyViewContributions("layout", null);
+  }
+
+  private currentEditorBlockSizePx(size: ResolvedEditorBlockSize): number {
+    const measurement = size.measure;
+    if (!measurement) return size.px;
+
+    return initialMeasuredEditorBlockSize(
+      measurement,
+      this.editorBlockMeasuredSizes.get(measurement.key),
+    );
+  }
+
+  private pruneMeasuredEditorBlockSizes(
+    surfaces: ReadonlyMap<string, ResolvedEditorBlockSurface>,
+    laneSurfaces: ReadonlyMap<string, ResolvedEditorBlockLaneSurface>,
+  ): void {
+    const keys = new Set<string>();
+    for (const surface of surfaces.values()) addEditorBlockMeasurementKey(keys, surface.size);
+    for (const surface of laneSurfaces.values()) addEditorBlockMeasurementKey(keys, surface.size);
+
+    for (const key of this.editorBlockMeasuredSizes.keys()) {
+      if (keys.has(key)) continue;
+      this.editorBlockMeasuredSizes.delete(key);
+    }
   }
 
   private createViewContributionContext(container: HTMLElement): EditorViewContributionContext {

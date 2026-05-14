@@ -71,9 +71,7 @@ const sharedHighlighterProvider = (
 
 const sharedHighlighterProviderState = (): SharedShikiProviderState => {
   const state = globalThis as Record<PropertyKey, unknown>;
-  const existing = state[SHARED_SHIKI_PROVIDER_STATE_KEY] as
-    | SharedShikiProviderState
-    | undefined;
+  const existing = state[SHARED_SHIKI_PROVIDER_STATE_KEY] as SharedShikiProviderState | undefined;
   if (existing) return existing;
 
   const next = {

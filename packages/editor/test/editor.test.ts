@@ -162,6 +162,36 @@ type ViewContributionEvent = {
   readonly changeKind: DocumentSessionChange["kind"] | null;
 };
 
+class MockResizeObserver implements ResizeObserver {
+  static instances: MockResizeObserver[] = [];
+
+  readonly callback: ResizeObserverCallback;
+  readonly observed = new Set<Element>();
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+    MockResizeObserver.instances.push(this);
+  }
+
+  observe(target: Element): void {
+    this.observed.add(target);
+  }
+
+  unobserve(target: Element): void {
+    this.observed.delete(target);
+  }
+
+  disconnect(): void {
+    this.observed.clear();
+  }
+
+  emit(target: Element, size: { readonly height?: number; readonly width?: number }): void {
+    const height = size.height ?? 0;
+    const width = size.width ?? 0;
+    this.callback([resizeObserverEntry(target, width, height)], this);
+  }
+}
+
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -207,6 +237,30 @@ function blockSurfaceTexts(): string[] {
   return [...document.querySelectorAll<HTMLElement>("[data-test-block-surface]")].map(
     (surface) => surface.textContent ?? "",
   );
+}
+
+function blockSurfaceElements(): HTMLElement[] {
+  return [...document.querySelectorAll<HTMLElement>("[data-test-block-surface]")];
+}
+
+function resizeObserverEntry(target: Element, width: number, height: number): ResizeObserverEntry {
+  return {
+    target,
+    contentRect: {
+      width,
+      height,
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: width,
+      bottom: height,
+      toJSON: () => ({}),
+    },
+    contentBoxSize: [{ inlineSize: width, blockSize: height }],
+    borderBoxSize: [{ inlineSize: width, blockSize: height }],
+    devicePixelContentBoxSize: [{ inlineSize: width, blockSize: height }],
+  };
 }
 
 function blockFixture(id: string, anchor: EditorBlockAnchor) {
@@ -1354,6 +1408,114 @@ describe("Editor", () => {
       ]);
     });
 
+    it("updates measured block row heights from ResizeObserver and clamps bounds", async () => {
+      const originalResizeObserver = globalThis.ResizeObserver;
+      globalThis.ResizeObserver = MockResizeObserver;
+      MockResizeObserver.instances = [];
+
+      try {
+        const events: ViewContributionEvent[] = [];
+        const plugin: EditorPlugin = {
+          activate: (context) =>
+            context.registerBlockProvider({
+              getBlocks: () => [
+                {
+                  id: "output",
+                  anchor: { row: 0 },
+                  bottom: {
+                    height: { minPx: 24, maxPx: 56 },
+                    mount: (container, context) => {
+                      container.dataset.testBlockSurface = context.surface;
+                      container.textContent = context.blockId;
+                    },
+                  },
+                },
+              ],
+            }),
+        };
+        editor.dispose();
+        editor = new Editor(container, {
+          lineHeight: 20,
+          plugins: [plugin, createViewContributionPlugin(events)],
+        });
+
+        editor.openDocument({ documentId: "doc.txt", text: "one\ntwo" });
+        expect(events.at(-1)?.snapshot?.totalHeight).toBe(64);
+
+        const surface = blockSurfaceElements()[0]!;
+        const observer = MockResizeObserver.instances.find((observer) =>
+          observer.observed.has(surface),
+        )!;
+        observer.emit(surface, { height: 72 });
+        await flushTimers();
+
+        expect(events.at(-1)?.snapshot?.totalHeight).toBe(96);
+        expect(events.at(-1)?.snapshot?.visibleRows.map((row) => row.height)).toEqual([20, 56, 20]);
+
+        observer.emit(surface, { height: 10 });
+        await flushTimers();
+
+        expect(events.at(-1)?.snapshot?.totalHeight).toBe(64);
+        expect(events.at(-1)?.snapshot?.visibleRows.map((row) => row.height)).toEqual([20, 24, 20]);
+      } finally {
+        globalThis.ResizeObserver = originalResizeObserver;
+      }
+    });
+
+    it("remeasures block rows without remounting their DOM", async () => {
+      let mountCount = 0;
+      let disposeCount = 0;
+      let measuredHeight = 36;
+      let blockContext: EditorBlockMountContext | null = null;
+      const events: ViewContributionEvent[] = [];
+      const plugin: EditorPlugin = {
+        activate: (context) =>
+          context.registerBlockProvider({
+            getBlocks: () => [
+              {
+                id: "output",
+                anchor: { row: 0 },
+                bottom: {
+                  height: { minPx: 20, maxPx: 80 },
+                  mount: (container, context) => {
+                    mountCount += 1;
+                    blockContext = context;
+                    container.dataset.testBlockSurface = context.surface;
+                    container.textContent = context.blockId;
+                    container.getBoundingClientRect = () =>
+                      ({ height: measuredHeight, width: 0 }) as DOMRect;
+                    return {
+                      dispose: () => {
+                        disposeCount += 1;
+                      },
+                    };
+                  },
+                },
+              },
+            ],
+          }),
+      };
+      editor.dispose();
+      editor = new Editor(container, {
+        lineHeight: 20,
+        plugins: [plugin, createViewContributionPlugin(events)],
+      });
+
+      editor.openDocument({ documentId: "doc.txt", text: "one\ntwo" });
+      await flushTimers();
+
+      expect(events.at(-1)?.snapshot?.totalHeight).toBe(76);
+
+      measuredHeight = 52;
+      blockContext?.requestMeasure();
+      await flushTimers();
+
+      expect(mountCount).toBe(1);
+      expect(disposeCount).toBe(0);
+      expect(blockSurfaceTexts()).toEqual(["output"]);
+      expect(events.at(-1)?.snapshot?.totalHeight).toBe(92);
+    });
+
     it("mounts fixed left and right block surfaces beside anchored text ranges", () => {
       const mounted: string[] = [];
       const plugin: EditorPlugin = {
@@ -1397,6 +1559,49 @@ describe("Editor", () => {
       expect(firstRow?.style.paddingRight).toBe("18px");
       expect(secondRow?.style.paddingLeft).toBe("28px");
       expect(thirdRow?.style.paddingLeft).toBe("");
+    });
+
+    it("remeasures horizontal block lanes and clamps their reserved width", async () => {
+      let measuredWidth = 34;
+      let blockContext: EditorBlockMountContext | null = null;
+      const plugin: EditorPlugin = {
+        activate: (context) =>
+          context.registerBlockProvider({
+            getBlocks: () => [
+              {
+                id: "cell",
+                anchor: { startRow: 0, endRow: 1 },
+                left: {
+                  width: { minPx: 16, maxPx: 32 },
+                  mount: (container, context) => {
+                    blockContext = context;
+                    container.dataset.testBlockSurface = context.surface;
+                    container.textContent = context.blockId;
+                    container.getBoundingClientRect = () =>
+                      ({ height: 0, width: measuredWidth }) as DOMRect;
+                  },
+                },
+              },
+            ],
+          }),
+      };
+      editor.dispose();
+      editor = new Editor(container, { lineHeight: 20, plugins: [plugin] });
+
+      editor.openDocument({ documentId: "doc.txt", text: "one\ntwo\nthree" });
+      await flushTimers();
+
+      const firstRow = document.querySelector<HTMLElement>('[data-editor-virtual-row="0"]');
+      const thirdRow = document.querySelector<HTMLElement>('[data-editor-virtual-row="2"]');
+      expect(firstRow?.style.paddingLeft).toBe("32px");
+      expect(thirdRow?.style.paddingLeft).toBe("");
+
+      measuredWidth = 12;
+      blockContext?.requestMeasure();
+      await flushTimers();
+
+      expect(firstRow?.style.paddingLeft).toBe("16px");
+      expect(blockSurfaceTexts()).toEqual(["cell"]);
     });
 
     it("disposes mounted block surfaces when providers are removed", () => {

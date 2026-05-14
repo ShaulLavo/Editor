@@ -27,6 +27,7 @@ type VisibleBlockLaneLayout = {
   readonly height: number;
   readonly left: number;
   readonly width: number;
+  readonly measuredWidth: boolean;
   readonly key: string;
 };
 
@@ -182,7 +183,8 @@ function visibleBlockLaneLayout(
     height: Math.max(0, bottom - top),
     left: blockLaneLeft(view, lane, range.start, range.end),
     width: lane.widthPx,
-    key: `${lane.id}:${top}:${bottom}:${lane.widthPx}`,
+    measuredWidth: lane.widthMeasured === true,
+    key: `${lane.id}:${top}:${bottom}:${lane.widthPx}:${lane.widthMeasured === true}`,
   };
 }
 
@@ -321,7 +323,7 @@ function updateMountedBlockLane(
   if (mounted.layoutKey === layout.key) return;
 
   setStyleValue(mounted.element, "transform", `translate(${layout.left}px, ${layout.top}px)`);
-  setStyleValue(mounted.element, "width", `${layout.width}px`);
+  setStyleValue(mounted.element, "width", layout.measuredWidth ? "" : `${layout.width}px`);
   setStyleValue(mounted.element, "height", `${layout.height}px`);
   setMountedBlockLaneLayoutKey(mounted, layout.key);
 }

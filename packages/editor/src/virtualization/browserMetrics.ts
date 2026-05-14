@@ -76,10 +76,7 @@ function parseCssPixels(value: string | undefined): number | null {
   return pixels;
 }
 
-function cachedBrowserTextMetrics(
-  document: Document,
-  key: string,
-): BrowserTextMetrics | null {
+function cachedBrowserTextMetrics(document: Document, key: string): BrowserTextMetrics | null {
   return metricsCache.get(document)?.get(key) ?? null;
 }
 

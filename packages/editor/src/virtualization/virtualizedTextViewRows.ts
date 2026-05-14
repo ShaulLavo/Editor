@@ -608,11 +608,20 @@ function setBlockRowContent(
 
   if (row.element.firstChild !== row.blockContainerElement || row.element.childNodes.length !== 1)
     row.element.replaceChildren(row.blockContainerElement);
-  if (row.blockContainerElement.style.height !== `${item.size}px`)
-    row.blockContainerElement.style.height = `${item.size}px`;
+  syncBlockContainerHeight(row.blockContainerElement, item.size, blockRow.heightMeasured === true);
 
   syncBlockRowMount(view, row, blockRow);
   updateMutableRowChunks(row, []);
+}
+
+function syncBlockContainerHeight(element: HTMLDivElement, size: number, measured: boolean): void {
+  if (measured) {
+    if (element.style.height !== "") element.style.height = "";
+    return;
+  }
+
+  const height = `${size}px`;
+  if (element.style.height !== height) element.style.height = height;
 }
 
 function syncBlockRowMount(

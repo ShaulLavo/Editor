@@ -55,6 +55,7 @@ export type DisplayBlockRow = {
   readonly unitIndex: number;
   readonly heightRows: number;
   readonly heightPx?: number;
+  readonly heightMeasured?: boolean;
   readonly startOffset: number;
   readonly endOffset: number;
   readonly text: string;
@@ -72,6 +73,7 @@ export type BlockRow = {
   readonly placement: BlockRowPlacement;
   readonly heightRows: number;
   readonly heightPx?: number;
+  readonly heightMeasured?: boolean;
   readonly text?: string;
 };
 
@@ -81,6 +83,7 @@ export type BlockLane = {
   readonly endBufferRow: number;
   readonly placement: BlockLanePlacement;
   readonly widthPx: number;
+  readonly widthMeasured?: boolean;
 };
 
 type BlockRowsAtBufferRow = {
@@ -351,6 +354,7 @@ const appendBlockRowUnits = (rows: DisplayRow[], block: BlockRow, offset: number
     unitIndex: 0,
     heightRows,
     ...(heightPx === undefined ? {} : { heightPx }),
+    ...(block.heightMeasured === true ? { heightMeasured: true } : {}),
     startOffset: offset,
     endOffset: offset,
     text: block.text ?? "",
