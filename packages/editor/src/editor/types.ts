@@ -26,6 +26,8 @@ export type EditorEditability = "editable" | "readonly";
 
 export type EditorDocumentMode = "session" | "static";
 
+export type EditorSelectionSyncMode = "sync" | "none";
+
 export type EditorRangeDecoration = {
   readonly className?: string;
   readonly end: number;
@@ -81,6 +83,7 @@ export type EditorOptions = {
   readonly lineHeight?: number;
   readonly rangeDecorations?: readonly EditorRangeDecoration[];
   readonly rowGap?: number;
+  readonly selectionSyncMode?: EditorSelectionSyncMode;
   readonly tabSize?: number;
   readonly textMetrics?: BrowserTextMetrics;
 };

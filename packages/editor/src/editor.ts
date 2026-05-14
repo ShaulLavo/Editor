@@ -24,6 +24,7 @@ export type {
   EditorOptions,
   EditorRangeDecoration,
   EditorScrollPosition,
+  EditorSelectionSyncMode,
   EditorSessionChangeHandler,
   EditorSessionOptions,
   EditorSetTextOptions,

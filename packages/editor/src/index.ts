@@ -52,6 +52,7 @@ export type {
   EditorRangeDecoration,
   EditorSelectionRevealOptions,
   EditorSelectionRevealTarget,
+  EditorSelectionSyncMode,
   EditorSetTextOptions,
   EditorScrollPosition,
   EditorState,

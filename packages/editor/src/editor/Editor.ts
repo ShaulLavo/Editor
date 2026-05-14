@@ -45,6 +45,7 @@ import type {
   EditorScrollPosition,
   EditorSetTextOptions,
   EditorSessionOptions,
+  EditorSelectionSyncMode,
   EditorState,
   EditorSyntaxStatus,
 } from "./types";
@@ -157,6 +158,7 @@ type PendingRangeDecorationGroup = RangeDecorationGroup & {
 const EDITOR_FIND_FEATURE_ID = "editor.find";
 const DEFAULT_EDITABILITY: EditorEditability = "editable";
 const DEFAULT_DOCUMENT_MODE: EditorDocumentMode = "session";
+const DEFAULT_SELECTION_SYNC_MODE: EditorSelectionSyncMode = "sync";
 
 type EditorFindFeature = {
   openFind(): boolean;
@@ -219,6 +221,7 @@ export class Editor {
   private rangeDecorations: readonly EditorRangeDecoration[] = [];
   private appliedRangeDecorationNames: readonly string[] = [];
   private nativeInputHandlersInstalled = false;
+  private readonly selectionSyncMode: EditorSelectionSyncMode;
   private readonly tabSize: number;
 
   constructor(container: HTMLElement, options: EditorOptions = {}) {
@@ -228,6 +231,7 @@ export class Editor {
     this.tabSize = normalizeTabSize(options.tabSize);
     this.editability = normalizeEditorEditability(options.editability);
     this.documentMode = normalizeEditorDocumentMode(options.documentMode);
+    this.selectionSyncMode = normalizeEditorSelectionSyncMode(options.selectionSyncMode);
     this.configuredTheme = options.theme ?? null;
     this.pluginHost = new EditorPluginHost(options.plugins);
     this.highlightPrefix = nextEditorHighlightPrefix();
@@ -2280,7 +2284,6 @@ export class Editor {
   private syncDomSelection(): void {
     if (!this.session) return;
 
-    // TODO: Move readonly embedded editors to fully custom browser-free selection/copy.
     const selection = this.session.getSelections().selections[0];
     if (!selection) return;
 
@@ -2295,6 +2298,12 @@ export class Editor {
     }
 
     if (this.isInputFocused()) {
+      this.syncSessionSelectionHighlight();
+      this.notifyViewContributions("selection", null);
+      return;
+    }
+
+    if (this.selectionSyncMode === "none") {
       this.syncSessionSelectionHighlight();
       this.notifyViewContributions("selection", null);
       return;
@@ -2700,6 +2709,13 @@ function normalizeEditorEditability(value: EditorEditability | undefined): Edito
 function normalizeEditorDocumentMode(value: EditorDocumentMode | undefined): EditorDocumentMode {
   if (value === "static") return "static";
   return DEFAULT_DOCUMENT_MODE;
+}
+
+function normalizeEditorSelectionSyncMode(
+  value: EditorSelectionSyncMode | undefined,
+): EditorSelectionSyncMode {
+  if (value === "none") return "none";
+  return DEFAULT_SELECTION_SYNC_MODE;
 }
 
 function rangeDecorationStyle(decoration: EditorRangeDecoration): {

@@ -265,6 +265,21 @@ function createCopyEvent(): {
   };
 }
 
+function spyOnNativeSelection() {
+  const selection = window.getSelection()!;
+  const addRange = vi.spyOn(selection, "addRange");
+  const removeAllRanges = vi.spyOn(selection, "removeAllRanges");
+
+  return {
+    addRange,
+    removeAllRanges,
+    restore: () => {
+      addRange.mockRestore();
+      removeAllRanges.mockRestore();
+    },
+  };
+}
+
 function primaryModifier(): KeyboardEventInit {
   return detectPlatform() === "mac" ? { metaKey: true } : { ctrlKey: true };
 }
@@ -651,6 +666,63 @@ describe("Editor", () => {
       editorRoot().dispatchEvent(copy.event);
 
       expect(copy.getText()).toBe("alpha");
+    });
+
+    it("renders setSelection with custom geometry without DOM selection sync", () => {
+      editor.dispose();
+      editor = new Editor(container, {
+        defaultText: "alpha beta",
+        selectionSyncMode: "none",
+      });
+      const nativeSelection = spyOnNativeSelection();
+
+      try {
+        editor.setSelection(0, 5);
+
+        expect(selectionRanges()).toHaveLength(1);
+        expect(nativeSelection.addRange).not.toHaveBeenCalled();
+        expect(nativeSelection.removeAllRanges).not.toHaveBeenCalled();
+      } finally {
+        nativeSelection.restore();
+      }
+    });
+
+    it("opens and attaches documents with selection sync disabled", () => {
+      editor.dispose();
+      editor = new Editor(container, { selectionSyncMode: "none" });
+      const nativeSelection = spyOnNativeSelection();
+
+      try {
+        editor.openDocument({
+          documentId: "open.txt",
+          text: "open",
+        });
+        editor.attachSession(createDocumentSession("attached"));
+        editor.setText("reset");
+
+        expect(nativeSelection.addRange).not.toHaveBeenCalled();
+        expect(nativeSelection.removeAllRanges).not.toHaveBeenCalled();
+      } finally {
+        nativeSelection.restore();
+      }
+    });
+
+    it("copies editor-managed selections without a native DOM selection", () => {
+      editor.dispose();
+      editor = new Editor(container, {
+        defaultText: "alpha beta",
+        selectionSyncMode: "none",
+      });
+      window.getSelection()?.removeAllRanges();
+
+      editor.setSelection(0, 5);
+
+      expect(window.getSelection()?.rangeCount).toBe(0);
+      const copy = createCopyEvent();
+      editorRoot().dispatchEvent(copy.event);
+
+      expect(copy.getText()).toBe("alpha");
+      expect(copy.event.defaultPrevented).toBe(true);
     });
 
     it("opens static documents without undo, dirty state, or write behavior", () => {
@@ -1787,6 +1859,29 @@ describe("Editor", () => {
       expect(selectionRanges()).toHaveLength(1);
     });
 
+    it("renders and copies keyboard selections with selection sync disabled", () => {
+      editor.dispose();
+      editor = new Editor(container, {
+        defaultText: "abc",
+        selectionSyncMode: "none",
+      });
+      const nativeSelection = spyOnNativeSelection();
+
+      try {
+        dispatchEditorKey("ArrowLeft", { shiftKey: true });
+
+        expect(selectionRanges()).toHaveLength(1);
+        expect(nativeSelection.addRange).not.toHaveBeenCalled();
+
+        const copy = createCopyEvent();
+        editorRoot().dispatchEvent(copy.event);
+
+        expect(copy.getText()).toBe("c");
+      } finally {
+        nativeSelection.restore();
+      }
+    });
+
     it("extends all cursors with shift arrow keys", () => {
       const session = createDocumentSession("abcdef");
       session.setSelections([{ anchor: 2 }, { anchor: 5 }]);
@@ -2277,6 +2372,44 @@ describe("Editor", () => {
       resolved = resolveSelection(session.getSnapshot(), session.getSelections().selections[0]!);
       expect(resolved.startOffset).toBe(1);
       expect(resolved.endOffset).toBe(3);
+    });
+
+    it("renders and copies pointer drag selections with selection sync disabled", () => {
+      editor.dispose();
+      editor = new Editor(container, {
+        defaultText: "abcd",
+        selectionSyncMode: "none",
+      });
+      mockEditorViewport(editorRoot(), 120, 40);
+      const nativeSelection = spyOnNativeSelection();
+
+      try {
+        editorRoot().dispatchEvent(
+          new MouseEvent("mousedown", {
+            bubbles: true,
+            cancelable: true,
+            clientX: 10,
+            clientY: 10,
+            detail: 1,
+          }),
+        );
+        document.dispatchEvent(
+          new MouseEvent("mousemove", { cancelable: true, clientX: 30, clientY: 10 }),
+        );
+        document.dispatchEvent(
+          new MouseEvent("mouseup", { cancelable: true, clientX: 30, clientY: 10 }),
+        );
+
+        expect(selectionRanges()).toHaveLength(1);
+        expect(nativeSelection.addRange).not.toHaveBeenCalled();
+
+        const copy = createCopyEvent();
+        editorRoot().dispatchEvent(copy.event);
+
+        expect(copy.getText()).toBe("bc");
+      } finally {
+        nativeSelection.restore();
+      }
     });
 
     it("continues dragging selection when pointer hit-testing leaves the text", () => {
