@@ -1,5 +1,5 @@
 import type { FoldMap } from "../foldMap";
-import { normalizeTabSize, type BlockRow } from "../displayTransforms";
+import { normalizeTabSize, type BlockLane, type BlockRow } from "../displayTransforms";
 import type { EditorTheme } from "../theme";
 import type { EditorGutterContribution, EditorGutterWidthContext } from "../plugins";
 import type { EditorToken, TextEdit } from "../tokens";
@@ -65,6 +65,11 @@ import {
 } from "./virtualizedTextViewLayout";
 import { clearRowGeometryCaches, xToOffset } from "./virtualizedTextViewGeometry";
 import {
+  disposeAllMountedBlockLanes,
+  renderBlockLanes,
+  setBlockLanesLayout,
+} from "./virtualizedTextViewBlockLanes";
+import {
   applyRowHeight,
   disposeBlockRowMounts,
   disposeGutterCells,
@@ -115,6 +120,8 @@ export type {
   HighlightRegistry,
   NativeGeometryValidation,
   VirtualizedBlockRowDisposable,
+  VirtualizedBlockLaneMount,
+  VirtualizedBlockLaneMountContext,
   VirtualizedBlockRowMount,
   VirtualizedBlockRowMountContext,
   VirtualizedFoldMarker,
@@ -160,6 +167,7 @@ export class VirtualizedTextView {
     const inputElement = createInputElement(container);
     const spacer = container.ownerDocument.createElement("div");
     const gutterElement = container.ownerDocument.createElement("div");
+    const blockLaneLayerElement = container.ownerDocument.createElement("div");
     const caretLayerElement = container.ownerDocument.createElement("div");
     const caretElement = container.ownerDocument.createElement("div");
     const longLineChunkSize = normalizeChunkSize(options.longLineChunkSize);
@@ -192,6 +200,8 @@ export class VirtualizedTextView {
       onFoldToggle: options.onFoldToggle ?? null,
       onViewportChange: options.onViewportChange ?? null,
       blockRowMount: options.blockRowMount ?? null,
+      blockLaneMount: options.blockLaneMount ?? null,
+      blockLaneLayerElement,
       cursorLineHighlight: normalizeCursorLineHighlight(options.cursorLineHighlight),
       rowElements: new Map(),
       rowPool: [],
@@ -215,6 +225,8 @@ export class VirtualizedTextView {
       foldMarkerByStartRow: new Map(),
       foldMarkerByKey: new Map(),
       blockRows: options.blockRows ?? [],
+      blockLanes: [],
+      blockLaneElements: new Map(),
       wrapEnabled: options.wrap ?? false,
       currentWrapColumn: null,
       tabSize,
@@ -246,14 +258,17 @@ export class VirtualizedTextView {
 
     scrollElement.style.setProperty("--editor-gutter-width", "0px");
     scrollElement.style.setProperty("--editor-tab-size", String(tabSize));
+    setBlockLanesLayout(this.view, options.blockLanes ?? []);
     applyRowHeight(this.view, rowHeight);
     spacer.className = "editor-virtualized-spacer";
     gutterElement.className = "editor-virtualized-gutter";
+    blockLaneLayerElement.className = "editor-virtualized-horizontal-block-layer";
     caretLayerElement.className = "editor-virtualized-caret-layer";
     caretElement.className = "editor-virtualized-caret";
     caretElement.hidden = true;
     caretLayerElement.appendChild(caretElement);
     if (gutterContributions.length > 0 || gutterWidthProvider) spacer.appendChild(gutterElement);
+    spacer.appendChild(blockLaneLayerElement);
     spacer.appendChild(caretLayerElement);
     scrollElement.appendChild(spacer);
     scrollElement.appendChild(inputElement);
@@ -275,6 +290,7 @@ export class VirtualizedTextView {
     clearTokenHighlights(view);
     view.virtualizer.dispose();
     disposeBlockRowMounts(view);
+    disposeAllMountedBlockLanes(view);
     disposeGutterCells(view);
     this.scrollElement.remove();
     view.styleEl.remove();
@@ -461,6 +477,15 @@ export class VirtualizedTextView {
     updateVirtualizerRows(view);
   }
 
+  public setBlockLanes(blockLanes: readonly BlockLane[]): void {
+    const view = this.view;
+    setBlockLanesLayout(view, blockLanes);
+    resetContentWidthScan(view);
+    clearRowGeometryCaches(view);
+    view.lastRenderedRowsKey = "";
+    this.renderSnapshot(view.virtualizer.getSnapshot());
+  }
+
   public setRowDecorations(decorations: ReadonlyMap<number, VirtualizedTextRowDecoration>): void {
     const view = this.view;
     view.rowDecorations = decorations;
@@ -567,6 +592,7 @@ export class VirtualizedTextView {
       foldMarkers: view.foldMarkers,
       wrapActive: view.wrapEnabled,
       blockRowCount: view.blockRows.length,
+      blockLaneCount: view.blockLanes.length,
       tabSize: view.tabSize,
     };
   }
@@ -639,11 +665,13 @@ export class VirtualizedTextView {
     const view = this.view;
     updateGutterWidthIfNeeded(view);
     updateSpacerWidth(view);
+    renderBlockLanes(view, snapshot);
     const key = rowsKey(view, snapshot);
     if (key === view.lastRenderedRowsKey) return;
 
     view.lastRenderedRowsKey = key;
     renderRows(view, snapshot, (rowSlotId) => deleteTokenRangesForRow(view, rowSlotId));
+    renderBlockLanes(view, snapshot);
     renderTokenHighlights(view);
     for (const name of view.rangeHighlightGroups.keys()) renderRangeHighlight(view, name);
     renderSelectionHighlight(view);

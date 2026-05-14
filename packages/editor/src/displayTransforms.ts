@@ -64,6 +64,8 @@ export type DisplayRow = DisplayTextRow | DisplayBlockRow;
 
 export type BlockRowPlacement = "before" | "after";
 
+export type BlockLanePlacement = "left" | "right";
+
 export type BlockRow = {
   readonly id: string;
   readonly anchorBufferRow: number;
@@ -71,6 +73,14 @@ export type BlockRow = {
   readonly heightRows: number;
   readonly heightPx?: number;
   readonly text?: string;
+};
+
+export type BlockLane = {
+  readonly id: string;
+  readonly startBufferRow: number;
+  readonly endBufferRow: number;
+  readonly placement: BlockLanePlacement;
+  readonly widthPx: number;
 };
 
 type BlockRowsAtBufferRow = {
@@ -240,6 +250,28 @@ export function createDisplayRows(options: {
 export const asTabPoint = (point: Point): TabPoint => point as TabPoint;
 export const asWrapPoint = (point: Point): WrapPoint => point as WrapPoint;
 export const asBlockPoint = (point: Point): BlockPoint => point as BlockPoint;
+
+export function normalizeBlockLanes(lanes: readonly BlockLane[]): readonly BlockLane[] {
+  return lanes
+    .filter((lane) => lane.id.length > 0)
+    .filter((lane) => lane.startBufferRow >= 0)
+    .filter((lane) => lane.endBufferRow >= lane.startBufferRow)
+    .map((lane) => ({ ...lane, widthPx: normalizeLaneWidthPx(lane.widthPx) }))
+    .filter((lane) => lane.widthPx > 0)
+    .toSorted((left, right) => {
+      return (
+        left.startBufferRow - right.startBufferRow ||
+        left.endBufferRow - right.endBufferRow ||
+        lanePlacementOrder(left.placement) - lanePlacementOrder(right.placement) ||
+        left.id.localeCompare(right.id)
+      );
+    });
+}
+
+export function blockLaneCoversBufferRow(lane: BlockLane, bufferRow: number): boolean {
+  if (bufferRow < lane.startBufferRow) return false;
+  return bufferRow <= lane.endBufferRow;
+}
 
 const appendDisplayRowsForVisibleRow = (
   rows: DisplayRow[],
@@ -459,6 +491,9 @@ const normalizeBlockRows = (blocks: readonly BlockRow[]): readonly BlockRow[] =>
 
 const placementOrder = (placement: BlockRowPlacement): number => (placement === "before" ? 0 : 1);
 
+const lanePlacementOrder = (placement: BlockLanePlacement): number =>
+  placement === "left" ? 0 : 1;
+
 const blockRowIndex = (blocks: readonly BlockRow[]): BlockRowIndex => {
   const index = new Map<number, MutableBlockRowsAtBufferRow>();
 
@@ -507,6 +542,11 @@ const normalizeHeightPx = (heightPx: number | undefined): number | undefined => 
   if (heightPx === undefined) return undefined;
   if (!Number.isFinite(heightPx) || heightPx <= 0) return undefined;
   return heightPx;
+};
+
+const normalizeLaneWidthPx = (widthPx: number): number => {
+  if (!Number.isFinite(widthPx) || widthPx <= 0) return 0;
+  return widthPx;
 };
 
 const clampColumn = (value: number, max: number): number => {

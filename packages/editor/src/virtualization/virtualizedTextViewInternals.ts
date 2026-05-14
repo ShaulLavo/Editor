@@ -1,5 +1,5 @@
 import type { FoldMap } from "../foldMap";
-import type { BlockRow, DisplayRow } from "../displayTransforms";
+import type { BlockLane, BlockRow, DisplayRow } from "../displayTransforms";
 import type { EditorGutterContribution, EditorGutterWidthContext } from "../plugins";
 import type { EditorToken, EditorTokenStyle } from "../tokens";
 import type { BrowserTextMetrics } from "./browserMetrics";
@@ -10,6 +10,7 @@ import type {
   HighlightRegistry,
   MountedVirtualizedTextRow,
   TokenGroup,
+  VirtualizedBlockLaneMount,
   VirtualizedBlockRowMount,
   VirtualizedFoldMarker,
   VirtualizedTextRowDecoration,
@@ -78,6 +79,8 @@ export interface VirtualizedTextViewInternal {
   readonly onFoldToggle: ((marker: VirtualizedFoldMarker) => void) | null;
   readonly onViewportChange: (() => void) | null;
   readonly blockRowMount: VirtualizedBlockRowMount | null;
+  readonly blockLaneMount: VirtualizedBlockLaneMount | null;
+  readonly blockLaneLayerElement: HTMLDivElement;
   readonly cursorLineHighlight: Required<EditorCursorLineHighlightOptions>;
   readonly rowElements: Map<number, MountedVirtualizedTextRow>;
   readonly rowPool: MountedVirtualizedTextRow[];
@@ -101,6 +104,8 @@ export interface VirtualizedTextViewInternal {
   foldMarkerByStartRow: ReadonlyMap<number, VirtualizedFoldMarker>;
   foldMarkerByKey: ReadonlyMap<string, VirtualizedFoldMarker>;
   blockRows: readonly BlockRow[];
+  blockLanes: readonly BlockLane[];
+  blockLaneElements: Map<string, MountedVirtualizedBlockLane>;
   wrapEnabled: boolean;
   currentWrapColumn: number | null;
   tabSize: number;
@@ -129,3 +134,10 @@ export interface VirtualizedTextViewInternal {
   textMetrics: BrowserTextMetrics | null;
   hiddenCharacters: HiddenCharactersMode;
 }
+
+export type MountedVirtualizedBlockLane = {
+  readonly id: string;
+  readonly element: HTMLDivElement;
+  readonly mountDisposable: { dispose(): void } | null;
+  readonly layoutKey: string;
+};

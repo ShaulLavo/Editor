@@ -1,6 +1,11 @@
 import type { EditorGutterContribution, EditorGutterWidthContext } from "../plugins";
 import type { EditorTokenStyle } from "../tokens";
-import type { BlockRow, BlockRowPlacement } from "../displayTransforms";
+import type {
+  BlockLane,
+  BlockLanePlacement,
+  BlockRow,
+  BlockRowPlacement,
+} from "../displayTransforms";
 import type { BrowserTextMetrics } from "./browserMetrics";
 import type { FixedRowVisibleRange } from "./fixedRowVirtualizer";
 
@@ -31,6 +36,8 @@ export type VirtualizedTextViewOptions = {
   readonly wrap?: boolean;
   readonly blockRows?: readonly BlockRow[];
   readonly blockRowMount?: VirtualizedBlockRowMount;
+  readonly blockLanes?: readonly BlockLane[];
+  readonly blockLaneMount?: VirtualizedBlockLaneMount;
   readonly gutterContributions?: readonly EditorGutterContribution[];
   readonly cursorLineHighlight?: EditorCursorLineHighlightOptions;
   readonly hiddenCharacters?: HiddenCharactersMode;
@@ -53,6 +60,18 @@ export type VirtualizedBlockRowMountContext = {
   readonly placement: BlockRowPlacement;
   readonly startOffset: number;
   readonly endOffset: number;
+};
+
+export type VirtualizedBlockLaneMount = (
+  container: HTMLElement,
+  context: VirtualizedBlockLaneMountContext,
+) => void | VirtualizedBlockRowDisposable;
+
+export type VirtualizedBlockLaneMountContext = {
+  readonly id: string;
+  readonly startBufferRow: number;
+  readonly endBufferRow: number;
+  readonly placement: BlockLanePlacement;
 };
 
 export type HiddenCharactersMode = "hidden" | "show" | "show-on-selection";
@@ -151,6 +170,7 @@ export type VirtualizedTextViewState = {
   readonly foldMarkers: readonly VirtualizedFoldMarker[];
   readonly wrapActive: boolean;
   readonly blockRowCount: number;
+  readonly blockLaneCount: number;
   readonly tabSize: number;
 };
 
@@ -194,6 +214,9 @@ export type MountedVirtualizedTextRow = VirtualizedTextRow & {
   readonly blockContainerElement: HTMLDivElement;
   readonly blockMountDisposable: VirtualizedBlockRowDisposable | null;
   readonly blockMountKey: string;
+  readonly leftBlockLaneWidth: number;
+  readonly rightBlockLaneWidth: number;
+  readonly blockLaneKey: string;
   readonly top: number;
   readonly height: number;
   readonly textRevision: number;

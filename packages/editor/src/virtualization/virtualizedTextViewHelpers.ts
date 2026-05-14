@@ -527,6 +527,9 @@ export function updateMutableRow(
     readonly kind: "text" | "block";
     readonly top: number;
     readonly height: number;
+    readonly leftBlockLaneWidth: number;
+    readonly rightBlockLaneWidth: number;
+    readonly blockLaneKey: string;
     readonly textRevision: number;
     readonly chunkKey: string;
     readonly foldMarkerKey: string;
@@ -543,6 +546,9 @@ export function updateMutableRow(
     kind: "text" | "block";
     top: number;
     height: number;
+    leftBlockLaneWidth: number;
+    rightBlockLaneWidth: number;
+    blockLaneKey: string;
     textRevision: number;
     chunkKey: string;
     foldMarkerKey: string;
@@ -557,6 +563,9 @@ export function updateMutableRow(
   mutable.kind = values.kind;
   mutable.top = values.top;
   mutable.height = values.height;
+  mutable.leftBlockLaneWidth = values.leftBlockLaneWidth;
+  mutable.rightBlockLaneWidth = values.rightBlockLaneWidth;
+  mutable.blockLaneKey = values.blockLaneKey;
   mutable.textRevision = values.textRevision;
   mutable.chunkKey = values.chunkKey;
   mutable.foldMarkerKey = values.foldMarkerKey;

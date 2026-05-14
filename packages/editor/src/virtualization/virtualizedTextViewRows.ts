@@ -54,7 +54,6 @@ import {
   createTextChunkParts,
   domBoundaryForOffset,
   estimatedColumnToBufferColumn,
-  estimatedDisplayCells,
   estimatedDisplayCellForColumn,
   offsetFromDomBoundary,
   offsetToX,
@@ -64,11 +63,17 @@ import {
   clearHiddenCharactersForRow,
   renderHiddenCharacters,
 } from "./virtualizedTextViewHiddenCharacters";
+import {
+  applyRowBlockLaneInset,
+  estimatedDisplayRowWidthPx,
+  rowBlockLaneInset,
+} from "./virtualizedTextViewBlockLanes";
 
 const GUTTER_CELL_CLASS = "editor-virtualized-gutter-cell";
 const CURSOR_LINE_ROW_CLASS = "editor-virtualized-cursor-line-row";
 const CURSOR_LINE_GUTTER_CLASS = "editor-virtualized-cursor-line-gutter";
 const gutterCursorLineStates = new WeakMap<HTMLElement, boolean>();
+const emptyBlockLaneInset = { left: 0, right: 0, key: "" };
 
 type RowUpdatePass = {
   readonly cursorBufferRow: number | null;
@@ -193,6 +198,9 @@ function createRow(view: VirtualizedTextViewInternal): MountedVirtualizedTextRow
     blockContainerElement,
     blockMountDisposable: null,
     blockMountKey: "",
+    leftBlockLaneWidth: 0,
+    rightBlockLaneWidth: 0,
+    blockLaneKey: "",
     textNode,
     selectionLayerKey: "",
     hiddenCharactersKey: "",
@@ -443,6 +451,7 @@ function bufferRowForDisplayRow(view: VirtualizedTextViewInternal, index: number
 }
 
 function updateRowFrame(
+  view: VirtualizedTextViewInternal,
   row: MountedVirtualizedTextRow,
   item: FixedRowVirtualItem,
   kind: "text" | "block",
@@ -455,6 +464,10 @@ function updateRowFrame(
   const height = `${item.size}px`;
   if (row.element.style.height !== height) row.element.style.height = height;
   if (row.gutterElement.style.height !== height) row.gutterElement.style.height = height;
+  applyRowBlockLaneInset(
+    row,
+    kind === "text" ? rowBlockLaneInset(view, item.index) : emptyBlockLaneInset,
+  );
 }
 
 function updateRow(
@@ -480,6 +493,9 @@ function updateRow(
     foldMarkerKey: state.foldMarker?.key ?? "",
     height: item.size,
     index: item.index,
+    leftBlockLaneWidth: row.leftBlockLaneWidth,
+    rightBlockLaneWidth: row.rightBlockLaneWidth,
+    blockLaneKey: row.blockLaneKey,
     startOffset: state.startOffset,
     text: state.text,
     textRevision: view.textRevision,
@@ -496,7 +512,7 @@ function updateRowElement(
   state: RowUpdateState,
   snapshot: FixedRowVirtualizerSnapshot,
 ): void {
-  updateRowFrame(row, item, state.kind);
+  updateRowFrame(view, row, item, state.kind);
   applyRowDecoration(view, row, state.bufferRow);
   updateCursorLineContentClass(view, row, state.cursorVirtualLine);
   updateGutterRowElement(view, row, item, state);
@@ -544,6 +560,9 @@ function updateRowAfterSameLineEdit(
     foldMarkerKey: state.foldMarker?.key ?? "",
     height: item.size,
     index: item.index,
+    leftBlockLaneWidth: row.leftBlockLaneWidth,
+    rightBlockLaneWidth: row.rightBlockLaneWidth,
+    blockLaneKey: row.blockLaneKey,
     startOffset: state.startOffset,
     text: state.text,
     textRevision: view.textRevision,
@@ -561,7 +580,7 @@ function updateRowElementForSameLineEdit(
   patch: SameLineEditPatch,
   snapshot: FixedRowVirtualizerSnapshot,
 ): void {
-  updateRowFrame(row, item, state.kind);
+  updateRowFrame(view, row, item, state.kind);
   applyRowDecoration(view, row, state.bufferRow);
   updateGutterRowElement(view, row, item, state);
   if (state.kind === "block") {
@@ -1223,6 +1242,7 @@ function isRowCurrent(
   const rowKind = displayRowKind(view, item.index);
   if (row.displayKind !== rowKind) return false;
   if (row.blockMountKey !== blockMountKeyForIndex(view, item.index)) return false;
+  if (row.blockLaneKey !== rowBlockLaneInset(view, item.index).key) return false;
 
   const text = lineText(view, item.index);
   if (row.text !== text) return false;
@@ -1547,7 +1567,7 @@ function scanVisualColumns(
   for (let row = startIndex; row <= endIndex; row += 1) {
     view.maxVisualColumnsSeen = Math.max(
       view.maxVisualColumnsSeen,
-      estimatedDisplayCells(lineText(view, row), view.tabSize),
+      estimatedDisplayRowWidthPx(view, row) / characterWidth(view),
     );
   }
 }
@@ -1756,7 +1776,7 @@ function rowTextLeftForOffset(
   const column = isSimpleRowText(text)
     ? bufferColumnToVisualColumn(text, localOffset, view.tabSize)
     : estimatedDisplayCellForColumn(text, localOffset, view.tabSize);
-  return column * characterWidth(view);
+  return rowBlockLaneInset(view, rowIndex).left + column * characterWidth(view);
 }
 
 export function resolveMountedOffset(

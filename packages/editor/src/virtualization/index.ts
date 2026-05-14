@@ -21,6 +21,8 @@ export type {
   HiddenCharactersMode,
   HighlightRegistry as VirtualizedTextHighlightRegistry,
   NativeGeometryValidation,
+  VirtualizedBlockLaneMount,
+  VirtualizedBlockLaneMountContext,
   VirtualizedBlockRowDisposable,
   VirtualizedBlockRowMount,
   VirtualizedBlockRowMountContext,

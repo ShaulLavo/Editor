@@ -51,7 +51,7 @@ import type {
 } from "./types";
 import { EditorViewContributionController } from "./viewContributions";
 import type { FoldMap } from "../foldMap";
-import { normalizeTabSize, type BlockRow } from "../displayTransforms";
+import { normalizeTabSize, type BlockLane, type BlockRow } from "../displayTransforms";
 import { offsetToPoint } from "../pieceTable/positions";
 import { getPieceTableText } from "../pieceTable/reads";
 import type {
@@ -63,6 +63,7 @@ import type {
   EditorBlockProviderContext,
   EditorBlockSize,
   EditorBlockSurfaceSlot,
+  EditorBlockVerticalSurface,
 } from "../editorBlocks";
 import {
   EditorPluginHost,
@@ -192,7 +193,26 @@ type ResolvedEditorBlockSurface = {
   readonly heightPx: number;
 };
 
+type ResolvedEditorBlockLaneSurface = {
+  readonly laneId: string;
+  readonly block: EditorBlock;
+  readonly surface: EditorBlockVerticalSurface;
+  readonly slot: "left" | "right";
+  readonly startBufferRow: number;
+  readonly endBufferRow: number;
+  readonly widthPx: number;
+};
+
 function editorBlockSurfaceRowId(
+  revision: number,
+  providerIndex: number,
+  blockId: string,
+  slot: EditorBlockSurfaceSlot,
+): string {
+  return `${revision}:${providerIndex}:${blockId}:${slot}`;
+}
+
+function editorBlockSurfaceLaneId(
   revision: number,
   providerIndex: number,
   blockId: string,
@@ -220,6 +240,15 @@ function editorBlockSurfaceAnchorRow(
   if ("row" in anchor) return anchor.row;
   if (slot === "top") return anchor.startRow;
   return anchor.endRow;
+}
+
+function editorBlockSurfaceAnchorRange(
+  anchor: EditorBlockAnchor,
+  lineCount: number,
+): { readonly startRow: number; readonly endRow: number } | null {
+  if (!validEditorBlockAnchor(anchor, lineCount)) return null;
+  if ("row" in anchor) return { startRow: anchor.row, endRow: anchor.row };
+  return { startRow: anchor.startRow, endRow: anchor.endRow };
 }
 
 function validEditorBlockAnchor(anchor: EditorBlockAnchor, lineCount: number): boolean {
@@ -263,7 +292,9 @@ export class Editor {
   private readonly viewContributions: EditorViewContributionController;
   private readonly highlightPrefix: string;
   private readonly editorBlockSurfaces = new Map<string, ResolvedEditorBlockSurface>();
+  private readonly editorBlockLaneSurfaces = new Map<string, ResolvedEditorBlockLaneSurface>();
   private editorBlockRows: readonly BlockRow[] = [];
+  private editorBlockLanes: readonly BlockLane[] = [];
   private editorBlockRevision = 0;
   private text = "";
   private session: DocumentSession | null = null;
@@ -317,6 +348,7 @@ export class Editor {
       tabSize: this.tabSize,
       textMetrics: options.textMetrics,
       blockRowMount: this.mountEditorBlockRow,
+      blockLaneMount: this.mountEditorBlockLane,
       onFoldToggle: this.handleFoldToggle,
       onViewportChange: this.handleViewportChange,
       selectionHighlightName: `${this.highlightPrefix}-selection`,
@@ -1042,15 +1074,23 @@ export class Editor {
 
     const context = this.createEditorBlockProviderContext();
     const resolution = this.resolveEditorBlockRows(providers, context);
-    this.applyEditorBlockRows(resolution.rows, resolution.surfaces);
+    this.applyEditorBlockRows(
+      resolution.rows,
+      resolution.surfaces,
+      resolution.lanes,
+      resolution.laneSurfaces,
+    );
   }
 
   private clearEditorBlockRows(): void {
-    if (this.editorBlockRows.length === 0) return;
+    if (this.editorBlockRows.length === 0 && this.editorBlockLanes.length === 0) return;
 
     this.editorBlockRows = [];
+    this.editorBlockLanes = [];
     this.editorBlockSurfaces.clear();
+    this.editorBlockLaneSurfaces.clear();
     this.view.setBlockRows([]);
+    this.view.setBlockLanes([]);
   }
 
   private createEditorBlockProviderContext(): EditorBlockProviderContext {
@@ -1067,16 +1107,29 @@ export class Editor {
   ): {
     readonly rows: readonly BlockRow[];
     readonly surfaces: ReadonlyMap<string, ResolvedEditorBlockSurface>;
+    readonly lanes: readonly BlockLane[];
+    readonly laneSurfaces: ReadonlyMap<string, ResolvedEditorBlockLaneSurface>;
   } {
     const revision = this.nextEditorBlockRevision();
     const rows: BlockRow[] = [];
+    const lanes: BlockLane[] = [];
     const surfaces = new Map<string, ResolvedEditorBlockSurface>();
+    const laneSurfaces = new Map<string, ResolvedEditorBlockLaneSurface>();
 
     providers.forEach((provider, providerIndex) => {
-      this.appendProviderBlockRows(provider, providerIndex, revision, context, rows, surfaces);
+      this.appendProviderBlockSurfaces(
+        provider,
+        providerIndex,
+        revision,
+        context,
+        rows,
+        surfaces,
+        lanes,
+        laneSurfaces,
+      );
     });
 
-    return { rows, surfaces };
+    return { rows, surfaces, lanes, laneSurfaces };
   }
 
   private nextEditorBlockRevision(): number {
@@ -1084,13 +1137,15 @@ export class Editor {
     return this.editorBlockRevision;
   }
 
-  private appendProviderBlockRows(
+  private appendProviderBlockSurfaces(
     provider: EditorBlockProvider,
     providerIndex: number,
     revision: number,
     context: EditorBlockProviderContext,
     rows: BlockRow[],
     surfaces: Map<string, ResolvedEditorBlockSurface>,
+    lanes: BlockLane[],
+    laneSurfaces: Map<string, ResolvedEditorBlockLaneSurface>,
   ): void {
     for (const block of provider.getBlocks(context)) {
       this.appendEditorBlockSurfaceRow(
@@ -1110,6 +1165,24 @@ export class Editor {
         context.lineCount,
         rows,
         surfaces,
+      );
+      this.appendEditorBlockSurfaceLane(
+        block,
+        "left",
+        providerIndex,
+        revision,
+        context.lineCount,
+        lanes,
+        laneSurfaces,
+      );
+      this.appendEditorBlockSurfaceLane(
+        block,
+        "right",
+        providerIndex,
+        revision,
+        context.lineCount,
+        lanes,
+        laneSurfaces,
       );
     }
   }
@@ -1142,14 +1215,56 @@ export class Editor {
     });
   }
 
+  private appendEditorBlockSurfaceLane(
+    block: EditorBlock,
+    slot: "left" | "right",
+    providerIndex: number,
+    revision: number,
+    lineCount: number,
+    lanes: BlockLane[],
+    laneSurfaces: Map<string, ResolvedEditorBlockLaneSurface>,
+  ): void {
+    const surface = block[slot];
+    const widthPx = fixedEditorBlockSizePx(surface?.width);
+    if (!surface || widthPx === null) return;
+    if (!validEditorBlockId(block.id)) return;
+
+    const range = editorBlockSurfaceAnchorRange(block.anchor, lineCount);
+    if (range === null) return;
+
+    const laneId = editorBlockSurfaceLaneId(revision, providerIndex, block.id, slot);
+    laneSurfaces.set(laneId, {
+      laneId,
+      block,
+      surface,
+      slot,
+      startBufferRow: range.startRow,
+      endBufferRow: range.endRow,
+      widthPx,
+    });
+    lanes.push({
+      id: laneId,
+      startBufferRow: range.startRow,
+      endBufferRow: range.endRow,
+      placement: slot,
+      widthPx,
+    });
+  }
+
   private applyEditorBlockRows(
     rows: readonly BlockRow[],
     surfaces: ReadonlyMap<string, ResolvedEditorBlockSurface>,
+    lanes: readonly BlockLane[],
+    laneSurfaces: ReadonlyMap<string, ResolvedEditorBlockLaneSurface>,
   ): void {
     this.editorBlockRows = rows;
+    this.editorBlockLanes = lanes;
     this.editorBlockSurfaces.clear();
+    this.editorBlockLaneSurfaces.clear();
     for (const [rowId, surface] of surfaces) this.editorBlockSurfaces.set(rowId, surface);
+    for (const [laneId, surface] of laneSurfaces) this.editorBlockLaneSurfaces.set(laneId, surface);
     this.view.setBlockRows(rows);
+    this.view.setBlockLanes(lanes);
   }
 
   private readonly mountEditorBlockRow = (
@@ -1159,11 +1274,23 @@ export class Editor {
     const surface = this.editorBlockSurfaces.get(row.id);
     if (!surface) return undefined;
 
+    container.dataset.editorBlockSurface = surface.slot;
+    return surface.surface.mount(container, this.createEditorBlockMountContext(surface));
+  };
+
+  private readonly mountEditorBlockLane = (
+    container: HTMLElement,
+    lane: { readonly id: string },
+  ): void | EditorDisposable => {
+    const surface = this.editorBlockLaneSurfaces.get(lane.id);
+    if (!surface) return undefined;
+
+    container.dataset.editorBlockSurface = surface.slot;
     return surface.surface.mount(container, this.createEditorBlockMountContext(surface));
   };
 
   private createEditorBlockMountContext(
-    surface: ResolvedEditorBlockSurface,
+    surface: ResolvedEditorBlockSurface | ResolvedEditorBlockLaneSurface,
   ): EditorBlockMountContext {
     return {
       blockId: surface.block.id,
@@ -1472,6 +1599,7 @@ export class Editor {
   private handleMouseDown = (event: MouseEvent): void => {
     if (!this.session) return;
     if (event.defaultPrevented) return;
+    if (eventTargetInsideBlockSurface(event.target)) return;
 
     this.view.focusInput();
     if (event.detail >= 4) {
@@ -2665,6 +2793,11 @@ function removeArrayItem<T>(items: T[], item: T): void {
   if (index === -1) return;
 
   items.splice(index, 1);
+}
+
+function eventTargetInsideBlockSurface(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return target.closest("[data-editor-block-surface]") !== null;
 }
 
 type ExactOccurrenceRange = {

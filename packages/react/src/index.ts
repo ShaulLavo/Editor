@@ -32,6 +32,16 @@ import {
   type CSSProperties,
   type ReactElement,
 } from "react";
+export {
+  createReactEditorBlocksPlugin,
+  type ReactEditorBlock,
+  type ReactEditorBlockHorizontalSurface,
+  type ReactEditorBlocksPluginOptions,
+  type ReactEditorBlocksSource,
+  type ReactEditorBlockSurface,
+  type ReactEditorBlockSurfaceRenderer,
+  type ReactEditorBlockVerticalSurface,
+} from "./editorBlocks";
 
 export type ReactEditorDocument = {
   readonly documentId?: string;

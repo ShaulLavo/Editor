@@ -11,6 +11,7 @@ import type {
   VirtualizedTextChunkTextPart,
 } from "./virtualizedTextViewTypes";
 import type { VirtualizedTextViewInternal } from "./virtualizedTextViewInternals";
+import { rowTextInsetLeft, rowTextInsetRight } from "./virtualizedTextViewBlockLanes";
 
 const CONTROL_CHARACTER_CLASS = "editor-virtualized-control-character";
 
@@ -328,6 +329,8 @@ function rowGeometryCacheKey(
     row.displayKind,
     row.foldMarkerKey,
     row.rowDecorationKey,
+    row.leftBlockLaneWidth,
+    row.rightBlockLaneWidth,
     view.tabSize,
     view.metrics.characterWidth,
   ].join(":");
@@ -349,7 +352,10 @@ function buildCalculatedRowGeometry(
   const cellWidth = view.metrics.characterWidth;
   for (const chunk of row.chunks) appendCalculatedChunkBoundaries(boundaries, view, row, chunk);
 
-  const width = bufferColumnToVisualColumn(row.text, row.text.length, view.tabSize) * cellWidth;
+  const width =
+    rowTextInsetLeft(row) +
+    bufferColumnToVisualColumn(row.text, row.text.length, view.tabSize) * cellWidth +
+    rowTextInsetRight(row);
   return geometryFromBoundaries(row, boundaries, width);
 }
 
@@ -358,7 +364,8 @@ function calculatedXToOffset(
   row: MountedVirtualizedTextRow,
   x: number,
 ): number {
-  const visualColumn = Math.floor(Math.max(0, x) / Math.max(1, view.metrics.characterWidth));
+  const localX = Math.max(0, x - rowTextInsetLeft(row));
+  const visualColumn = Math.floor(localX / Math.max(1, view.metrics.characterWidth));
   const local = visualColumnToBufferColumn(row.text, visualColumn, "nearest", view.tabSize);
   return row.startOffset + clampLocalOffsetToMountedChunks(row, local);
 }
@@ -382,7 +389,7 @@ function appendCalculatedChunkBoundaries(
   const cellWidth = view.metrics.characterWidth;
   for (let local = chunk.localStart; local <= chunk.localEnd; local += 1) {
     const column = bufferColumnToVisualColumn(row.text, local, view.tabSize);
-    appendBoundary(boundaries, row.startOffset + local, column * cellWidth);
+    appendBoundary(boundaries, row.startOffset + local, rowTextInsetLeft(row) + column * cellWidth);
   }
 }
 
@@ -393,7 +400,10 @@ function buildMeasuredRowGeometry(
   const boundaries: GeometryBoundary[] = [];
   for (const chunk of row.chunks) appendMeasuredChunkBoundaries(boundaries, view, row, chunk);
 
-  const estimatedWidth = estimatedRowWidth(row.text, view.tabSize, view.metrics.characterWidth);
+  const estimatedWidth =
+    rowTextInsetLeft(row) +
+    estimatedRowWidth(row.text, view.tabSize, view.metrics.characterWidth) +
+    rowTextInsetRight(row);
   return geometryFromBoundaries(row, boundaries, estimatedWidth);
 }
 
@@ -403,7 +413,7 @@ function appendMeasuredChunkBoundaries(
   row: MountedVirtualizedTextRow,
   chunk: VirtualizedTextChunk,
 ): void {
-  let fallbackX = estimatedPrefixWidth(view, row, chunk.localStart);
+  let fallbackX = rowTextInsetLeft(row) + estimatedPrefixWidth(view, row, chunk.localStart);
   appendBoundary(boundaries, row.startOffset + chunk.localStart, fallbackX);
 
   for (const part of chunk.parts) {

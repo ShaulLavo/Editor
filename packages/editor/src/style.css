@@ -140,6 +140,7 @@
 }
 
 .editor-virtualized-row {
+  box-sizing: border-box;
   contain: layout paint style;
   height: var(--editor-row-height);
   left: var(--editor-gutter-width);
@@ -149,6 +150,24 @@
   right: 0;
   top: 0;
   white-space: pre;
+}
+
+.editor-virtualized-horizontal-block-layer {
+  height: 0;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  z-index: 3;
+}
+
+.editor-virtualized-horizontal-block-surface {
+  box-sizing: border-box;
+  min-width: 0;
+  overflow: hidden;
+  pointer-events: auto;
+  position: absolute;
+  top: 0;
 }
 
 .editor-virtualized-row[data-editor-virtual-row-kind="block"] {

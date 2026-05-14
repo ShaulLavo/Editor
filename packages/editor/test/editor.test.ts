@@ -1354,6 +1354,51 @@ describe("Editor", () => {
       ]);
     });
 
+    it("mounts fixed left and right block surfaces beside anchored text ranges", () => {
+      const mounted: string[] = [];
+      const plugin: EditorPlugin = {
+        activate: (context) =>
+          context.registerBlockProvider({
+            getBlocks: () => [
+              {
+                id: "cell",
+                anchor: { startRow: 0, endRow: 1 },
+                left: {
+                  width: { px: 28 },
+                  mount: (container, context) => {
+                    mounted.push(`${context.surface}:${context.documentId}:${context.text}`);
+                    container.dataset.testBlockSurface = context.surface;
+                    container.textContent = `${context.surface}:${context.blockId}`;
+                  },
+                },
+                right: {
+                  width: { px: 18 },
+                  mount: (container, context) => {
+                    mounted.push(`${context.surface}:${context.documentId}:${context.text}`);
+                    container.dataset.testBlockSurface = context.surface;
+                    container.textContent = `${context.surface}:${context.blockId}`;
+                  },
+                },
+              },
+            ],
+          }),
+      };
+      editor.dispose();
+      editor = new Editor(container, { lineHeight: 20, plugins: [plugin] });
+
+      editor.openDocument({ documentId: "doc.txt", text: "one\ntwo\nthree" });
+
+      const firstRow = document.querySelector<HTMLElement>('[data-editor-virtual-row="0"]');
+      const secondRow = document.querySelector<HTMLElement>('[data-editor-virtual-row="1"]');
+      const thirdRow = document.querySelector<HTMLElement>('[data-editor-virtual-row="2"]');
+      expect(mounted).toEqual(["left:doc.txt:one\ntwo\nthree", "right:doc.txt:one\ntwo\nthree"]);
+      expect(blockSurfaceTexts()).toEqual(["left:cell", "right:cell"]);
+      expect(firstRow?.style.paddingLeft).toBe("28px");
+      expect(firstRow?.style.paddingRight).toBe("18px");
+      expect(secondRow?.style.paddingLeft).toBe("28px");
+      expect(thirdRow?.style.paddingLeft).toBe("");
+    });
+
     it("disposes mounted block surfaces when providers are removed", () => {
       const disposed: string[] = [];
       let invalidationDisposed = false;

@@ -687,6 +687,87 @@ describe("VirtualizedTextView", () => {
     expect(element?.style.height).toBe("32px");
   });
 
+  it("reserves fixed horizontal block lanes beside anchored text rows", () => {
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 0,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      textMetrics: { characterWidth: 8, rowHeight: 20 },
+    });
+    view.setText("abc\ndef\nghi");
+    view.setBlockLanes([
+      { id: "left-rail", startBufferRow: 0, endBufferRow: 1, placement: "left", widthPx: 24 },
+      { id: "right-rail", startBufferRow: 0, endBufferRow: 1, placement: "right", widthPx: 16 },
+    ]);
+    view.setScrollMetrics(0, 60, 160);
+    mockViewport(view.scrollElement, 160, 60);
+
+    const rows = view.getState().mountedRows;
+    const firstRow = container.querySelector<HTMLElement>('[data-editor-virtual-row="0"]');
+    const thirdRow = container.querySelector<HTMLElement>('[data-editor-virtual-row="2"]');
+    expect(view.getState().blockLaneCount).toBe(2);
+    expect(view.getState().contentWidth).toBe(64);
+    expect(rows[0]).toMatchObject({ leftBlockLaneWidth: 24, rightBlockLaneWidth: 16 });
+    expect(rows[1]).toMatchObject({ leftBlockLaneWidth: 24, rightBlockLaneWidth: 16 });
+    expect(rows[2]).toMatchObject({ leftBlockLaneWidth: 0, rightBlockLaneWidth: 0 });
+    expect(firstRow?.style.paddingLeft).toBe("24px");
+    expect(firstRow?.style.paddingRight).toBe("16px");
+    expect(thirdRow?.style.paddingLeft).toBe("");
+    expect(view.textOffsetFromViewportPoint(4, 10)).toBe(0);
+    expect(view.textOffsetFromViewportPoint(41, 10)).toBe(2);
+    expect(view.textOffsetFromViewportPoint(80, 10)).toBe(3);
+
+    view.setSelection(2, 2);
+    expect(container.querySelector<HTMLElement>(".editor-virtualized-caret")?.style.transform).toBe(
+      "translate(40px, 0px)",
+    );
+
+    view.setSelection(1, 2);
+
+    const selection = selectionRanges(container)[0];
+    expect(selection?.style.left).toBe("32px");
+    expect(selection?.style.width).toBe("8px");
+  });
+
+  it("mounts horizontal block lane surfaces only when the range is visible", () => {
+    const mounted: string[] = [];
+    const disposed: string[] = [];
+    view.dispose();
+    view = new VirtualizedTextView(container, {
+      rowHeight: 20,
+      overscan: 0,
+      highlightRegistry: mockRegistry,
+      selectionHighlightName: "test-selection",
+      textMetrics: { characterWidth: 8, rowHeight: 20 },
+      blockLaneMount: (container, context) => {
+        mounted.push(`${context.placement}:${context.startBufferRow}-${context.endBufferRow}`);
+        container.dataset.testBlockSurface = context.placement;
+        container.textContent = context.id;
+        return { dispose: () => disposed.push(context.id) };
+      },
+    });
+    view.setText(createLines(10));
+    view.setBlockLanes([
+      { id: "run-rail", startBufferRow: 2, endBufferRow: 3, placement: "left", widthPx: 20 },
+    ]);
+    view.setScrollMetrics(0, 40, 160);
+
+    expect(blockSurfaces(container)).toEqual([]);
+
+    view.setScrollMetrics(40, 40, 160);
+
+    expect(mounted).toEqual(["left:2-3"]);
+    expect(blockSurfaces(container)).toEqual(["run-rail"]);
+    expect(blockSurfaces(container)[0]).toBe("run-rail");
+
+    view.setScrollMetrics(120, 40, 160);
+
+    expect(disposed).toEqual(["run-rail"]);
+    expect(blockSurfaces(container)).toEqual([]);
+  });
+
   it("maps chunked DOM boundaries back to document offsets", () => {
     view.dispose();
     view = new VirtualizedTextView(container, {
@@ -1761,6 +1842,12 @@ function hiddenCharacterMarkers(container: HTMLElement): HTMLElement[] {
 
 function selectionRanges(container: HTMLElement): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>(".editor-virtualized-selection-range")];
+}
+
+function blockSurfaces(container: HTMLElement): string[] {
+  return [...container.querySelectorAll<HTMLElement>("[data-test-block-surface]")].map(
+    (surface) => surface.textContent ?? "",
+  );
 }
 
 function hiddenCharacterMarkerKinds(container: HTMLElement): string[] {
