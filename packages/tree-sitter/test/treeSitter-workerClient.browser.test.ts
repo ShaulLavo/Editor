@@ -164,6 +164,108 @@ describe.skipIf(typeof Worker === "undefined")("tree-sitter worker client", () =
     expect(parsed?.captures.some((capture) => capture.languageId === "json")).toBe(true);
   });
 
+  it("keeps injected layers active after edits outside injected content", async () => {
+    const documentId = "index.html";
+    const text = "<style>.x { color: red; }</style>";
+    const snapshot = createPieceTableSnapshot(text);
+    await parseWithTreeSitter({
+      documentId,
+      snapshotVersion: 1,
+      languageId: "html",
+      snapshot,
+    });
+
+    const edits = [{ from: text.length, to: text.length, text: "\n<main>Hello</main>" }];
+    const nextSnapshot = applyBatchToPieceTable(snapshot, edits);
+    const payload = createTreeSitterEditPayload({
+      documentId,
+      snapshotVersion: 2,
+      languageId: "html",
+      previousSnapshot: snapshot,
+      nextSnapshot,
+      edits,
+    });
+    const edited = payload ? await editWithTreeSitter(payload) : undefined;
+
+    expect(edited?.injections.map((injection) => injection.languageId)).toContain("css");
+    expect(edited?.captures.some((capture) => capture.languageId === "css")).toBe(true);
+  });
+
+  it("updates injected layers after edits inside injected content", async () => {
+    const documentId = "index.html";
+    const text = "<style>.x { color: red; }</style>";
+    const snapshot = createPieceTableSnapshot(text);
+    await parseWithTreeSitter({
+      documentId,
+      snapshotVersion: 1,
+      languageId: "html",
+      snapshot,
+    });
+
+    const cssStart = text.indexOf(".x");
+    const cssEnd = text.indexOf("</style>");
+    const nextCss = ".x {\n  color: blue;\n}";
+    const edits = [{ from: cssStart, to: cssEnd, text: nextCss }];
+    const nextSnapshot = applyBatchToPieceTable(snapshot, edits);
+    const payload = createTreeSitterEditPayload({
+      documentId,
+      snapshotVersion: 2,
+      languageId: "html",
+      previousSnapshot: snapshot,
+      nextSnapshot,
+      edits,
+    });
+    const edited = payload ? await editWithTreeSitter(payload) : undefined;
+    const colorStart = cssStart + nextCss.indexOf("color");
+
+    expect(edited?.injections.map((injection) => injection.languageId)).toContain("css");
+    expect(
+      edited?.captures.some((capture) => {
+        if (capture.languageId !== "css") return false;
+        if (capture.startIndex !== colorStart) return false;
+        return capture.endIndex === colorStart + "color".length;
+      }),
+    ).toBe(true);
+  });
+
+  it("groups combined injections into one injected layer", async () => {
+    const typescript = await resolveTreeSitterLanguageContribution(
+      TREE_SITTER_LANGUAGE_CONTRIBUTIONS.find((contribution) => {
+        return contribution.id === "typescript";
+      })!,
+    );
+    await registerTreeSitterLanguagesWithWorker([
+      {
+        ...typescript,
+        id: "combined-typescript",
+        extensions: [".combined-ts"],
+        aliases: ["combined-typescript"],
+        injectionQuerySource: `
+          (call_expression
+            function: (identifier) @_name
+            (#eq? @_name "css")
+            arguments: (template_string
+              (string_fragment) @injection.content)
+            (#set! injection.language "css")
+            (#set! injection.combined))
+        `,
+      },
+    ]);
+
+    const text = "const styles = css`.x { color: ${theme.color}; background: red; }`;";
+    const snapshot = createPieceTableSnapshot(text);
+    const parsed = await parseWithTreeSitter({
+      documentId: "style.combined-ts",
+      snapshotVersion: 1,
+      languageId: "combined-typescript",
+      snapshot,
+    });
+
+    const cssInjections = parsed?.injections.filter((injection) => injection.languageId === "css");
+    expect(cssInjections).toHaveLength(1);
+    expect(parsed?.captures.some((capture) => capture.languageId === "css")).toBe(true);
+  });
+
   it("expands and shrinks structural selections through the cached syntax tree", async () => {
     const documentId = "file.ts";
     const snapshot = createPieceTableSnapshot("const answer = 1;\n");
@@ -205,6 +307,31 @@ describe.skipIf(typeof Worker === "undefined")("tree-sitter worker client", () =
     expect(tokenRange).toMatchObject({ startOffset: 6, endOffset: 12 });
     expect(expandedRange.endOffset - expandedRange.startOffset).toBeGreaterThan(6);
     expect(shrunkRange).toMatchObject({ startOffset: 6, endOffset: 12 });
+  });
+
+  it("selects tokens inside injected content through the injected layer", async () => {
+    const documentId = "index.html";
+    const text = "<style>.x { color: red; }</style>";
+    const snapshot = createPieceTableSnapshot(text);
+    await parseWithTreeSitter({
+      documentId,
+      snapshotVersion: 1,
+      languageId: "html",
+      snapshot,
+    });
+
+    const offset = text.indexOf("color");
+    const selections = createSelectionSet([createAnchorSelection(snapshot, offset)]);
+    const token = await selectTreeSitterToken({
+      documentId,
+      languageId: "html",
+      snapshotVersion: 1,
+      snapshot,
+      selections,
+    });
+
+    const tokenRange = resolveSelection(snapshot, token.selections.selections[0]!);
+    expect(tokenRange).toMatchObject({ startOffset: offset, endOffset: offset + "color".length });
   });
 });
 
