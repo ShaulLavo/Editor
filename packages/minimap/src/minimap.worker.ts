@@ -30,7 +30,7 @@ function handleRequest(request: MinimapWorkerRequest): void {
       renderer.setDocument(request.document);
       return;
     case "applyEdit":
-      renderer.setDocument(request.document);
+      renderer.applyEdit(request.document);
       return;
     case "updateTokens":
       renderer.setTokens(request.tokens);

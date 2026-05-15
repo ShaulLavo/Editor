@@ -22,6 +22,30 @@ export type EditorDisposable = {
   dispose(): void;
 };
 
+export const EDITOR_MINIMAP_FEATURE_ID = "editor.minimap";
+
+export type EditorMinimapDecorationPosition = "inline" | "gutter";
+export type EditorMinimapSectionHeaderStyle = "normal" | "underlined";
+
+export type EditorMinimapDecoration = {
+  readonly startLineNumber: number;
+  readonly startColumn: number;
+  readonly endLineNumber: number;
+  readonly endColumn: number;
+  readonly color?: string;
+  readonly position: EditorMinimapDecorationPosition;
+  readonly sectionHeaderStyle?: EditorMinimapSectionHeaderStyle | null;
+  readonly sectionHeaderText?: string | null;
+  readonly zIndex?: number;
+};
+
+export type EditorMinimapFeature = {
+  setDecorations(sourceId: string, decorations: readonly EditorMinimapDecoration[]): void;
+  clearDecorations(sourceId: string): void;
+  getDecorations(): readonly EditorMinimapDecoration[];
+  subscribe(listener: () => void): EditorDisposable;
+};
+
 export type EditorHighlightResult = {
   readonly tokens: readonly EditorToken[];
   readonly theme?: EditorTheme | null;
@@ -101,6 +125,7 @@ export type EditorViewContributionContext = {
   readonly scrollElement: HTMLDivElement;
   readonly highlightPrefix?: string;
   getSnapshot(): EditorViewSnapshot;
+  getFeature?<T>(id: string): T | null;
   revealLine(row: number): void;
   focusEditor(): void;
   setSelection(anchor: number, head: number, timingName: string, revealOffset?: number): void;

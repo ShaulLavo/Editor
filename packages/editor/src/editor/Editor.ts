@@ -1357,6 +1357,7 @@ export class Editor {
       scrollElement: this.el,
       highlightPrefix: this.highlightPrefix,
       getSnapshot: () => this.createViewSnapshot(),
+      getFeature: (id) => this.getFeature(id),
       revealLine: (row) => this.view.scrollToRow(row),
       focusEditor: () => this.focus(),
       setSelection: (anchor, head, timingName, revealOffset) =>
@@ -1542,6 +1543,10 @@ export class Editor {
     if (this.editorFeatures.get(id) !== feature) return;
 
     this.editorFeatures.delete(id);
+  }
+
+  private getFeature<T>(id: string): T | null {
+    return (this.editorFeatures.get(id) as T | undefined) ?? null;
   }
 
   private findFeature(): EditorFindFeature | null {

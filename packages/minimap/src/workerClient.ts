@@ -1,5 +1,6 @@
 import type {
   DocumentSessionChange,
+  EditorMinimapDecoration,
   EditorToken,
   EditorViewSnapshot,
   TextEdit,
@@ -33,6 +34,7 @@ export type MinimapWorkerClientOptions = {
   readonly host: MinimapHost;
   readonly options: ResolvedMinimapOptions;
   readonly snapshot: EditorViewSnapshot;
+  readonly decorations: readonly EditorMinimapDecoration[];
   readonly onLayoutWidth: (width: number) => void;
 };
 
@@ -42,6 +44,7 @@ export class MinimapWorkerClient {
   private readonly worker: Worker;
   private readonly colorResolver: ColorResolver;
   private readonly onLayoutWidth: (width: number) => void;
+  private externalDecorations: readonly EditorMinimapDecoration[];
   private sequence = 0;
   private latestRenderedSequence = 0;
   private pendingUpdate: PendingMinimapUpdate | null = null;
@@ -57,6 +60,7 @@ export class MinimapWorkerClient {
     this.host = options.host;
     this.options = options.options;
     this.onLayoutWidth = options.onLayoutWidth;
+    this.externalDecorations = options.decorations;
     this.colorResolver = new ColorResolver(options.host.colorScope);
     this.worker = new Worker(new URL("./minimap.worker.ts", import.meta.url), { type: "module" });
     this.worker.onmessage = this.handleWorkerMessage;
@@ -79,6 +83,16 @@ export class MinimapWorkerClient {
     if (this.disposed) return;
 
     this.applyImmediateViewport(snapshot, scrollTop);
+  }
+
+  public setExternalDecorations(
+    snapshot: EditorViewSnapshot,
+    decorations: readonly EditorMinimapDecoration[],
+  ): void {
+    if (this.disposed) return;
+
+    this.externalDecorations = decorations;
+    this.update(snapshot, "decorations");
   }
 
   public dispose(): void {
@@ -133,13 +147,14 @@ export class MinimapWorkerClient {
 
     this.pendingUpdate = null;
     this.postUpdate(pending.snapshot, pending.kind, pending.change);
-    this.postLayoutIfNeeded(pending.snapshot);
+    const layoutUpdated = this.postLayoutIfNeeded(pending.snapshot);
+    this.postViewportIfNeeded(pending.snapshot, pending.kind, layoutUpdated);
     this.postRender(pending.snapshot);
   }
 
-  private postLayoutIfNeeded(snapshot: EditorViewSnapshot): void {
+  private postLayoutIfNeeded(snapshot: EditorViewSnapshot): boolean {
     const signature = layoutSignature(snapshot);
-    if (signature === this.latestLayoutSignature) return;
+    if (signature === this.latestLayoutSignature) return false;
 
     this.latestLayoutSignature = signature;
     this.post({
@@ -147,6 +162,18 @@ export class MinimapWorkerClient {
       metrics: this.metrics(snapshot),
       viewport: this.viewport(snapshot),
     });
+    return true;
+  }
+
+  private postViewportIfNeeded(
+    snapshot: EditorViewSnapshot,
+    kind: string,
+    layoutUpdated: boolean,
+  ): void {
+    if (layoutUpdated) return;
+    if (!shouldSyncViewportAfterUpdate(kind)) return;
+
+    this.post({ type: "updateViewport", viewport: this.viewport(snapshot) });
   }
 
   private postUpdate(
@@ -163,6 +190,10 @@ export class MinimapWorkerClient {
     }
     if (kind === "selection") {
       this.post({ type: "updateSelection", selections: selections(snapshot) });
+      return;
+    }
+    if (kind === "decorations") {
+      this.post({ type: "updateDecorations", decorations: this.decorations(snapshot) });
       return;
     }
     if (kind === "viewport" || kind === "layout") {
@@ -218,15 +249,19 @@ export class MinimapWorkerClient {
   }
 
   private documentPayload(snapshot: EditorViewSnapshot): MinimapDocumentPayload {
-    const lines = splitLines(snapshot.text);
-    const decorations = findSectionHeaderDecorations(lines, this.options);
     return {
       text: snapshot.text,
       lineStarts: snapshot.lineStarts,
       tokens: this.tokens(snapshot.tokens),
       selections: selections(snapshot),
-      decorations,
+      decorations: this.decorations(snapshot),
     };
+  }
+
+  private decorations(snapshot: EditorViewSnapshot): readonly EditorMinimapDecoration[] {
+    const lines = splitLines(snapshot.text);
+    const sectionHeaders = findSectionHeaderDecorations(lines, this.options);
+    return [...sectionHeaders, ...this.externalDecorations];
   }
 
   private tokens(tokens: readonly EditorToken[]): readonly MinimapToken[] {
@@ -438,9 +473,14 @@ function layoutSignature(snapshot: EditorViewSnapshot): string {
     globalThis.devicePixelRatio || 1,
     snapshot.viewport.clientHeight,
     snapshot.viewport.clientWidth,
-    snapshot.contentWidth,
     snapshot.lineCount,
   ].join(":");
+}
+
+function shouldSyncViewportAfterUpdate(kind: string): boolean {
+  if (kind === "content") return true;
+  if (kind === "document") return true;
+  return kind === "clear";
 }
 
 function mergePendingUpdate(

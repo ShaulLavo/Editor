@@ -16,7 +16,6 @@ describe("minimap layout", () => {
       metrics: { rowHeight: 20, characterWidth: 8, devicePixelRatio: 2 },
       viewport: viewport({ clientHeight: 400, clientWidth: 800, scrollWidth: 1200 }),
       lineCount: 100,
-      contentWidth: 1200,
     });
 
     expect(layout.renderMinimap).toBe(RenderMinimap.Text);
@@ -33,7 +32,6 @@ describe("minimap layout", () => {
       metrics: { rowHeight: 20, characterWidth: 8, devicePixelRatio: 1 },
       viewport: viewport({ clientHeight: 240, clientWidth: 600 }),
       lineCount: 20,
-      contentWidth: 600,
     });
 
     expect(layout.renderMinimap).toBe(RenderMinimap.Blocks);
@@ -45,7 +43,6 @@ describe("minimap layout", () => {
       metrics: { rowHeight: 20, characterWidth: 8, devicePixelRatio: 2 },
       viewport: viewport({ clientHeight: 400, clientWidth: 800, scrollWidth: 800 }),
       lineCount: 100,
-      contentWidth: 800,
     });
 
     expect(MINIMAP_GUTTER_WIDTH).toBe(2);
@@ -60,7 +57,6 @@ describe("minimap layout", () => {
       metrics: { rowHeight: 20, characterWidth: 8, devicePixelRatio: 2 },
       viewport: viewport({ clientHeight: 600, clientWidth: 800, scrollWidth: 800 }),
       lineCount: 10,
-      contentWidth: 800,
     });
 
     expect(layout.heightIsEditorHeight).toBe(true);
@@ -78,7 +74,6 @@ describe("minimap layout", () => {
       metrics: { rowHeight: 20, characterWidth: 8, devicePixelRatio: 2 },
       viewport: viewport({ clientHeight: 400, clientWidth: 800, scrollWidth: 800 }),
       lineCount: 150,
-      contentWidth: 800,
     });
 
     expect(layout.heightIsEditorHeight).toBe(false);
@@ -93,10 +88,26 @@ describe("minimap layout", () => {
       metrics: { rowHeight: 20, characterWidth: 8, devicePixelRatio: 1 },
       viewport: viewport(),
       lineCount: 20,
-      contentWidth: 600,
     });
 
     expect(layout.renderMinimap).toBe(RenderMinimap.None);
+  });
+
+  it("keeps minimap width stable when only scrollable content width changes", () => {
+    const narrowContent = computeRenderLayout({
+      minimap: resolveMinimapOptions({ maxColumn: 10_000, scale: 1 }),
+      metrics: { rowHeight: 20, characterWidth: 8, devicePixelRatio: 2 },
+      viewport: viewport({ clientHeight: 400, clientWidth: 800, scrollWidth: 800 }),
+      lineCount: 100,
+    });
+    const wideContent = computeRenderLayout({
+      minimap: resolveMinimapOptions({ maxColumn: 10_000, scale: 1 }),
+      metrics: { rowHeight: 20, characterWidth: 8, devicePixelRatio: 2 },
+      viewport: viewport({ clientHeight: 400, clientWidth: 800, scrollWidth: 2400 }),
+      lineCount: 100,
+    });
+
+    expect(wideContent.width).toBe(narrowContent.width);
   });
 
   it("uses contained layout for fit mode and clamps the visible range", () => {

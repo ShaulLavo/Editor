@@ -2,6 +2,7 @@ import type {
   DocumentSessionChange,
   EditorCommandId,
   EditorFeatureContributionContext,
+  EditorMinimapFeature,
   EditorPluginContext,
   EditorCommandHandler,
   EditorViewContributionContext,
@@ -9,6 +10,7 @@ import type {
   EditorViewSnapshot,
   TextEdit,
 } from "@editor/core";
+import { EDITOR_MINIMAP_FEATURE_ID } from "@editor/core";
 import type { LspWebSocketLike, LspWorkerLike } from "@editor/lsp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTypeScriptLspPlugin, type TypeScriptLspDiagnosticSummary } from "../src";
@@ -164,6 +166,7 @@ describe("createTypeScriptLspPlugin", () => {
       "editor-test-typescript-lsp-error",
       [{ start: 22, end: 23 }],
       expect.objectContaining({
+        color: "rgba(248, 113, 113, 1)",
         textDecoration: expect.stringContaining("wavy"),
       }),
     );
@@ -171,6 +174,62 @@ describe("createTypeScriptLspPlugin", () => {
 
     contribution.dispose();
     expect(worker.terminated).toBe(true);
+  });
+
+  it("publishes diagnostic line markers to the minimap feature", async () => {
+    const worker = new FakeWorker();
+    const minimap = minimapFeature();
+    const context = viewContributionContext(
+      editorSnapshot({
+        text: "const value = 1;\nconst next: string = 2;\n",
+        lineCount: 3,
+        lineStarts: [0, 17, 40],
+      }),
+    );
+    vi.mocked(context.getFeature!).mockImplementation((id) =>
+      id === EDITOR_MINIMAP_FEATURE_ID ? minimap : null,
+    );
+    const plugin = createTypeScriptLspPlugin({
+      diagnosticDelayMs: 0,
+      workerFactory: () => worker,
+    });
+    const provider = activatePlugin(plugin);
+    const contribution = provider.createContribution(context);
+    if (!contribution) throw new Error("missing contribution");
+
+    worker.receive(initializeResponse(message(worker.sent[0])));
+    await flushPromises();
+    worker.receive({
+      jsonrpc: "2.0",
+      method: "textDocument/publishDiagnostics",
+      params: {
+        uri: "file:///src/index.ts",
+        version: 0,
+        diagnostics: [
+          {
+            severity: 1,
+            source: "typescript",
+            message: "bad assignment",
+            range: {
+              start: { line: 1, character: 21 },
+              end: { line: 1, character: 22 },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(minimap.setDecorations).toHaveBeenCalledWith("editor.typescript-lsp.diagnostics", [
+      expect.objectContaining({
+        startLineNumber: 2,
+        endLineNumber: 2,
+        color: "rgba(239, 68, 68, 1)",
+        position: "inline",
+      }),
+    ]);
+
+    contribution.dispose();
+    expect(minimap.clearDecorations).toHaveBeenCalledWith("editor.typescript-lsp.diagnostics");
   });
 
   it("sends loaded workspace files to the worker", async () => {
@@ -968,6 +1027,7 @@ function activatePlugin(
     },
     registerEditorFeatureContribution: () => ({ dispose: () => undefined }),
     registerGutterContribution: () => ({ dispose: () => undefined }),
+    registerBlockProvider: () => ({ dispose: () => undefined }),
   } satisfies EditorPluginContext);
 
   if (!provider) throw new Error("missing provider");
@@ -992,6 +1052,7 @@ function activatePluginWithCommands(plugin: ReturnType<typeof createTypeScriptLs
       return { dispose: () => undefined };
     },
     registerGutterContribution: () => ({ dispose: () => undefined }),
+    registerBlockProvider: () => ({ dispose: () => undefined }),
   } satisfies EditorPluginContext);
 
   if (!provider) throw new Error("missing provider");
@@ -1039,6 +1100,7 @@ function viewContributionContext(snapshot: EditorViewSnapshot): EditorViewContri
     scrollElement: element,
     highlightPrefix: "editor-test",
     getSnapshot: () => snapshot,
+    getFeature: vi.fn(() => null),
     revealLine: vi.fn(),
     focusEditor: vi.fn(),
     setSelection: vi.fn(),
@@ -1048,6 +1110,15 @@ function viewContributionContext(snapshot: EditorViewSnapshot): EditorViewContri
     getRangeClientRect: vi.fn(() => new DOMRect(10, 20, 40, 18)),
     setRangeHighlight: vi.fn(),
     clearRangeHighlight: vi.fn(),
+  };
+}
+
+function minimapFeature(): EditorMinimapFeature {
+  return {
+    setDecorations: vi.fn(),
+    clearDecorations: vi.fn(),
+    getDecorations: vi.fn(() => []),
+    subscribe: vi.fn(() => ({ dispose: vi.fn() })),
   };
 }
 

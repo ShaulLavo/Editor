@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { EditorViewSnapshot } from "@editor/core";
+import type { DocumentSessionChange, EditorViewSnapshot, TextEdit } from "@editor/core";
 import { resolveMinimapOptions } from "../src/options";
 import { MinimapWorkerClient, type MinimapHost } from "../src/workerClient";
 import type { MinimapWorkerResponse } from "../src/types";
@@ -13,6 +13,7 @@ describe("MinimapWorkerClient", () => {
         host,
         options: resolveMinimapOptions(),
         snapshot: snapshot({ scrollTop: 0 }),
+        decorations: [],
         onLayoutWidth: vi.fn(),
       });
       const worker = runtime.workers[0]!;
@@ -25,6 +26,45 @@ describe("MinimapWorkerClient", () => {
       const requests = worker.postMessage.mock.calls.map((call) => call[0] as { type: string });
 
       expect(requests.map((request) => request.type)).toEqual(["updateViewport", "render"]);
+
+      client.dispose();
+      host.root.remove();
+      host.colorScope.remove();
+    } finally {
+      runtime.restore();
+    }
+  });
+
+  it("keeps layout stable for same-line edits that only change content width", () => {
+    const runtime = installMinimapRuntime();
+    try {
+      const host = createHost();
+      const client = new MinimapWorkerClient({
+        host,
+        options: resolveMinimapOptions(),
+        snapshot: snapshot(),
+        decorations: [],
+        onLayoutWidth: vi.fn(),
+      });
+      const worker = runtime.workers[0]!;
+      worker.send(renderedResponse(1));
+      worker.postMessage.mockClear();
+
+      const edit: TextEdit = { from: 6, to: 6, text: "x" };
+      client.update(
+        snapshot({ scrollWidth: 168 }, { text: "line 1x\nline 2\nline 3", contentWidth: 168 }),
+        "content",
+        documentEdit(edit, "line 1x\nline 2\nline 3"),
+      );
+      runtime.flushAnimationFrames();
+
+      const requests = worker.postMessage.mock.calls.map((call) => call[0] as { type: string });
+
+      expect(requests.map((request) => request.type)).toEqual([
+        "applyEdit",
+        "updateViewport",
+        "render",
+      ]);
 
       client.dispose();
       host.root.remove();
@@ -51,18 +91,24 @@ function createHost(): MinimapHost {
   return { root, colorScope, shadow, mainCanvas, decorationsCanvas, slider, sliderHorizontal };
 }
 
-function snapshot(viewport: Partial<EditorViewSnapshot["viewport"]> = {}): EditorViewSnapshot {
+function snapshot(
+  viewport: Partial<EditorViewSnapshot["viewport"]> = {},
+  overrides: Partial<Pick<EditorViewSnapshot, "contentWidth" | "text">> = {},
+): EditorViewSnapshot {
+  const text = overrides.text ?? "line 1\nline 2\nline 3";
+  const starts = lineStarts(text);
+  const contentWidth = overrides.contentWidth ?? 160;
   return {
     documentId: "minimap-test",
     languageId: "typescript",
-    text: "line 1\nline 2\nline 3",
+    text,
     textVersion: 1,
-    lineStarts: [0, 7, 14],
+    lineStarts: starts,
     tokens: [],
     selections: [],
     metrics: { rowHeight: 20, characterWidth: 8 },
-    lineCount: 3,
-    contentWidth: 160,
+    lineCount: starts.length,
+    contentWidth,
     totalHeight: 60,
     tabSize: 4,
     foldMarkers: [],
@@ -71,7 +117,7 @@ function snapshot(viewport: Partial<EditorViewSnapshot["viewport"]> = {}): Edito
       scrollTop: 0,
       scrollLeft: 0,
       scrollHeight: 400,
-      scrollWidth: 160,
+      scrollWidth: contentWidth,
       clientHeight: 100,
       clientWidth: 240,
       borderBoxHeight: 100,
@@ -80,6 +126,20 @@ function snapshot(viewport: Partial<EditorViewSnapshot["viewport"]> = {}): Edito
       ...viewport,
     },
   };
+}
+
+function documentEdit(edit: TextEdit, text: string): DocumentSessionChange {
+  return { kind: "edit", edits: [edit], text } as unknown as DocumentSessionChange;
+}
+
+function lineStarts(text: string): readonly number[] {
+  const starts = [0];
+  let index = text.indexOf("\n");
+  while (index !== -1) {
+    starts.push(index + 1);
+    index = text.indexOf("\n", index + 1);
+  }
+  return starts;
 }
 
 function renderedResponse(sequence: number): MinimapWorkerResponse {

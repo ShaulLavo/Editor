@@ -27,7 +27,6 @@ export function computeRenderLayout(options: {
   readonly metrics: MinimapMetrics;
   readonly viewport: MinimapViewport;
   readonly lineCount: number;
-  readonly contentWidth: number;
 }): MinimapRenderLayout {
   const pixelRatio = Math.max(1, options.metrics.devicePixelRatio);
   const height = Math.max(0, options.viewport.clientHeight);
@@ -52,7 +51,6 @@ export function computeRenderLayout(options: {
     charWidth: layoutCharWidth,
     maxColumn: options.minimap.maxColumn,
     viewportWidth: options.viewport.clientWidth,
-    contentWidth: options.contentWidth,
     characterWidth: options.metrics.characterWidth,
   });
   const baseCanvasInnerWidth = Math.floor(pixelRatio * width);
@@ -176,14 +174,12 @@ function computeMinimapWidth(options: {
   readonly charWidth: number;
   readonly maxColumn: number;
   readonly viewportWidth: number;
-  readonly contentWidth: number;
   readonly characterWidth: number;
 }): number {
   const availableWidth = Math.max(0, options.viewportWidth);
-  const textWidth = Math.max(availableWidth, options.contentWidth);
   const minimapMaxWidth = Math.floor(options.maxColumn * options.charWidth);
   const proportionalWidth = Math.floor(
-    ((textWidth - 2) * options.charWidth) / (options.characterWidth + options.charWidth),
+    ((availableWidth - 2) * options.charWidth) / (options.characterWidth + options.charWidth),
   );
   return Math.min(
     minimapMaxWidth,

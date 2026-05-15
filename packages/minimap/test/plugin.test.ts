@@ -20,6 +20,7 @@ describe("createMinimapPlugin", () => {
       registerViewContribution,
       registerEditorFeatureContribution: vi.fn(() => ({ dispose: vi.fn() })),
       registerGutterContribution: vi.fn(() => ({ dispose: vi.fn() })),
+      registerBlockProvider: vi.fn(() => ({ dispose: vi.fn() })),
     });
 
     expect(plugin.name).toBe("minimap");
@@ -43,6 +44,7 @@ describe("createMinimapPlugin", () => {
       registerViewContribution,
       registerEditorFeatureContribution: vi.fn(() => ({ dispose: vi.fn() })),
       registerGutterContribution: vi.fn(() => ({ dispose: vi.fn() })),
+      registerBlockProvider: vi.fn(() => ({ dispose: vi.fn() })),
     });
 
     expect(registration?.createContribution(context())).toBeNull();
@@ -66,6 +68,7 @@ describe("createMinimapPlugin", () => {
         registerViewContribution,
         registerEditorFeatureContribution: vi.fn(() => ({ dispose: vi.fn() })),
         registerGutterContribution: vi.fn(() => ({ dispose: vi.fn() })),
+        registerBlockProvider: vi.fn(() => ({ dispose: vi.fn() })),
       });
 
       const snapshotWithScrollbar = snapshot({
@@ -146,6 +149,7 @@ describe("createMinimapPlugin", () => {
         registerViewContribution,
         registerEditorFeatureContribution: vi.fn(() => ({ dispose: vi.fn() })),
         registerGutterContribution: vi.fn(() => ({ dispose: vi.fn() })),
+        registerBlockProvider: vi.fn(() => ({ dispose: vi.fn() })),
       });
 
       const hiddenNativeScrollSnapshot = {
@@ -192,6 +196,7 @@ describe("createMinimapPlugin", () => {
         registerViewContribution,
         registerEditorFeatureContribution: vi.fn(() => ({ dispose: vi.fn() })),
         registerGutterContribution: vi.fn(() => ({ dispose: vi.fn() })),
+        registerBlockProvider: vi.fn(() => ({ dispose: vi.fn() })),
       });
 
       const hiddenNativeScrollSnapshot = {

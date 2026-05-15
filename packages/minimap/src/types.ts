@@ -1,4 +1,9 @@
-import type { TextEdit } from "@editor/core";
+import type {
+  EditorMinimapDecoration as CoreEditorMinimapDecoration,
+  EditorMinimapDecorationPosition as CoreEditorMinimapDecorationPosition,
+  EditorMinimapSectionHeaderStyle as CoreEditorMinimapSectionHeaderStyle,
+  TextEdit,
+} from "@editor/core";
 
 export const enum RenderMinimap {
   None = 0,
@@ -10,8 +15,9 @@ export type MinimapSide = "left" | "right";
 export type MinimapSize = "proportional" | "fill" | "fit";
 export type MinimapSliderVisibility = "always" | "mouseover";
 export type MinimapAutohide = "none" | "mouseover" | "scroll";
-export type MinimapDecorationPosition = "inline" | "gutter";
-export type MinimapSectionHeaderStyle = "normal" | "underlined";
+export type MinimapDecorationPosition = CoreEditorMinimapDecorationPosition;
+export type MinimapSectionHeaderStyle = CoreEditorMinimapSectionHeaderStyle;
+export type EditorMinimapSectionHeaderStyle = CoreEditorMinimapSectionHeaderStyle;
 
 export type RGBA8 = {
   readonly r: number;
@@ -52,17 +58,7 @@ export type ResolvedMinimapOptions = {
   readonly sectionHeaderLetterSpacing: number;
 };
 
-export type EditorMinimapDecoration = {
-  readonly startLineNumber: number;
-  readonly startColumn: number;
-  readonly endLineNumber: number;
-  readonly endColumn: number;
-  readonly color?: string;
-  readonly position: MinimapDecorationPosition;
-  readonly sectionHeaderStyle?: MinimapSectionHeaderStyle | null;
-  readonly sectionHeaderText?: string | null;
-  readonly zIndex?: number;
-};
+export type EditorMinimapDecoration = CoreEditorMinimapDecoration;
 
 export type MinimapToken = {
   readonly start: number;

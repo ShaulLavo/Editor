@@ -10,6 +10,7 @@ describe.skipIf(!canUseMinimapWorker())("MinimapWorkerClient", () => {
       host,
       options: resolveMinimapOptions(),
       snapshot: snapshot("const value = 1;\nconsole.log(value);"),
+      decorations: [],
       onLayoutWidth: (width) => {
         host.root.dataset.width = String(width);
       },

@@ -1,11 +1,17 @@
 import type {
   DocumentSessionChange,
+  EditorDisposable,
+  EditorFeatureContribution,
+  EditorFeatureContributionContext,
+  EditorMinimapDecoration,
+  EditorMinimapFeature,
   EditorPlugin,
   EditorViewContribution,
   EditorViewContributionContext,
   EditorViewContributionUpdateKind,
   EditorViewSnapshot,
 } from "@editor/core";
+import { EDITOR_MINIMAP_FEATURE_ID } from "@editor/core";
 import { resolveMinimapOptions } from "./options";
 import type { EditorMinimapOptions, ResolvedMinimapOptions } from "./types";
 import { canUseMinimapWorker, MinimapWorkerClient, type MinimapHost } from "./workerClient";
@@ -15,26 +21,48 @@ const WEBKIT_SCROLLBAR_PSEUDO_ELEMENT = "::-webkit-scrollbar";
 
 export function createMinimapPlugin(options: EditorMinimapOptions = {}): EditorPlugin {
   const resolved = resolveMinimapOptions(options);
+  const decorations = new MinimapDecorationRegistry();
 
   return {
     name: "minimap",
     activate(context) {
-      return context.registerViewContribution({
-        createContribution: (contributionContext) =>
-          createMinimapContribution(contributionContext, resolved),
-      });
+      return [
+        context.registerEditorFeatureContribution({
+          createContribution: (contributionContext) =>
+            createMinimapFeatureContribution(contributionContext, decorations),
+        }),
+        context.registerViewContribution({
+          createContribution: (contributionContext) =>
+            createMinimapContribution(contributionContext, resolved, decorations),
+        }),
+      ];
     },
+  };
+}
+
+function createMinimapFeatureContribution(
+  context: EditorFeatureContributionContext,
+  decorations: MinimapDecorationRegistry,
+): EditorFeatureContribution {
+  const registration = context.registerFeature<EditorMinimapFeature>(
+    EDITOR_MINIMAP_FEATURE_ID,
+    decorations,
+  );
+
+  return {
+    dispose: () => registration.dispose(),
   };
 }
 
 function createMinimapContribution(
   context: EditorViewContributionContext,
   options: ResolvedMinimapOptions,
+  decorations: MinimapDecorationRegistry,
 ): EditorViewContribution | null {
   if (!options.enabled) return null;
   if (!canUseMinimapWorker()) return null;
 
-  return new MinimapContribution(context, options);
+  return new MinimapContribution(context, options, decorations);
 }
 
 class MinimapContribution implements EditorViewContribution {
@@ -42,6 +70,7 @@ class MinimapContribution implements EditorViewContribution {
   private readonly options: ResolvedMinimapOptions;
   private readonly host: MinimapHost;
   private readonly client: MinimapWorkerClient;
+  private readonly decorationSubscription: EditorDisposable;
   private latestSnapshot: EditorViewSnapshot;
   private activeSliderDrag: SliderDrag | null = null;
   private reservedWidth = 0;
@@ -53,7 +82,11 @@ class MinimapContribution implements EditorViewContribution {
   private readonly scrollbarGutterFallback: ScrollbarGutterFallbackMetrics;
   private disposed = false;
 
-  public constructor(context: EditorViewContributionContext, options: ResolvedMinimapOptions) {
+  public constructor(
+    context: EditorViewContributionContext,
+    options: ResolvedMinimapOptions,
+    private readonly decorations: MinimapDecorationRegistry,
+  ) {
     this.context = context;
     this.options = options;
     this.latestSnapshot = context.getSnapshot();
@@ -65,8 +98,10 @@ class MinimapContribution implements EditorViewContribution {
       host: this.host,
       options,
       snapshot: this.latestSnapshot,
+      decorations: decorations.getDecorations(),
       onLayoutWidth: this.reserveWidth,
     });
+    this.decorationSubscription = decorations.subscribe(this.handleDecorationsChanged);
     this.installPointerHandlers();
     this.client.update(this.latestSnapshot, "document");
   }
@@ -88,6 +123,7 @@ class MinimapContribution implements EditorViewContribution {
 
     this.disposed = true;
     this.stopSliderDrag();
+    this.decorationSubscription.dispose();
     this.client.dispose();
     this.context.reserveOverlayWidth(this.options.side, 0);
     this.host.root.remove();
@@ -231,6 +267,41 @@ class MinimapContribution implements EditorViewContribution {
 
     this.appliedReservedWidth = nextWidth;
     this.context.reserveOverlayWidth(this.options.side, nextWidth);
+  }
+
+  private readonly handleDecorationsChanged = (): void => {
+    this.client.setExternalDecorations(this.latestSnapshot, this.decorations.getDecorations());
+  };
+}
+
+class MinimapDecorationRegistry implements EditorMinimapFeature {
+  private readonly decorationsBySource = new Map<string, readonly EditorMinimapDecoration[]>();
+  private readonly listeners = new Set<() => void>();
+
+  public setDecorations(sourceId: string, decorations: readonly EditorMinimapDecoration[]): void {
+    this.decorationsBySource.set(sourceId, [...decorations]);
+    this.notify();
+  }
+
+  public clearDecorations(sourceId: string): void {
+    if (!this.decorationsBySource.delete(sourceId)) return;
+
+    this.notify();
+  }
+
+  public getDecorations(): readonly EditorMinimapDecoration[] {
+    return [...this.decorationsBySource.values()].flat();
+  }
+
+  public subscribe(listener: () => void): EditorDisposable {
+    this.listeners.add(listener);
+    return {
+      dispose: () => this.listeners.delete(listener),
+    };
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) listener();
   }
 }
 

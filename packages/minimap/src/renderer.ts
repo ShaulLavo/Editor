@@ -86,6 +86,13 @@ export class MinimapWorkerRenderer {
     this.state.decorationsDirty = true;
   }
 
+  public applyEdit(document: MinimapDocumentPayload): void {
+    if (!this.state) return;
+    this.state.document = document;
+    this.state.linesDirty = true;
+    this.state.decorationsDirty = true;
+  }
+
   public setBaseStyles(styles: MinimapBaseStyles): void {
     if (!this.state) return;
     this.state.styles = styles;
@@ -179,7 +186,6 @@ export class MinimapWorkerRenderer {
       metrics: state.metrics,
       viewport: state.viewport,
       lineCount: state.document.lineStarts.length,
-      contentWidth: Math.max(state.viewport.scrollWidth, state.viewport.clientWidth),
     });
   }
 
@@ -270,13 +276,7 @@ export class MinimapWorkerRenderer {
     for (const decoration of decorations) {
       const color = parseCssColor(decoration.color, state.styles.selection);
       state.decorationsContext.fillStyle = rgbaToCss(transparent(color, 0.5));
-      fillLineRange(
-        state.decorationsContext,
-        layout,
-        frame,
-        decoration.startLineNumber,
-        decoration.endLineNumber,
-      );
+      fillDecorationRange(state.decorationsContext, layout, frame, decoration);
     }
   }
 
@@ -516,6 +516,70 @@ function fillLineRange(
     yForLineNumber(frame, end, layout.lineHeight) - y + layout.lineHeight,
   );
   context.fillRect(MINIMAP_GUTTER_WIDTH, y, layout.canvasInnerWidth, height);
+}
+
+function fillDecorationRange(
+  context: OffscreenCanvasRenderingContext2D,
+  layout: MinimapRenderLayout,
+  frame: FrameLike,
+  decoration: EditorMinimapDecoration,
+): void {
+  if (decoration.position === "gutter") {
+    fillGutterLineRange(
+      context,
+      layout,
+      frame,
+      decoration.startLineNumber,
+      decoration.endLineNumber,
+    );
+    return;
+  }
+
+  fillLineRange(context, layout, frame, decoration.startLineNumber, decoration.endLineNumber);
+}
+
+function fillGutterLineRange(
+  context: OffscreenCanvasRenderingContext2D,
+  layout: MinimapRenderLayout,
+  frame: FrameLike,
+  startLineNumber: number,
+  endLineNumber: number,
+): void {
+  const range = visibleLineRange(frame, startLineNumber, endLineNumber);
+  if (!range) return;
+
+  const y = yForLineNumber(frame, range.start, layout.lineHeight);
+  const height = lineRangeHeight(layout, frame, range.end, y);
+  const width = minimapRightGutterWidth(layout);
+  context.fillRect(layout.canvasInnerWidth - width, y, width, height);
+}
+
+function visibleLineRange(
+  frame: FrameLike,
+  startLineNumber: number,
+  endLineNumber: number,
+): LineRange | null {
+  const start = Math.max(frame.startLineNumber, startLineNumber);
+  const end = Math.min(frame.endLineNumber, endLineNumber);
+  if (start > end) return null;
+  return { start, end };
+}
+
+function lineRangeHeight(
+  layout: MinimapRenderLayout,
+  frame: FrameLike,
+  endLineNumber: number,
+  y: number,
+): number {
+  return Math.max(
+    layout.lineHeight,
+    yForLineNumber(frame, endLineNumber, layout.lineHeight) - y + layout.lineHeight,
+  );
+}
+
+function minimapRightGutterWidth(layout: MinimapRenderLayout): number {
+  const horizontalScale = layout.canvasInnerWidth / Math.max(1, layout.canvasOuterWidth);
+  return Math.max(2, Math.ceil(MINIMAP_RIGHT_GUTTER_WIDTH * horizontalScale));
 }
 
 function renderSectionHeader(

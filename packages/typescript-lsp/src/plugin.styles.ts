@@ -32,8 +32,9 @@ export const DIAGNOSTIC_STYLES: Record<
   VirtualizedTextHighlightStyle
 > = {
   error: {
-    backgroundColor: "rgba(239, 68, 68, 0.12)",
-    textDecoration: "underline wavy rgba(248, 113, 113, 0.95)",
+    backgroundColor: "rgba(239, 68, 68, 0.16)",
+    color: "rgba(248, 113, 113, 1)",
+    textDecoration: "underline wavy rgba(220, 38, 38, 1)",
   },
   warning: { backgroundColor: "rgba(245, 158, 11, 0.26)" },
   information: { backgroundColor: "rgba(59, 130, 246, 0.22)" },

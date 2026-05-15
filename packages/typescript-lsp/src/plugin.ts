@@ -1,14 +1,17 @@
-import type {
-  DocumentSessionChange,
-  EditorCommandId,
-  EditorDisposable,
-  EditorFeatureContribution,
-  EditorFeatureContributionContext,
-  EditorTheme,
-  EditorViewContribution,
-  EditorViewContributionContext,
-  EditorViewContributionUpdateKind,
-  EditorViewSnapshot,
+import {
+  EDITOR_MINIMAP_FEATURE_ID,
+  type DocumentSessionChange,
+  type EditorCommandId,
+  type EditorDisposable,
+  type EditorFeatureContribution,
+  type EditorFeatureContributionContext,
+  type EditorMinimapDecoration,
+  type EditorMinimapFeature,
+  type EditorTheme,
+  type EditorViewContribution,
+  type EditorViewContributionContext,
+  type EditorViewContributionUpdateKind,
+  type EditorViewSnapshot,
 } from "@editor/core"
 import {
   createWebSocketLspTransport,
@@ -110,6 +113,11 @@ type DocumentDescriptor = {
 
 const DEFAULT_DIAGNOSTIC_DELAY_MS = 150
 const DEFAULT_TIMEOUT_MS = 15000
+const TYPESCRIPT_LSP_MINIMAP_SOURCE_ID = "editor.typescript-lsp.diagnostics"
+const LSP_DIAGNOSTIC_ERROR = 1
+const LSP_DIAGNOSTIC_WARNING = 2
+const LSP_DIAGNOSTIC_INFORMATION = 3
+const LSP_DIAGNOSTIC_HINT = 4
 
 const DIAGNOSTIC_SEVERITIES: readonly TypeScriptLspDiagnosticSeverity[] = [
   "error",
@@ -117,6 +125,26 @@ const DIAGNOSTIC_SEVERITIES: readonly TypeScriptLspDiagnosticSeverity[] = [
   "information",
   "hint",
 ]
+
+const DIAGNOSTIC_MINIMAP_COLORS: Record<
+  TypeScriptLspDiagnosticSeverity,
+  string
+> = {
+  error: "rgba(239, 68, 68, 1)",
+  warning: "rgba(245, 158, 11, 0.95)",
+  information: "rgba(59, 130, 246, 0.9)",
+  hint: "rgba(148, 163, 184, 0.85)",
+}
+
+const DIAGNOSTIC_MINIMAP_Z_INDEX: Record<
+  TypeScriptLspDiagnosticSeverity,
+  number
+> = {
+  error: 40,
+  warning: 30,
+  information: 20,
+  hint: 10,
+}
 
 export function createTypeScriptLspPlugin(
   options: TypeScriptLspPluginOptions = {}
@@ -540,8 +568,15 @@ class TypeScriptLspContribution implements EditorViewContribution {
     text: string,
     diagnostics: readonly lsp.Diagnostic[]
   ): void {
-    if (!this.context.setRangeHighlight) return
+    this.renderDiagnosticHighlights(text, diagnostics)
+    this.renderDiagnosticMinimapMarkers(diagnostics)
+  }
 
+  private renderDiagnosticHighlights(
+    text: string,
+    diagnostics: readonly lsp.Diagnostic[]
+  ): void {
+    if (!this.context.setRangeHighlight) return
     const groups = diagnosticHighlightGroups(text, diagnostics)
     for (const severity of DIAGNOSTIC_SEVERITIES) {
       this.context.setRangeHighlight(
@@ -552,11 +587,39 @@ class TypeScriptLspContribution implements EditorViewContribution {
     }
   }
 
+  private renderDiagnosticMinimapMarkers(
+    diagnostics: readonly lsp.Diagnostic[]
+  ): void {
+    const minimap = this.minimapFeature()
+    if (!minimap) return
+
+    minimap.setDecorations(
+      TYPESCRIPT_LSP_MINIMAP_SOURCE_ID,
+      diagnosticMinimapDecorations(
+        this.context.getSnapshot().lineCount,
+        diagnostics
+      )
+    )
+  }
+
   private clearDiagnosticHighlights(): void {
+    this.clearDiagnosticMinimapMarkers()
     if (!this.context.clearRangeHighlight) return
 
     for (const name of Object.values(this.highlightNames))
       this.context.clearRangeHighlight(name)
+  }
+
+  private clearDiagnosticMinimapMarkers(): void {
+    this.minimapFeature()?.clearDecorations(TYPESCRIPT_LSP_MINIMAP_SOURCE_ID)
+  }
+
+  private minimapFeature(): EditorMinimapFeature | null {
+    return (
+      this.context.getFeature?.<EditorMinimapFeature>(
+        EDITOR_MINIMAP_FEATURE_ID
+      ) ?? null
+    )
   }
 
   private setStatus(status: TypeScriptLspStatus): void {
@@ -1113,6 +1176,65 @@ function createHighlightNames(
     information: `${prefix}-typescript-lsp-information`,
     hint: `${prefix}-typescript-lsp-hint`,
   }
+}
+
+function diagnosticMinimapDecorations(
+  lineCount: number,
+  diagnostics: readonly lsp.Diagnostic[]
+): readonly EditorMinimapDecoration[] {
+  const decorations = diagnostics.flatMap((diagnostic) =>
+    diagnosticMinimapDecoration(lineCount, diagnostic)
+  )
+  return decorations
+}
+
+function diagnosticMinimapDecoration(
+  lineCount: number,
+  diagnostic: lsp.Diagnostic
+): readonly EditorMinimapDecoration[] {
+  if (lineCount <= 0) return []
+
+  const severity = minimapSeverityForDiagnostic(diagnostic)
+  const startLineNumber = clampLineNumber(
+    diagnostic.range.start.line + 1,
+    lineCount
+  )
+  const endLineNumber = Math.max(
+    startLineNumber,
+    clampLineNumber(diagnosticEndLineNumber(diagnostic), lineCount)
+  )
+  return [
+    {
+      startLineNumber,
+      startColumn: 1,
+      endLineNumber,
+      endColumn: 1,
+      color: DIAGNOSTIC_MINIMAP_COLORS[severity],
+      position: "inline",
+      zIndex: DIAGNOSTIC_MINIMAP_Z_INDEX[severity],
+    },
+  ]
+}
+
+function diagnosticEndLineNumber(diagnostic: lsp.Diagnostic): number {
+  const start = diagnostic.range.start
+  const end = diagnostic.range.end
+  if (end.line > start.line && end.character === 0) return end.line
+  return end.line + 1
+}
+
+function minimapSeverityForDiagnostic(
+  diagnostic: lsp.Diagnostic
+): TypeScriptLspDiagnosticSeverity {
+  if (diagnostic.severity === LSP_DIAGNOSTIC_WARNING) return "warning"
+  if (diagnostic.severity === LSP_DIAGNOSTIC_INFORMATION) return "information"
+  if (diagnostic.severity === LSP_DIAGNOSTIC_HINT) return "hint"
+  if (diagnostic.severity === LSP_DIAGNOSTIC_ERROR) return "error"
+  return "error"
+}
+
+function clampLineNumber(lineNumber: number, lineCount: number): number {
+  return Math.min(Math.max(1, lineNumber), lineCount)
 }
 
 function hoverText(hover: lsp.Hover | null): string | null {
