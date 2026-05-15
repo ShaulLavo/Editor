@@ -21,11 +21,12 @@ import {
   TreeSitterSyntaxSession,
 } from "../src/session";
 import { createTreeSitterSourceDescriptor } from "../src/treeSitter/source";
-import type { TreeSitterEditRequest, TreeSitterParseRequest } from "../src/treeSitter/types";
 import type {
-  TreeSitterBackend,
-  TreeSitterEditPayload,
-} from "../src/treeSitter/workerClient";
+  TreeSitterEditRequest,
+  TreeSitterParseRequest,
+  TreeSitterParseResult,
+} from "../src/treeSitter/types";
+import type { TreeSitterBackend, TreeSitterEditPayload } from "../src/treeSitter/workerClient";
 
 describe("Tree-sitter syntax capture conversion", () => {
   it("maps known capture names to editor token styles", () => {
@@ -182,6 +183,7 @@ describe("Tree-sitter syntax capture conversion", () => {
     const payload = createTreeSitterEditPayload({
       documentId: "file.ts",
       languageId: "typescript",
+      previousSnapshotVersion: 1,
       snapshotVersion: 2,
       previousSnapshot,
       nextSnapshot,
@@ -220,6 +222,7 @@ describe("Tree-sitter syntax capture conversion", () => {
     const editRequest: TreeSitterEditRequest = {
       type: "edit",
       documentId: "file.ts",
+      previousSnapshotVersion: 1,
       snapshotVersion: 2,
       languageId: "typescript",
       includeHighlights: true,
@@ -251,6 +254,7 @@ describe("Tree-sitter syntax capture conversion", () => {
     const payload = createTreeSitterEditPayload({
       documentId: "file.ts",
       languageId: "typescript",
+      previousSnapshotVersion: 1,
       snapshotVersion: 2,
       previousSnapshot,
       nextSnapshot,
@@ -289,6 +293,7 @@ describe("Tree-sitter syntax capture conversion", () => {
     const payload = createTreeSitterEditPayload({
       documentId: "file.ts",
       languageId: "typescript",
+      previousSnapshotVersion: 1,
       snapshotVersion: 2,
       previousSnapshot,
       nextSnapshot,
@@ -343,9 +348,58 @@ describe("Tree-sitter syntax capture conversion", () => {
 
     await session.applyChange(change);
 
-    expect(backend.latestEdit?.edits).toEqual([
-      { from: 3, text: "!?", to: 3 },
+    expect(backend.latestEdit?.edits).toEqual([{ from: 3, text: "!?", to: 3 }]);
+  });
+
+  it("targets incremental edits at the parsed snapshot version", async () => {
+    const { backend, edits } = createDeferredTreeSitterBackend();
+    const initialText = "const a = 1;";
+    const document = createDocumentSession(initialText);
+    const session = new TreeSitterSyntaxSession({
+      backend,
+      documentId: "file.ts",
+      languageId: "typescript",
+      snapshot: document.getSnapshot(),
+      text: initialText,
+    });
+
+    await session.refresh(document.getSnapshot(), document.getText());
+
+    const firstChange = document.applyEdits([
+      { from: initialText.length, text: "!", to: initialText.length },
     ]);
+    const firstPromise = session.applyChange(firstChange);
+    const secondChange = document.applyEdits([
+      { from: firstChange.text.length, text: "?", to: firstChange.text.length },
+    ]);
+    const secondPromise = session.applyChange(secondChange);
+    await Promise.resolve();
+
+    expect(edits.map(({ payload }) => payload.previousSnapshotVersion)).toEqual([1, 1]);
+    expect(edits.map(({ payload }) => payload.snapshotVersion)).toEqual([2, 3]);
+    expect(edits[1]?.payload.edits).toEqual([
+      { from: initialText.length, text: "!?", to: initialText.length },
+    ]);
+
+    const firstEdit = edits[0]!;
+    firstEdit.result.resolve(createParseResult(firstEdit.payload));
+    await firstPromise;
+    const secondEdit = edits[1]!;
+    secondEdit.result.resolve(createParseResult(secondEdit.payload));
+    await secondPromise;
+
+    const currentText = document.getText();
+    const thirdChange = document.applyEdits([
+      { from: currentText.length, text: ";", to: currentText.length },
+    ]);
+    const thirdPromise = session.applyChange(thirdChange);
+    await Promise.resolve();
+
+    expect(edits[2]?.payload.previousSnapshotVersion).toBe(3);
+
+    const thirdEdit = edits[2]!;
+    thirdEdit.result.resolve(createParseResult(thirdEdit.payload));
+    await thirdPromise;
   });
 });
 
@@ -373,6 +427,57 @@ function createCapturingTreeSitterBackend() {
   } satisfies TreeSitterBackend & { latestEdit: TreeSitterEditPayload | null };
 
   return backend;
+}
+
+type Deferred<T> = {
+  readonly promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: unknown): void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function createDeferredTreeSitterBackend() {
+  const edits: { payload: TreeSitterEditPayload; result: Deferred<TreeSitterParseResult> }[] = [];
+  const backend = {
+    disposeDocument: () => undefined,
+    edit: (payload: TreeSitterEditPayload) => {
+      const result = createDeferred<TreeSitterParseResult>();
+      edits.push({ payload, result });
+      return result.promise;
+    },
+    parse: async (payload) => createParseResult(payload),
+    registerLanguages: async () => undefined,
+    select: async () => undefined,
+  } satisfies TreeSitterBackend;
+
+  return { backend, edits };
+}
+
+function createParseResult(payload: {
+  readonly documentId: string;
+  readonly languageId: string;
+  readonly snapshotVersion: number;
+}): TreeSitterParseResult {
+  return {
+    brackets: [],
+    captures: [],
+    documentId: payload.documentId,
+    errors: [],
+    folds: [],
+    injections: [],
+    languageId: payload.languageId,
+    snapshotVersion: payload.snapshotVersion,
+    timings: [],
+  };
 }
 
 function createTestLanguageRegistry(): TreeSitterLanguageRegistry {

@@ -16,7 +16,7 @@ import { resolveMinimapOptions } from "./options";
 import type { EditorMinimapOptions, ResolvedMinimapOptions } from "./types";
 import { canUseMinimapWorker, MinimapWorkerClient, type MinimapHost } from "./workerClient";
 
-const OVERLAY_SCROLLBAR_GUTTER_FALLBACK = 7;
+const THIN_SCROLLBAR_GUTTER_FALLBACK = 7;
 const WEBKIT_SCROLLBAR_PSEUDO_ELEMENT = "::-webkit-scrollbar";
 
 export function createMinimapPlugin(options: EditorMinimapOptions = {}): EditorPlugin {
@@ -467,11 +467,33 @@ function readScrollElementBorderMetrics(element: HTMLElement): ScrollElementBord
 function measureScrollbarGutterFallback(element: HTMLElement): ScrollbarGutterFallbackMetrics {
   const cssDimensions = readScrollbarCssDimensions(element);
   const keywordWidth = readScrollbarWidthKeyword(element);
+  const nativeDimensions = measureNativeScrollbarGutter(element.ownerDocument);
 
   return {
-    vertical: cssDimensions.vertical ?? keywordWidth ?? OVERLAY_SCROLLBAR_GUTTER_FALLBACK,
-    horizontal: cssDimensions.horizontal ?? keywordWidth ?? OVERLAY_SCROLLBAR_GUTTER_FALLBACK,
+    vertical: cssDimensions.vertical ?? keywordWidth ?? nativeDimensions.vertical,
+    horizontal: cssDimensions.horizontal ?? keywordWidth ?? nativeDimensions.horizontal,
   };
+}
+
+function measureNativeScrollbarGutter(document: Document): ScrollbarGutterFallbackMetrics {
+  const container = document.body ?? document.documentElement;
+  if (!container) return { vertical: 0, horizontal: 0 };
+
+  const probe = document.createElement("div");
+  probe.style.height = "100px";
+  probe.style.left = "-10000px";
+  probe.style.overflow = "scroll";
+  probe.style.position = "absolute";
+  probe.style.top = "-10000px";
+  probe.style.visibility = "hidden";
+  probe.style.width = "100px";
+  container.appendChild(probe);
+
+  const vertical = Math.max(0, probe.offsetWidth - probe.clientWidth);
+  const horizontal = Math.max(0, probe.offsetHeight - probe.clientHeight);
+  probe.remove();
+
+  return { vertical, horizontal };
 }
 
 function readScrollbarCssDimensions(element: HTMLElement): {
@@ -488,7 +510,7 @@ function readScrollbarCssDimensions(element: HTMLElement): {
 function readScrollbarWidthKeyword(element: HTMLElement): number | null {
   const value = readComputedStyle(element)?.getPropertyValue("scrollbar-width").trim();
   if (value === "none") return 0;
-  if (value === "thin") return OVERLAY_SCROLLBAR_GUTTER_FALLBACK;
+  if (value === "thin") return THIN_SCROLLBAR_GUTTER_FALLBACK;
   return null;
 }
 

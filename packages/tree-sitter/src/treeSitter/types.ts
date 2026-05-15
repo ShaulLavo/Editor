@@ -94,6 +94,7 @@ export type TreeSitterParseRequest = {
 export type TreeSitterEditRequest = {
   readonly type: "edit";
   readonly documentId: string;
+  readonly previousSnapshotVersion: number;
   readonly snapshotVersion: number;
   readonly languageId: TreeSitterLanguageId;
   readonly includeHighlights: boolean;

@@ -49,6 +49,7 @@ describe.skipIf(typeof Worker === "undefined")("tree-sitter worker client", () =
     const nextSnapshot = applyBatchToPieceTable(snapshot, edits);
     const payload = createTreeSitterEditPayload({
       documentId,
+      previousSnapshotVersion: 1,
       snapshotVersion: 2,
       languageId: "typescript",
       previousSnapshot: snapshot,
@@ -179,6 +180,7 @@ describe.skipIf(typeof Worker === "undefined")("tree-sitter worker client", () =
     const nextSnapshot = applyBatchToPieceTable(snapshot, edits);
     const payload = createTreeSitterEditPayload({
       documentId,
+      previousSnapshotVersion: 1,
       snapshotVersion: 2,
       languageId: "html",
       previousSnapshot: snapshot,
@@ -209,6 +211,7 @@ describe.skipIf(typeof Worker === "undefined")("tree-sitter worker client", () =
     const nextSnapshot = applyBatchToPieceTable(snapshot, edits);
     const payload = createTreeSitterEditPayload({
       documentId,
+      previousSnapshotVersion: 1,
       snapshotVersion: 2,
       languageId: "html",
       previousSnapshot: snapshot,

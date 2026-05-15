@@ -38,6 +38,7 @@ export class TreeSitterSyntaxSession implements EditorSyntaxSession {
   private readonly includeHighlights: boolean;
   private readonly backend: TreeSitterBackend;
   private snapshotVersion = 0;
+  private parsedSnapshotVersion = 0;
   private text: string;
   private snapshot: PieceTableSnapshot;
   private result: EditorSyntaxResult = createEmptySyntaxResult();
@@ -90,6 +91,7 @@ export class TreeSitterSyntaxSession implements EditorSyntaxSession {
     const payload = createTreeSitterEditPayload({
       documentId: this.documentId,
       languageId: this.languageId,
+      previousSnapshotVersion: this.parsedSnapshotVersion,
       snapshotVersion: ++this.snapshotVersion,
       previousSnapshot: this.snapshot,
       nextSnapshot: change.snapshot,
@@ -174,6 +176,7 @@ export class TreeSitterSyntaxSession implements EditorSyntaxSession {
 
     this.text = text;
     this.snapshot = snapshot;
+    this.parsedSnapshotVersion = result.snapshotVersion;
     this.result = treeSitterParseResultToEditorSyntaxResult(result);
     return this.result;
   }
@@ -182,6 +185,7 @@ export class TreeSitterSyntaxSession implements EditorSyntaxSession {
 type TreeSitterEditPayloadOptions = {
   readonly documentId: string;
   readonly languageId: TreeSitterLanguageId;
+  readonly previousSnapshotVersion: number;
   readonly snapshotVersion: number;
   readonly previousSnapshot: PieceTableSnapshot;
   readonly nextSnapshot: PieceTableSnapshot;
@@ -196,6 +200,7 @@ export const createTreeSitterEditPayload = (
 
   return {
     documentId: options.documentId,
+    previousSnapshotVersion: options.previousSnapshotVersion,
     snapshotVersion: options.snapshotVersion,
     languageId: options.languageId,
     includeHighlights: options.includeHighlights ?? true,

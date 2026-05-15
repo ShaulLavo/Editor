@@ -40,6 +40,7 @@ export type TreeSitterParsePayload = {
 
 export type TreeSitterEditPayload = {
   readonly documentId: string;
+  readonly previousSnapshotVersion: number;
   readonly snapshotVersion: number;
   readonly languageId: TreeSitterLanguageId;
   readonly includeHighlights: boolean;
@@ -135,6 +136,7 @@ export const editWithTreeSitter = async (
   const result = await postDocumentRequest({
     type: "edit",
     documentId: payload.documentId,
+    previousSnapshotVersion: payload.previousSnapshotVersion,
     snapshotVersion: payload.snapshotVersion,
     languageId: payload.languageId,
     includeHighlights: payload.includeHighlights,

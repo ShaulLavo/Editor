@@ -274,7 +274,11 @@ const editDocument = async (
 ): Promise<TreeSitterParseResult | undefined> =>
   runCancellableRequest(request, async (context) => {
     const runtime = await ensureRuntime(request.languageId);
-    const cached = latestCachedDocument(request.documentId, request.languageId);
+    const cached = cachedDocumentForVersion(
+      request.documentId,
+      request.languageId,
+      request.previousSnapshotVersion,
+    );
     if (!cached) throw new Error(`Tree-sitter cache miss for "${request.documentId}"`);
 
     const editStart = nowMs();
@@ -1015,8 +1019,6 @@ const selectDocument = async (
   );
 
   if (!cached) return staleSelectionResult(request);
-
-  cached.lastUsed = nextUse++;
   return {
     documentId: request.documentId,
     snapshotVersion: request.snapshotVersion,
@@ -1156,20 +1158,6 @@ const ensureDocumentCache = (documentId: string): DocumentCache => {
   return cache;
 };
 
-const latestCachedDocument = (
-  documentId: string,
-  languageId: TreeSitterLanguageId,
-): ParsedDocument | null => {
-  const cache = documentCaches.get(documentId);
-  if (!cache) return null;
-
-  const matching = cache.snapshots.filter((snapshot) => snapshot.languageId === languageId);
-  matching.sort((left, right) => right.snapshotVersion - left.snapshotVersion);
-  const snapshot = matching[0] ?? null;
-  if (snapshot) snapshot.lastUsed = nextUse++;
-  return snapshot;
-};
-
 const cachedDocumentForVersion = (
   documentId: string,
   languageId: TreeSitterLanguageId,
@@ -1178,11 +1166,13 @@ const cachedDocumentForVersion = (
   const cache = documentCaches.get(documentId);
   if (!cache) return null;
 
-  return (
-    cache.snapshots.find((snapshot) => {
-      return snapshot.languageId === languageId && snapshot.snapshotVersion === snapshotVersion;
-    }) ?? null
-  );
+  const snapshot = cache.snapshots.find((item) => {
+    return item.languageId === languageId && item.snapshotVersion === snapshotVersion;
+  });
+  if (!snapshot) return null;
+
+  snapshot.lastUsed = nextUse++;
+  return snapshot;
 };
 
 const evictCachedSnapshots = (cache: DocumentCache): void => {

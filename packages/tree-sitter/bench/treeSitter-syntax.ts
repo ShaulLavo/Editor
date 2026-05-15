@@ -118,6 +118,7 @@ const measureSyntax = async (lines: number): Promise<SyntaxSample> => {
   const payload = createTreeSitterEditPayload({
     documentId,
     languageId: "typescript",
+    previousSnapshotVersion: 1,
     snapshotVersion: 2,
     previousSnapshot: snapshot,
     nextSnapshot,

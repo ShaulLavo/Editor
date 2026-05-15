@@ -178,7 +178,7 @@ describe("createMinimapPlugin", () => {
     }
   });
 
-  it("reserves a smaller fallback vertical scrollbar lane for overlay scrollbars", () => {
+  it("does not reserve an overlay scrollbar lane when native gutters measure zero", () => {
     const restoreRuntime = installMinimapRuntime();
     try {
       let registration: EditorViewContributionProvider | undefined;
@@ -213,8 +213,8 @@ describe("createMinimapPlugin", () => {
       const host = testContext.container.querySelector<HTMLElement>(".editor-minimap-right");
 
       expect(contribution).not.toBeNull();
-      expect(host?.style.right).toBe("7px");
-      expect(testContext.reserveOverlayWidth).toHaveBeenCalledWith("right", 7);
+      expect(host?.style.right).toBe("0px");
+      expect(testContext.reserveOverlayWidth).not.toHaveBeenCalledWith("right", 7);
 
       contribution?.dispose();
     } finally {
