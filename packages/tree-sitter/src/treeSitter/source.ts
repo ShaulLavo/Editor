@@ -119,7 +119,8 @@ export const readTreeSitterPieceTableInput = (
   if (!chunk) return undefined;
 
   const sourceStart = chunk.chunkStart + index - chunk.start;
-  return readResolvedChunkText(chunk.source, sourceStart, chunk.source.length);
+  const sourceEnd = chunk.chunkStart + chunk.end - chunk.start;
+  return readResolvedChunkText(chunk.source, sourceStart, sourceEnd);
 };
 
 export const readTreeSitterInputRange = (

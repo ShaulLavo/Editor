@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import documentSessionSource from "../../editor/src/documentSession.ts?raw";
 import { TREE_SITTER_LANGUAGE_CONTRIBUTIONS } from "../../tree-sitter-languages/src/index.ts";
 
 import {
@@ -61,6 +62,130 @@ describe.skipIf(typeof Worker === "undefined")("tree-sitter worker client", () =
     expect(edited?.documentId).toBe(documentId);
     expect(edited?.snapshotVersion).toBe(2);
     expect(edited?.captures.length).toBeGreaterThan(0);
+  });
+
+  it("matches a full parse after same-line inserts before later rows", async () => {
+    const documentId = "same-line-insert.ts";
+    const text = [
+      "export function alpha() {",
+      "  return 1;",
+      "}",
+      "export function beta() {",
+      "  return alpha();",
+      "}",
+    ].join("\n");
+    const snapshot = createPieceTableSnapshot(text);
+    await parseWithTreeSitter({
+      documentId,
+      snapshotVersion: 1,
+      languageId: "typescript",
+      snapshot,
+    });
+
+    const editOffset = text.indexOf("return 1") + "return".length;
+    const edit = { from: editOffset, to: editOffset, text: " value" };
+    const nextSnapshot = applyBatchToPieceTable(snapshot, [edit]);
+    const payload = createTreeSitterEditPayload({
+      documentId,
+      previousSnapshotVersion: 1,
+      snapshotVersion: 2,
+      languageId: "typescript",
+      previousSnapshot: snapshot,
+      nextSnapshot,
+      edits: [edit],
+    });
+    const incremental = payload ? await editWithTreeSitter(payload) : undefined;
+    const full = await parseWithTreeSitter({
+      documentId: `${documentId}:full`,
+      snapshotVersion: 1,
+      languageId: "typescript",
+      snapshot: nextSnapshot,
+    });
+
+    expect(captureSignature(incremental?.captures ?? [])).toEqual(
+      captureSignature(full?.captures ?? []),
+    );
+  });
+
+  it("matches a full parse after inserting inside an identifier", async () => {
+    const documentId = "identifier-insert.ts";
+    const text = [
+      'export type DocumentSessionChangeKind = "edit" | "selection" | "undo" | "redo";',
+      "",
+      "export type EditorTimingMeasurement = {",
+      "  readonly name: string;",
+      "  readonly durationMs: number;",
+      "};",
+    ].join("\n");
+    const snapshot = createPieceTableSnapshot(text);
+    await parseWithTreeSitter({
+      documentId,
+      snapshotVersion: 1,
+      languageId: "typescript",
+      snapshot,
+    });
+
+    const editOffset = text.indexOf("Document") + "Docume".length;
+    const edit = { from: editOffset, to: editOffset, text: "f" };
+    const nextSnapshot = applyBatchToPieceTable(snapshot, [edit]);
+    const payload = createTreeSitterEditPayload({
+      documentId,
+      previousSnapshotVersion: 1,
+      snapshotVersion: 2,
+      languageId: "typescript",
+      previousSnapshot: snapshot,
+      nextSnapshot,
+      edits: [edit],
+    });
+    const incremental = payload ? await editWithTreeSitter(payload) : undefined;
+    const full = await parseWithTreeSitter({
+      documentId: `${documentId}:full`,
+      snapshotVersion: 1,
+      languageId: "typescript",
+      snapshot: nextSnapshot,
+    });
+
+    expect(captureSignature(incremental?.captures ?? [])).toEqual(
+      captureSignature(full?.captures ?? []),
+    );
+  });
+
+  it("matches a full parse after inserting inside the real document session source", async () => {
+    const documentId = "document-session-source.ts";
+    const snapshot = createPieceTableSnapshot(documentSessionSource);
+    await parseWithTreeSitter({
+      documentId,
+      snapshotVersion: 1,
+      languageId: "typescript",
+      snapshot,
+    });
+
+    const kindOffset = documentSessionSource.indexOf("readonly kind");
+    expect(kindOffset).toBeGreaterThanOrEqual(0);
+
+    const editOffset = kindOffset + "readonly ki".length;
+    const edit = { from: editOffset, to: editOffset, text: "g" };
+    const nextSnapshot = applyBatchToPieceTable(snapshot, [edit]);
+    const payload = createTreeSitterEditPayload({
+      documentId,
+      previousSnapshotVersion: 1,
+      snapshotVersion: 2,
+      languageId: "typescript",
+      previousSnapshot: snapshot,
+      nextSnapshot,
+      edits: [edit],
+    });
+    const incremental = payload ? await editWithTreeSitter(payload) : undefined;
+    const full = await parseWithTreeSitter({
+      documentId: `${documentId}:full`,
+      snapshotVersion: 1,
+      languageId: "typescript",
+      snapshot: nextSnapshot,
+    });
+
+    expect(captureSignature(incremental?.captures ?? [])).toEqual(
+      captureSignature(full?.captures ?? []),
+    );
   });
 
   it("highlights injected script and style content", async () => {
@@ -343,4 +468,20 @@ async function registerDefaultLanguages(): Promise<void> {
     TREE_SITTER_LANGUAGE_CONTRIBUTIONS.map(resolveTreeSitterLanguageContribution),
   );
   await registerTreeSitterLanguagesWithWorker(descriptors);
+}
+
+type CaptureSignatureInput = {
+  readonly startIndex: number;
+  readonly endIndex: number;
+  readonly captureName: string;
+  readonly languageId?: string;
+};
+
+function captureSignature(captures: readonly CaptureSignatureInput[]): string[] {
+  return captures
+    .map((capture) => {
+      const languageId = capture.languageId ?? "";
+      return `${capture.startIndex}:${capture.endIndex}:${capture.captureName}:${languageId}`;
+    })
+    .sort();
 }

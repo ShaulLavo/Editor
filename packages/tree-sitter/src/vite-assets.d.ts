@@ -3,6 +3,11 @@ declare module "*.scm?raw" {
   export default source;
 }
 
+declare module "*.ts?raw" {
+  const source: string;
+  export default source;
+}
+
 declare module "*.wasm?url" {
   const url: string;
   export default url;
