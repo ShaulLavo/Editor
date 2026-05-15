@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 describe("createReactEditorBlocksPlugin", () => {
-  it("renders block surfaces through React portals", () => {
+  it("renders block surfaces through React portals", async () => {
     const unmounted: string[] = [];
     const container = document.createElement("div");
     document.body.append(container);
@@ -51,12 +51,15 @@ describe("createReactEditorBlocksPlugin", () => {
 
     expect(surfaceTexts(container)).toEqual(["top:file:24"]);
 
-    act(() => editor.dispose());
+    await act(async () => {
+      editor.dispose();
+      await flushReactBlockTasks();
+    });
 
     expect(unmounted).toEqual(["top:file:24"]);
   });
 
-  it("unmounts React surfaces when blocks change", () => {
+  it("unmounts React surfaces when blocks change", async () => {
     const disposed: string[] = [];
     const container = document.createElement("div");
     let listener: () => void = () => {};
@@ -87,18 +90,24 @@ describe("createReactEditorBlocksPlugin", () => {
     expect(surfaceTexts(container)).toEqual(["first"]);
 
     blockId = "second";
-    act(() => listener());
+    await act(async () => {
+      listener();
+      await flushReactBlockTasks();
+    });
 
     expect(surfaceTexts(container)).toEqual(["second"]);
     expect(disposed).toEqual(["surface:first"]);
 
-    act(() => editor.dispose());
+    await act(async () => {
+      editor.dispose();
+      await flushReactBlockTasks();
+    });
 
     expect(disposed).toContain("surface:second");
     expect(disposed).toContain("provider");
   });
 
-  it("unmounts React surfaces when virtualized rows move out of view", () => {
+  it("unmounts React surfaces when virtualized rows move out of view", async () => {
     const unmounted: string[] = [];
     const container = document.createElement("div");
     const text = Array.from({ length: 120 }, (_value, index) => `line ${index}`).join("\n");
@@ -124,12 +133,18 @@ describe("createReactEditorBlocksPlugin", () => {
 
     expect(surfaceTexts(container)).toEqual(["top-row"]);
 
-    act(() => editor.setScrollPosition({ top: 1_600, left: 0 }));
+    await act(async () => {
+      editor.setScrollPosition({ top: 1_600, left: 0 });
+      await flushReactBlockTasks();
+    });
 
     expect(surfaceTexts(container)).toEqual([]);
     expect(unmounted).toEqual(["top-row"]);
 
-    act(() => editor.dispose());
+    await act(async () => {
+      editor.dispose();
+      await flushReactBlockTasks();
+    });
   });
 });
 
@@ -159,6 +174,10 @@ function surfaceTexts(container: HTMLElement): string[] {
   return [...container.querySelectorAll<HTMLElement>("[data-react-block-surface]")].map(
     (surface) => surface.textContent ?? "",
   );
+}
+
+async function flushReactBlockTasks(): Promise<void> {
+  await Promise.resolve();
 }
 
 function fixedSurfacePx(surface: ReactEditorBlockSurface): number {

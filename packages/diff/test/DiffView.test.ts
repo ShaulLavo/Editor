@@ -1,6 +1,13 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import type { EditorTheme } from "@editor/core";
 import { createTextDiff, DiffView } from "../src";
-import type { DiffFile, DiffSplitHandleContext, DiffSplitPaneOptions } from "../src";
+import { diffSyntaxBackend, projectDiffSyntaxTokens } from "../src/DiffView";
+import type {
+  DiffFile,
+  DiffSplitHandleContext,
+  DiffSplitPaneOptions,
+  DiffSyntaxBackend,
+} from "../src";
 
 beforeAll(() => {
   installHighlightPolyfill();
@@ -64,11 +71,118 @@ describe("DiffView split panes", () => {
     expect(diffView.revealPreviousHunk({ wrap: true })).toBe(true);
     expect(diffView.getCurrentHunk()?.index).toBe(1);
   });
+
+  it("applies configured editor theme variables to panes", () => {
+    const { container } = renderDiffView({
+      theme: {
+        foregroundColor: "#abcdef",
+        syntax: { keyword: "#123456" },
+      },
+    });
+    const pane = container.querySelector<HTMLElement>(".editor-diff-text");
+
+    expect(pane?.style.getPropertyValue("--editor-foreground")).toBe("#abcdef");
+    expect(pane?.style.getPropertyValue("--editor-syntax-keyword")).toBe("#123456");
+  });
+
+  it("projects full-file syntax tokens into split diff rows", () => {
+    const tokens = projectDiffSyntaxTokens({
+      rows: [
+        {
+          newLineNumber: 2,
+          oldLineNumber: 2,
+          text: "beta",
+          type: "context",
+        },
+      ],
+      side: "old",
+      sources: [
+        {
+          lineStarts: [0, 6, 11],
+          side: "old",
+          tokens: [{ start: 6, end: 10, style: { color: "red" } }],
+        },
+      ],
+    });
+
+    expect(tokens).toEqual([
+      {
+        start: 0,
+        end: 4,
+        style: { color: "red" },
+      },
+    ]);
+  });
+
+  it("projects stacked rows from old and new full-file token streams", () => {
+    const tokens = projectDiffSyntaxTokens({
+      rows: [
+        {
+          oldLineNumber: 1,
+          text: "old",
+          type: "deletion",
+        },
+        {
+          newLineNumber: 1,
+          text: "new",
+          type: "addition",
+        },
+      ],
+      side: "stacked",
+      sources: [
+        {
+          lineStarts: [0],
+          side: "old",
+          tokens: [{ start: 0, end: 3, style: { color: "red" } }],
+        },
+        {
+          lineStarts: [0],
+          side: "new",
+          tokens: [{ start: 0, end: 3, style: { color: "blue" } }],
+        },
+      ],
+    });
+
+    expect(tokens).toEqual([
+      { start: 0, end: 3, style: { color: "red" } },
+      { start: 4, end: 7, style: { color: "blue" } },
+    ]);
+  });
+
+  it("passes full file text to the tree-sitter syntax backend", async () => {
+    const parsedTexts: string[] = [];
+    const syntaxBackend = createRecordingSyntaxBackend(parsedTexts);
+
+    renderDiffView({
+      syntaxBackend,
+      syntaxHighlight: true,
+    });
+
+    await flushPromises();
+
+    expect(parsedTexts).toContain("one\ntwo\n");
+  });
+
+  it("defaults syntax highlighting to tree-sitter instead of shiki", () => {
+    expect(diffSyntaxBackend({})).toEqual({ kind: "tree-sitter" });
+    expect(diffSyntaxBackend({ theme: { backgroundColor: "#ffffff" } })).toEqual({
+      kind: "tree-sitter",
+    });
+    expect(
+      diffSyntaxBackend({
+        syntaxBackend: { kind: "shiki", shikiTheme: "github-light" },
+        theme: { backgroundColor: "#ffffff" },
+      }),
+    ).toEqual({ kind: "shiki", shikiTheme: "github-light" });
+  });
 });
 
 type RenderDiffViewOptions = {
   readonly createHandle?: DiffSplitPaneOptions["createHandle"];
   readonly file?: DiffFile;
+  readonly syntaxBackend?: DiffSyntaxBackend;
+  readonly syntaxHighlight?: boolean;
+  readonly theme?: EditorTheme | null;
 };
 
 function renderDiffView(options: RenderDiffViewOptions = {}) {
@@ -76,10 +190,12 @@ function renderDiffView(options: RenderDiffViewOptions = {}) {
   document.body.appendChild(container);
   const diffView = new DiffView(container, {
     showFileList: false,
+    syntaxBackend: options.syntaxBackend,
     splitPane: {
       createHandle: options.createHandle,
     },
-    syntaxHighlight: false,
+    syntaxHighlight: options.syntaxHighlight ?? false,
+    theme: options.theme,
   });
   diffView.setFiles([options.file ?? singleHunkDiff()]);
   return { container, diffView };
@@ -104,6 +220,41 @@ function querySplit(container: HTMLElement): HTMLElement {
   const split = container.querySelector<HTMLElement>(".editor-diff-split");
   if (!split) throw new Error("Expected split diff");
   return split;
+}
+
+function createRecordingSyntaxBackend(parsedTexts: string[]): DiffSyntaxBackend {
+  return {
+    kind: "tree-sitter",
+    provider: {
+      createSession(options) {
+        parsedTexts.push(options.text);
+        return {
+          applyChange: async () => emptySyntaxResult(),
+          dispose: () => undefined,
+          getResult: () => emptySyntaxResult(),
+          getSnapshotVersion: () => 0,
+          getTokens: () => [],
+          refresh: async () => emptySyntaxResult(),
+        };
+      },
+    },
+  };
+}
+
+function emptySyntaxResult() {
+  return {
+    brackets: [],
+    captures: [],
+    errors: [],
+    folds: [],
+    injections: [],
+    tokens: [],
+  };
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 type HighlightConstructor = new (...ranges: AbstractRange[]) => Highlight;

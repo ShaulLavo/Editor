@@ -1,4 +1,9 @@
-import type { EditorSyntaxLanguageId, EditorToken } from "@editor/core";
+import type {
+  EditorSyntaxLanguageId,
+  EditorSyntaxProvider,
+  EditorTheme,
+  EditorToken,
+} from "@editor/core";
 import type { ResizablePaneHandleContext } from "@editor/panes";
 
 export type DiffViewMode = "split" | "stacked";
@@ -116,13 +121,24 @@ export type DiffSplitPaneOptions = {
   readonly disabled?: boolean;
 };
 
+export type DiffSyntaxBackend =
+  | {
+      readonly kind: "shiki";
+      readonly shikiTheme?: string | (() => string);
+    }
+  | {
+      readonly kind: "tree-sitter";
+      readonly provider?: EditorSyntaxProvider | null;
+    };
+
 export type DiffViewOptions = {
   readonly mode?: DiffViewMode;
   readonly lineHeight?: number;
   readonly overscan?: number;
   readonly tabSize?: number;
   readonly syntaxHighlight?: boolean;
-  readonly theme?: string;
+  readonly theme?: EditorTheme | null;
+  readonly syntaxBackend?: DiffSyntaxBackend;
   readonly showFileList?: boolean;
   readonly splitPane?: DiffSplitPaneOptions;
 };

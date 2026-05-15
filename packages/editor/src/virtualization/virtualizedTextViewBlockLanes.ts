@@ -329,8 +329,34 @@ function updateMountedBlockLane(
 }
 
 function disposeMountedBlockLane(mounted: MountedVirtualizedBlockLane): void {
-  mounted.mountDisposable?.dispose();
-  mounted.element.remove();
+  scheduleMountedBlockLaneDisposal(mounted);
+}
+
+function scheduleMountedBlockLaneDisposal(mounted: MountedVirtualizedBlockLane): void {
+  const dispose = () => {
+    mounted.mountDisposable?.dispose();
+    mounted.element.remove();
+  };
+  const window = mounted.element.ownerDocument.defaultView;
+
+  // React-backed block surfaces may be disposed while the host React tree is
+  // committing. Run both the provider cleanup and DOM removal after that commit.
+  if (window?.queueMicrotask) {
+    window.queueMicrotask(dispose);
+    return;
+  }
+
+  if (globalThis.queueMicrotask) {
+    globalThis.queueMicrotask(dispose);
+    return;
+  }
+
+  if (window?.setTimeout) {
+    window.setTimeout(dispose, 0);
+    return;
+  }
+
+  globalThis.setTimeout(dispose, 0);
 }
 
 function setMountedBlockLaneLayoutKey(

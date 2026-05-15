@@ -664,6 +664,31 @@ describe("Editor", () => {
       expect(refresh).toHaveBeenCalledTimes(1);
       expect(dispose).not.toHaveBeenCalled();
     });
+
+    it("does not reload highlighter sessions when only the configured theme changes", async () => {
+      const refresh = vi.fn(async () => createHighlightResult());
+      const dispose = vi.fn();
+      const highlighter = createMockHighlighterSession({ dispose, refresh });
+      editor.dispose();
+      editor = new Editor(container, {
+        plugins: withTestLanguagePlugins(createHighlighterPlugin(highlighter)),
+        theme: { backgroundColor: "#ffffff" },
+      });
+      setEditorSyntaxSessionFactory(() => createMockSyntaxSession());
+
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
+      await flushMicrotasks();
+      editor.setTheme({ backgroundColor: "#101010" });
+      await flushMicrotasks();
+
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(dispose).not.toHaveBeenCalled();
+      expect(editorRoot().style.getPropertyValue("--editor-background")).toBe("#101010");
+    });
   });
 
   describe("setLineHeight", () => {
@@ -3759,6 +3784,39 @@ describe("Editor", () => {
       expect(root.style.getPropertyValue("--editor-background")).toBe("#ffffff");
       expect(root.style.getPropertyValue("--editor-foreground")).toBe("#24292e");
       expect(root.style.getPropertyValue("--editor-gutter-foreground")).toBe("#6e7781");
+      expect(root.style.getPropertyValue("--editor-syntax-keyword")).toBe("#cf222e");
+    });
+
+    it("keeps configured theme colors above highlighter theme colors", async () => {
+      const highlighter = createMockHighlighterSession({
+        refresh: async () =>
+          createHighlightResult([], {
+            backgroundColor: "#ffffff",
+            foregroundColor: "#24292e",
+            syntax: { keyword: "#0969da" },
+          }),
+      });
+      editor.dispose();
+      editor = new Editor(container, {
+        plugins: withTestLanguagePlugins(createHighlighterPlugin(highlighter)),
+        theme: {
+          backgroundColor: "#101010",
+          foregroundColor: "#eeeeee",
+          syntax: { keyword: "#cf222e" },
+        },
+      });
+      setEditorSyntaxSessionFactory(() => createMockSyntaxSession());
+
+      editor.openDocument({
+        documentId: "main.ts",
+        languageId: "typescript",
+        text: "const a = 1;",
+      });
+      await flushMicrotasks();
+
+      const root = editorRoot();
+      expect(root.style.getPropertyValue("--editor-background")).toBe("#101010");
+      expect(root.style.getPropertyValue("--editor-foreground")).toBe("#eeeeee");
       expect(root.style.getPropertyValue("--editor-syntax-keyword")).toBe("#cf222e");
     });
 

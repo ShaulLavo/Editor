@@ -11,7 +11,6 @@ import type {
   EditorPlugin,
 } from "@editor/core";
 import type { ReactNode } from "react";
-import { createPortal, flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 export type ReactEditorBlock = {
@@ -138,35 +137,22 @@ function mountReactEditorBlockSurface(
   container: HTMLElement,
   children: ReactNode,
 ): EditorDisposable {
-  const host = createPortalRootHost(container);
-  const root = createRoot(host);
+  const root = createRoot(container);
 
   try {
-    renderPortal(root, children, container);
+    renderSurface(root, children);
   } catch (error) {
     root.unmount();
-    host.remove();
     throw error;
   }
 
   return disposableOnce(() => {
-    flushSync(() => root.unmount());
-    host.remove();
+    root.unmount();
   });
 }
 
-function createPortalRootHost(container: HTMLElement): HTMLSpanElement {
-  const host = container.ownerDocument.createElement("span");
-  host.hidden = true;
-  host.dataset.editorReactBlockRoot = "";
-  container.appendChild(host);
-  return host;
-}
-
-function renderPortal(root: Root, children: ReactNode, container: HTMLElement): void {
-  flushSync(() => {
-    root.render(createPortal(children, container));
-  });
+function renderSurface(root: Root, children: ReactNode): void {
+  root.render(children);
 }
 
 function disposableOnce(dispose: () => void): EditorDisposable {

@@ -1,7 +1,6 @@
 import {
   createPieceTableSnapshot,
   VirtualizedTextView,
-  type EditorTheme,
   type EditorToken,
   type VirtualizedTextHighlightRange,
   type VirtualizedTextRowDecoration,
@@ -9,7 +8,6 @@ import {
 import {
   canUseShikiWorker,
   createShikiHighlighterSession,
-  loadShikiTheme,
 } from "@editor/core/shiki";
 import { ResizablePaneGroup, type ResizablePaneLayout } from "@editor/panes";
 import { createDiffCanvasGutterRenderer, type DiffCanvasGutterRenderer } from "./canvasGutter";
@@ -20,6 +18,7 @@ import type {
   DiffFile,
   DiffHunkLocation,
   DiffRenderRow,
+  DiffSyntaxBackend,
   DiffSplitPaneLayout,
   DiffViewMode,
   DiffViewOptions,
@@ -281,6 +280,7 @@ export class DiffView {
     gutterRenderer = createDiffCanvasGutterRenderer(view, getRows, side);
     view.scrollElement.tabIndex = -1;
     view.setEditable(false);
+    view.setTheme(this.options.theme);
     view.setText(joinRenderLines(rows));
     view.setRowDecorations(rowDecorations(rows));
     view.setRangeHighlight(this.inlineHighlightName(side), inlineHighlightRanges(rows), {
@@ -659,12 +659,81 @@ export class DiffView {
     generation: number,
   ): Promise<void> {
     if (this.options.syntaxHighlight === false) return;
+    const syntaxBackend = diffSyntaxBackend(this.options);
+    if (syntaxBackend.kind === "tree-sitter") {
+      await this.applySyntaxProviderHighlighting(pane, file, generation, syntaxBackend);
+      return;
+    }
+
+    await this.applyShikiHighlighting(pane, file, generation, syntaxBackend);
+  }
+
+  private async applySyntaxProviderHighlighting(
+    pane: MountedPane,
+    file: DiffFile,
+    generation: number,
+    backend: Extract<DiffSyntaxBackend, { readonly kind: "tree-sitter" }>,
+  ): Promise<void> {
+    if (!backend.provider) return;
+
+    const sources = syntaxSourcesForPane(file, pane.side);
+    const sessions: { dispose(): void }[] = [];
+    const tokenSources: DiffSyntaxTokenSource[] = [];
+
+    for (const source of sources) {
+      const session = backend.provider.createSession({
+        documentId: `${file.path}:${source.side}`,
+        languageId: file.languageId ?? shikiLanguageForFile(file),
+        text: source.text,
+        snapshot: createPieceTableSnapshot(source.text),
+      });
+      if (!session) continue;
+
+      if (pane.syntaxGeneration !== generation) {
+        session.dispose();
+        disposeSessions(sessions);
+        return;
+      }
+
+      sessions.push(session);
+      const result = await session.refresh(createPieceTableSnapshot(source.text), source.text);
+      if (pane.syntaxGeneration !== generation) {
+        disposeSessions(sessions);
+        return;
+      }
+
+      tokenSources.push({
+        lineStarts: source.lineStarts,
+        side: source.side,
+        tokens: result.tokens,
+      });
+    }
+
+    pane.syntaxSession = { dispose: () => disposeSessions(sessions) };
+    pane.view.setTheme(this.options.theme);
+    pane.gutterRenderer.refreshStyle();
+    pane.gutterRenderer.render();
+    pane.tokens = projectDiffSyntaxTokens({
+      rows: pane.rows,
+      side: pane.side,
+      sources: tokenSources,
+    });
+    pane.view.setTokens(pane.tokens);
+  }
+
+  private async applyShikiHighlighting(
+    pane: MountedPane,
+    file: DiffFile,
+    generation: number,
+    backend: Extract<DiffSyntaxBackend, { readonly kind: "shiki" }>,
+  ): Promise<void> {
     if (!canUseShikiWorker()) return;
 
     const syntaxText = joinSyntaxLines(pane.rows);
     const lang = shikiLanguageForFile(file);
     if (!lang) return;
 
+    const themeName = shikiThemeName(backend.shikiTheme);
     const snapshot = createPieceTableSnapshot(syntaxText);
     const session = createShikiHighlighterSession({
       documentId: `${file.path}:${pane.side}`,
@@ -673,8 +742,8 @@ export class DiffView {
       snapshot,
       langs: [lang],
       lang,
-      theme: this.options.theme ?? DEFAULT_THEME,
-      themes: [this.options.theme ?? DEFAULT_THEME],
+      theme: themeName,
+      themes: [themeName],
     });
     if (!session) return;
 
@@ -684,16 +753,13 @@ export class DiffView {
     }
 
     pane.syntaxSession = session;
-    const [theme, result] = await Promise.all([
-      loadConfiguredTheme(this.options.theme),
-      session.refresh(snapshot, syntaxText),
-    ]);
+    const result = await session.refresh(snapshot, syntaxText);
     if (pane.syntaxGeneration !== generation) {
       session.dispose();
       return;
     }
 
-    pane.view.setTheme(syntaxOnlyTheme(result.theme ?? theme));
+    pane.view.setTheme(this.options.theme);
     pane.gutterRenderer.refreshStyle();
     pane.gutterRenderer.render();
     pane.tokens = result.tokens as readonly EditorToken[];
@@ -708,6 +774,169 @@ export class DiffView {
 function selectedPathForFiles(files: readonly DiffFile[], current: string | null): string | null {
   if (current && files.some((file) => file.path === current)) return current;
   return files[0]?.path ?? null;
+}
+
+export function diffSyntaxBackend(options: DiffViewOptions): DiffSyntaxBackend {
+  return options.syntaxBackend ?? { kind: "tree-sitter" };
+}
+
+function shikiThemeName(theme: string | (() => string) | undefined): string {
+  if (typeof theme === "function") return theme();
+  return theme ?? DEFAULT_THEME;
+}
+
+type DiffSyntaxSource = {
+  readonly lineStarts: readonly number[];
+  readonly side: DiffSyntaxSourceSide;
+  readonly text: string;
+};
+
+type DiffSyntaxSourceSide = "old" | "new";
+
+type DiffSyntaxTokenSource = {
+  readonly lineStarts: readonly number[];
+  readonly side: DiffSyntaxSourceSide;
+  readonly tokens: readonly EditorToken[];
+};
+
+type ProjectDiffSyntaxTokensOptions = {
+  readonly rows: readonly DiffRenderRow[];
+  readonly side: MountedPane["side"];
+  readonly sources: readonly DiffSyntaxTokenSource[];
+};
+
+function syntaxSourcesForPane(file: DiffFile, side: MountedPane["side"]): readonly DiffSyntaxSource[] {
+  if (side === "stacked") {
+    return [syntaxSource(file.oldLines, "old"), syntaxSource(file.newLines, "new")];
+  }
+
+  return [syntaxSource(side === "old" ? file.oldLines : file.newLines, side)];
+}
+
+function syntaxSource(lines: readonly string[], side: DiffSyntaxSourceSide): DiffSyntaxSource {
+  const text = lines.join("\n");
+  return {
+    lineStarts: lineStartsForLines(lines),
+    side,
+    text,
+  };
+}
+
+export function projectDiffSyntaxTokens({
+  rows,
+  side,
+  sources,
+}: ProjectDiffSyntaxTokensOptions): readonly EditorToken[] {
+  const projectedTokens: EditorToken[] = [];
+  let rowOffset = 0;
+
+  for (const row of rows) {
+    const source = tokenSourceForRow(sources, row, side);
+    if (source) {
+      appendRowSyntaxTokens(projectedTokens, {
+        lineStarts: source.lineStarts,
+        row,
+        rowOffset,
+        side: source.side,
+        tokens: source.tokens,
+      });
+    }
+    rowOffset += row.text.length + 1;
+  }
+
+  return projectedTokens;
+}
+
+function tokenSourceForRow(
+  sources: readonly DiffSyntaxTokenSource[],
+  row: DiffRenderRow,
+  side: MountedPane["side"],
+): DiffSyntaxTokenSource | null {
+  const sourceSide = sourceSideForRow(row, side);
+  return sources.find((source) => source.side === sourceSide) ?? null;
+}
+
+function appendRowSyntaxTokens(
+  projectedTokens: EditorToken[],
+  {
+    lineStarts,
+    row,
+    rowOffset,
+    side,
+    tokens,
+  }: {
+    readonly lineStarts: readonly number[];
+    readonly row: DiffRenderRow;
+    readonly rowOffset: number;
+    readonly side: DiffSyntaxSourceSide;
+    readonly tokens: readonly EditorToken[];
+  },
+): void {
+  const lineNumber = sourceLineNumberForRow(row, side);
+  if (lineNumber === undefined) return;
+
+  const lineStart = lineStarts[lineNumber - 1];
+  const nextLineStart = lineStarts[lineNumber];
+  if (lineStart === undefined) return;
+
+  const lineEnd = Math.min(
+    nextLineStart === undefined ? Number.POSITIVE_INFINITY : nextLineStart - 1,
+    lineStart + row.text.length,
+  );
+
+  for (const token of tokens) {
+    appendProjectedToken(projectedTokens, token, lineStart, lineEnd, rowOffset);
+  }
+}
+
+function appendProjectedToken(
+  projectedTokens: EditorToken[],
+  token: EditorToken,
+  lineStart: number,
+  lineEnd: number,
+  rowOffset: number,
+): void {
+  if (token.end <= lineStart) return;
+  if (token.start >= lineEnd) return;
+
+  const start = Math.max(token.start, lineStart);
+  const end = Math.min(token.end, lineEnd);
+  if (end <= start) return;
+
+  projectedTokens.push({
+    end: rowOffset + end - lineStart,
+    start: rowOffset + start - lineStart,
+    style: token.style,
+  });
+}
+
+function sourceLineNumberForRow(
+  row: DiffRenderRow,
+  side: DiffSyntaxSourceSide,
+): number | undefined {
+  if (side === "old") return row.oldLineNumber;
+  return row.newLineNumber;
+}
+
+function sourceSideForRow(row: DiffRenderRow, side: MountedPane["side"]): DiffSyntaxSourceSide {
+  if (side === "old" || side === "new") return side;
+  if (row.type === "deletion") return "old";
+
+  return "new";
+}
+
+function disposeSessions(sessions: readonly { dispose(): void }[]): void {
+  for (const session of sessions) session.dispose();
+}
+
+function lineStartsForLines(lines: readonly string[]): readonly number[] {
+  const starts: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    starts.push(offset);
+    offset += line.length + 1;
+  }
+  return starts;
 }
 
 function toggleSetValue(set: Set<number>, value: number): void {
@@ -742,12 +971,6 @@ function wheelDeltaMultiplier(event: WheelEvent, element: HTMLElement): number {
   if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) return element.clientHeight;
 
   return 1;
-}
-
-function syntaxOnlyTheme(theme: EditorTheme | null | undefined): EditorTheme | null {
-  if (!theme) return null;
-
-  return { syntax: theme.syntax };
 }
 
 function rowDecorations(
@@ -816,10 +1039,6 @@ function pathExtension(path: string): string {
   const dotIndex = fileName.lastIndexOf(".");
   if (dotIndex === -1) return "";
   return fileName.slice(dotIndex).toLowerCase();
-}
-
-async function loadConfiguredTheme(theme: string | undefined): Promise<EditorTheme | null> {
-  return (await loadShikiTheme({ theme: theme ?? DEFAULT_THEME })) ?? null;
 }
 
 function splitDefaultLayout(

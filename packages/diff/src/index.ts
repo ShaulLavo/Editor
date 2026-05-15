@@ -17,6 +17,7 @@ export type {
   DiffSplitPaneId,
   DiffSplitPaneLayout,
   DiffSplitPaneOptions,
+  DiffSyntaxBackend,
   DiffSyntaxTokens,
   DiffTextFile,
   DiffViewMode,

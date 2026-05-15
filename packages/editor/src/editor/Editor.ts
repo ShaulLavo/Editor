@@ -549,7 +549,6 @@ export class Editor {
 
     this.configuredTheme = nextTheme;
     this.applyResolvedTheme();
-    this.reloadHighlighterSession();
     this.notifyViewContributions("tokens", null);
   }
 
@@ -2675,9 +2674,9 @@ export class Editor {
 
   private resolvedTheme(): EditorTheme | null {
     return mergeEditorThemes(
-      this.configuredTheme,
       this.providerHighlighterTheme,
       this.highlighterTheme,
+      this.configuredTheme,
     );
   }
 
