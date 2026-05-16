@@ -1,25 +1,16 @@
 import type { DocumentSession, DocumentSessionChange } from "../documentSession";
-import { childContainingNode, childNodeIndex, elementBoundaryToTextOffset } from "./domBoundary";
 import { projectSyntaxFoldsThroughLineEdit } from "./folds";
 import { EditorFoldState } from "./foldState";
-import { keyboardFallbackText } from "./input";
 import { EditorKeymapController } from "./keymap";
-import { editActionForCommand, isEditorEditActionCommand } from "./editActions";
-import { LatestAsyncRequest } from "./latestAsyncRequest";
-import {
-  cancelFrame,
-  mouseSelectionAutoScrollDelta,
-  requestFrame,
-  type MouseSelectionDrag,
-} from "./mouseSelection";
-import { lineRangeAtOffset, wordRangeAtOffset } from "./textRanges";
-import { appendTiming, eventStartMs, mergeChangeTimings, nowMs } from "./timing";
+import { EditorBlockSurfaceController } from "./blockSurfaceController";
+import { InputSelectionController } from "./inputSelectionController";
+import { EditorSyntaxController } from "./syntaxController";
+import { appendTiming, nowMs } from "./timing";
 import { copyTokenProjectionMetadata, projectTokensThroughEdit } from "./tokenProjection";
 import type { EditorCommandContext, EditorCommandId } from "./commands";
 import { normalizeEditorEditInput } from "./editInput";
-import { navigationTargetForCommand } from "./navigationTargets";
+import { EditorCommandRouter } from "./commandRouter";
 import {
-  getEditorSyntaxSessionFactory,
   getHighlightRegistry,
   nextEditorHighlightPrefix,
   recordEditorMountTiming,
@@ -30,58 +21,18 @@ import {
   preservedScrollPosition,
 } from "./scroll";
 import {
-  addEditorBlockMeasurementKey,
-  applyEditorBlockMeasurementBounds,
-  clampEditorBlockMeasuredSize,
-  createEditorBlockResizeObserver,
-  disposableOnce,
-  editorBlockSurfaceAnchorRange,
-  editorBlockSurfaceAnchorRow,
-  editorBlockSurfaceLaneId,
-  editorBlockSurfaceMeasureKey,
-  editorBlockSurfacePlacement,
-  editorBlockSurfaceRowId,
-  elementMeasuredEditorBlockSize,
-  initialMeasuredEditorBlockSize,
-  resizeObserverMeasuredSize,
-  resolveEditorBlockSize,
-  validEditorBlockId,
-  type EditorBlockMeasurement,
-  type ResolvedEditorBlockLaneSurface,
-  type ResolvedEditorBlockSize,
-  type ResolvedEditorBlockSurface,
-} from "./editorBlockSurfaces";
-import {
-  DEFAULT_DOCUMENT_MODE,
-  DEFAULT_EDITABILITY,
-  createEditorDocumentSession,
   normalizeEditorDocumentMode,
-  normalizeEditorEditability,
   normalizeEditorSelectionSyncMode,
   type ResetOwnedDocumentOptions,
 } from "./editorDocument";
+import { EditorDocumentController } from "./documentController";
 import {
-  capitalize,
-  eventTargetInsideBlockSurface,
-  indentTimingName,
   removeArrayItem,
-  selectionGoalColumn,
-  syntaxRefreshDelay,
   viewContributionKindForChange,
   type SessionChangeOptions,
 } from "./editorUtils";
 import { EDITOR_FIND_FEATURE_ID, type EditorFindFeature } from "./findFeature";
 import { foldCandidateAtLocation, type FoldOperation } from "./foldOperations";
-import {
-  findAllExactOccurrences,
-  findNextExactOccurrence,
-  findNextExactOccurrenceFromRange,
-  getOccurrenceQuery,
-  occurrenceQueryForSelection,
-  occurrenceSelectTimingName,
-  type OccurrenceQuery,
-  type OccurrenceSelectionChange,
-} from "./occurrences";
 import { groupedRangeDecorations, sameEditorRangeDecorations } from "./rangeDecorations";
 import { selectionRevealOffset, type EditorSelectionRevealTarget } from "./selectionReveal";
 import { syncTextEdit } from "./textEdits";
@@ -96,21 +47,13 @@ import type {
   EditorScrollPosition,
   EditorSetTextOptions,
   EditorSessionOptions,
-  EditorSelectionSyncMode,
   EditorState,
   EditorSyntaxStatus,
 } from "./types";
 import { EditorViewContributionController } from "./viewContributions";
 import type { FoldMap } from "../foldMap";
-import { normalizeTabSize, type BlockLane, type BlockRow } from "../displayTransforms";
+import { normalizeTabSize } from "../displayTransforms";
 import { offsetToPoint } from "../pieceTable/positions";
-import { getPieceTableText } from "../pieceTable/reads";
-import type {
-  EditorBlock,
-  EditorBlockMountContext,
-  EditorBlockProvider,
-  EditorBlockProviderContext,
-} from "../editorBlocks";
 import {
   EditorPluginHost,
   type EditorCommandHandler,
@@ -119,29 +62,16 @@ import {
   type EditorFeatureContributionContext,
   type EditorFeatureContributionProvider,
   type EditorGutterContribution,
-  type EditorHighlightResult,
-  type EditorHighlighterSession,
   type EditorOverlaySide,
   type EditorPlugin,
-  type EditorResolvedSelection,
-  type EditorSelectionRange,
   type EditorViewContribution,
   type EditorViewContributionContext,
   type EditorViewContributionProvider,
   type EditorViewContributionUpdateKind,
   type EditorViewSnapshot,
 } from "../plugins";
-import {
-  SelectionGoal,
-  resolveSelection,
-  type ResolvedSelection,
-  type SelectionGoal as SelectionGoalValue,
-} from "../selections";
-import {
-  type EditorSyntaxLanguageId,
-  type EditorSyntaxResult,
-  type EditorSyntaxSession,
-} from "../syntax/session";
+import { resolveSelection } from "../selections";
+import { type EditorSyntaxLanguageId } from "../syntax/session";
 import {
   parseMergeConflicts,
   resolveMergeConflict as resolveMergeConflictText,
@@ -167,7 +97,8 @@ export class Editor {
   private readonly el: HTMLDivElement;
   private readonly options: EditorOptions;
   private readonly pluginHost: EditorPluginHost;
-  private readonly commandHandlers = new Map<EditorCommandId, EditorCommandHandler>();
+  private readonly commandRouter: EditorCommandRouter;
+  private readonly document: EditorDocumentController;
   private readonly editorFeatures = new Map<string, unknown>();
   private readonly editorFeatureContributions: EditorFeatureContribution[] = [];
   private readonly viewContributionsByProvider = new Map<
@@ -181,54 +112,71 @@ export class Editor {
   private readonly keymap: EditorKeymapController;
   private readonly viewContributions: EditorViewContributionController;
   private readonly highlightPrefix: string;
-  private readonly editorBlockSurfaces = new Map<string, ResolvedEditorBlockSurface>();
-  private readonly editorBlockLaneSurfaces = new Map<string, ResolvedEditorBlockLaneSurface>();
-  private readonly editorBlockMeasuredSizes = new Map<string, number>();
-  private editorBlockRows: readonly BlockRow[] = [];
-  private editorBlockLanes: readonly BlockLane[] = [];
-  private editorBlockRevision = 0;
-  private editorBlockMeasureTimeout: ReturnType<typeof setTimeout> | null = null;
-  private text = "";
-  private session: DocumentSession | null = null;
-  private sessionOptions: EditorSessionOptions = {};
-  private documentId: string | null = null;
-  private documentMode: EditorDocumentMode = DEFAULT_DOCUMENT_MODE;
-  private editability: EditorEditability = DEFAULT_EDITABILITY;
-  private languageId: EditorSyntaxLanguageId | null = null;
-  private syntaxStatus: EditorSyntaxStatus = "plain";
-  private syntaxSession: EditorSyntaxSession | null = null;
-  private highlighterSession: EditorHighlighterSession | null = null;
+  private blockSurfaces!: EditorBlockSurfaceController;
+  private readonly syntax: EditorSyntaxController;
+  private readonly inputSelection: InputSelectionController;
   private configuredTheme: EditorTheme | null = null;
-  private providerHighlighterTheme: EditorTheme | null = null;
-  private highlighterTheme: EditorTheme | null = null;
-  private readonly syntaxRequests = new LatestAsyncRequest<EditorSyntaxResult>();
-  private readonly highlightRequests = new LatestAsyncRequest<EditorHighlightResult>();
-  private readonly highlighterThemeRequests = new LatestAsyncRequest<
-    EditorTheme | null | undefined
-  >();
-  private tokens: readonly EditorToken[] = [];
-  private documentVersion = 0;
-  private mouseSelectionDrag: MouseSelectionDrag | null = null;
-  private mouseSelectionAutoScrollFrame = 0;
-  private useSessionSelectionForNextInput = false;
-  private nativeInputGeneration = 0;
   private rangeDecorations: readonly EditorRangeDecoration[] = [];
   private appliedRangeDecorationNames: readonly string[] = [];
-  private nativeInputHandlersInstalled = false;
-  private readonly selectionSyncMode: EditorSelectionSyncMode;
   private readonly tabSize: number;
+
+  private get text(): string {
+    return this.document.text;
+  }
+
+  private set text(text: string) {
+    this.document.setRenderedText(text);
+  }
+
+  private get session(): DocumentSession | null {
+    return this.document.session;
+  }
+
+  private get sessionOptions(): EditorSessionOptions {
+    return this.document.sessionOptions;
+  }
+
+  private get documentId(): string | null {
+    return this.document.documentId;
+  }
+
+  private get documentMode(): EditorDocumentMode {
+    return this.document.documentMode;
+  }
+
+  private get editability(): EditorEditability {
+    return this.document.editability;
+  }
+
+  private get languageId(): EditorSyntaxLanguageId | null {
+    return this.document.languageId;
+  }
+
+  private get documentVersion(): number {
+    return this.document.documentVersion;
+  }
+
+  private get syntaxStatus(): EditorSyntaxStatus {
+    return this.syntax.status;
+  }
+
+  private get tokens(): readonly EditorToken[] {
+    return this.syntax.tokens;
+  }
 
   constructor(container: HTMLElement, options: EditorOptions = {}) {
     const mountStart = nowMs();
     this.container = container;
     this.options = options;
     this.tabSize = normalizeTabSize(options.tabSize);
-    this.editability = normalizeEditorEditability(options.editability);
-    this.documentMode = normalizeEditorDocumentMode(options.documentMode);
-    this.selectionSyncMode = normalizeEditorSelectionSyncMode(options.selectionSyncMode);
     this.configuredTheme = options.theme ?? null;
     this.pluginHost = new EditorPluginHost(options.plugins);
     this.highlightPrefix = nextEditorHighlightPrefix();
+    this.document = new EditorDocumentController({
+      defaultDocumentMode: options.documentMode,
+      defaultEditability: options.editability,
+      highlightPrefix: this.highlightPrefix,
+    });
     this.view = new VirtualizedTextView(container, {
       className: "editor",
       highlightRegistry: getHighlightRegistry(),
@@ -239,16 +187,75 @@ export class Editor {
       rowGap: options.rowGap,
       tabSize: this.tabSize,
       textMetrics: options.textMetrics,
-      blockRowMount: this.mountEditorBlockRow,
-      blockLaneMount: this.mountEditorBlockLane,
+      blockRowMount: (container, row) => this.blockSurfaces.mountRow(container, row),
+      blockLaneMount: (container, lane) => this.blockSurfaces.mountLane(container, lane),
       onFoldToggle: this.handleFoldToggle,
       onViewportChange: this.handleViewportChange,
       selectionHighlightName: `${this.highlightPrefix}-selection`,
     });
     this.foldState = new EditorFoldState(this.view, () => this.session?.getSnapshot() ?? null);
     this.el = this.view.scrollElement;
+    this.blockSurfaces = new EditorBlockSurfaceController({
+      view: this.view,
+      getDocumentId: () => this.documentId,
+      getText: () => this.text,
+      focusEditor: () => this.focus(),
+      setSelection: (anchor, head) =>
+        this.inputSelection.applyFindSelection(anchor, head, "editor.block.setSelection", head),
+      notifyLayout: () => this.notifyViewContributions("layout", null),
+    });
+    this.syntax = new EditorSyntaxController({
+      pluginHost: this.pluginHost,
+      getDocumentVersion: () => this.documentVersion,
+      getCurrentSessionDocumentId: () => this.currentSessionDocumentId(),
+      getLanguageId: () => this.languageId,
+      getSession: () => this.session,
+      getText: () => this.getText(),
+      adoptTokens: (tokens) => {
+        this.view.adoptTokens(tokens);
+        this.notifyViewContributions("tokens", null);
+      },
+      clearSyntaxFolds: () => this.clearSyntaxFolds(),
+      setSyntaxFolds: (folds) => this.setSyntaxFolds(folds),
+      notifyChange: (change) => this.notifyChange(change),
+      notifyThemeChanged: () => this.applyResolvedTheme(),
+    });
+    this.inputSelection = new InputSelectionController({
+      el: this.el,
+      selectionSyncMode: normalizeEditorSelectionSyncMode(options.selectionSyncMode),
+      tabSize: this.tabSize,
+      view: this.view,
+      getLanguageId: () => this.languageId,
+      getSession: () => this.session,
+      getSessionOptions: () => this.sessionOptions,
+      getText: () => this.getText(),
+      canEditDocument: () => this.canEditDocument(),
+      applySessionChange: (change, totalName, totalStart, options) =>
+        this.applySessionChange(change, totalName, totalStart, options),
+      notifyChangeWithTiming: (change) => this.notifyChangeWithTiming(change),
+      notifyViewContributions: (kind, change) => this.notifyViewContributions(kind, change),
+    });
+    this.commandRouter = new EditorCommandRouter({
+      history: (command, context) => this.inputSelection.applyHistoryCommand(command, context),
+      delete: (direction, context) => this.inputSelection.applyDeleteCommand(direction, context),
+      indent: (direction, context) => this.inputSelection.applyIndentCommand(direction, context),
+      editAction: (command, context) =>
+        this.inputSelection.applyEditActionCommand(command, context),
+      selectAll: (context) => this.inputSelection.applySelectAllCommand(context),
+      addNextOccurrence: (context) => this.inputSelection.applyAddNextOccurrenceCommand(context),
+      clearSecondarySelections: (context) =>
+        this.inputSelection.applyClearSecondarySelections(context),
+      insertCursor: (direction, context) =>
+        this.inputSelection.applyInsertCursorCommand(direction, context),
+      selectExactOccurrences: (command, context) =>
+        this.inputSelection.applySelectExactOccurrencesCommand(command, context),
+      moveSelectionToNextOccurrence: (context) =>
+        this.inputSelection.applyMoveSelectionToNextOccurrenceCommand(context),
+      navigation: (command, context) =>
+        this.inputSelection.applyNavigationCommand(command, context),
+    });
     this.applyResolvedTheme();
-    if (this.pluginHost.hasHighlighterProviders()) this.refreshHighlighterTheme();
+    if (this.pluginHost.hasHighlighterProviders()) this.syntax.refreshHighlighterTheme();
     this.createInitialEditorFeatureContributions(
       this.pluginHost.getEditorFeatureContributionProviders(),
     );
@@ -262,8 +269,8 @@ export class Editor {
       () => this.createViewSnapshot(),
     );
     this.pluginHost.setEvents({
-      onHighlighterProvidersChanged: () => this.handleHighlighterProvidersChanged(),
-      onSyntaxProvidersChanged: () => this.reloadSyntaxSession(),
+      onHighlighterProvidersChanged: () => this.syntax.reloadHighlighterAndSyntax(),
+      onSyntaxProvidersChanged: () => this.syntax.reloadSyntaxSession(),
       onViewContributionProviderAdded: (provider) => this.addViewContributionProvider(provider),
       onViewContributionProviderRemoved: (provider) =>
         this.removeViewContributionProvider(provider),
@@ -274,7 +281,7 @@ export class Editor {
       onGutterContributionsChanged: () => this.syncGutterContributions(),
       onBlockProvidersChanged: () => this.handleBlockProvidersChanged(),
     });
-    this.installEditingHandlers();
+    this.inputSelection.install();
     this.initializeDefaultText();
     this.setRangeDecorations(options.rangeDecorations ?? []);
     recordEditorMountTiming(nowMs() - mountStart);
@@ -293,7 +300,7 @@ export class Editor {
   setTokens(tokens: readonly EditorToken[]): void {
     const copiedTokens = [...tokens];
     copyTokenProjectionMetadata(tokens, copiedTokens);
-    this.adoptTokens(copiedTokens);
+    this.syntax.setTokens(copiedTokens);
   }
 
   applyEdit(edit: TextEdit, tokens: readonly EditorToken[]): void {
@@ -496,7 +503,7 @@ export class Editor {
 
   setSelection(anchor: number, head = anchor, reveal?: EditorSelectionRevealTarget): void {
     const revealOffset = selectionRevealOffset(reveal, head);
-    this.applyFindSelection(anchor, head, "editor.setSelection", revealOffset);
+    this.inputSelection.applyFindSelection(anchor, head, "editor.setSelection", revealOffset);
   }
 
   openFind(): boolean {
@@ -561,10 +568,8 @@ export class Editor {
   }
 
   setEditability(editability: EditorEditability): void {
-    const next = normalizeEditorEditability(editability);
-    if (this.editability === next) return;
+    if (!this.document.setEditability(editability)) return;
 
-    this.editability = next;
     this.syncViewEditability();
     this.notifyChange(null);
   }
@@ -606,92 +611,49 @@ export class Editor {
   }
 
   dispatchCommand(command: EditorCommandId, context: EditorCommandContext = {}): boolean {
-    const registeredResult = this.runRegisteredCommand(command, context);
-    if (registeredResult !== null) {
-      if (command === "closeFind" && !registeredResult)
-        return this.applyClearSecondarySelections(context);
-      return registeredResult;
-    }
-    if (command === "undo") return this.applyHistoryCommand("undo", context);
-    if (command === "redo") return this.applyHistoryCommand("redo", context);
-    if (command === "selectAll") return this.applySelectAllCommand(context);
-    if (command === "addNextOccurrence") return this.applyAddNextOccurrenceCommand(context);
-    if (command === "clearSecondarySelections") return this.applyClearSecondarySelections(context);
-    if (command === "editor.action.insertCursorAbove")
-      return this.applyInsertCursorCommand("above", context);
-    if (command === "editor.action.insertCursorBelow")
-      return this.applyInsertCursorCommand("below", context);
-    if (command === "editor.action.selectHighlights" || command === "editor.action.changeAll")
-      return this.applySelectExactOccurrencesCommand(command, context);
-    if (command === "editor.action.moveSelectionToNextFindMatch")
-      return this.applyMoveSelectionToNextOccurrenceCommand(context);
-    if (command === "deleteBackward") return this.applyDeleteCommand("backward", context);
-    if (command === "deleteForward") return this.applyDeleteCommand("forward", context);
-    if (isEditorEditActionCommand(command)) return this.applyEditActionCommand(command, context);
-    if (command === "indentSelection") return this.applyIndentCommand("indent", context);
-    if (command === "outdentSelection") return this.applyIndentCommand("outdent", context);
-    return this.applyNavigationCommand(command, context);
+    return this.commandRouter.dispatch(command, context);
   }
 
   attachSession(session: DocumentSession, options: EditorSessionOptions = {}): void {
-    this.documentVersion += 1;
-    const documentVersion = this.documentVersion;
-    this.documentId = options.documentId ?? null;
-    this.documentMode = "session";
-    this.languageId = options.languageId ?? null;
-    this.disposeSyntaxSession();
-    this.disposeHighlighterSession();
-    this.session = session;
-    this.sessionOptions = options;
-    const text = session.getText();
-    const internalDocumentId = this.documentId ?? this.generatedOpenSessionId(documentVersion);
-    this.highlighterSession = this.pluginHost.createHighlighterSession({
-      documentId: internalDocumentId,
-      languageId: this.languageId,
-      text,
-      snapshot: session.getSnapshot(),
+    const attachment = this.document.attachSession(session, options);
+    this.syntax.startDocument({
+      documentId: attachment.internalDocumentId,
+      languageId: attachment.languageId,
+      text: attachment.text,
+      snapshot: attachment.session.getSnapshot(),
     });
-    this.syntaxSession = this.createSyntaxSession(internalDocumentId, text);
-    this.syntaxStatus = this.syntaxSession ? "loading" : "plain";
     this.syncViewEditability();
-    this.setDocument({ text: session.getText(), tokens: session.getTokens() });
+    this.setDocument({ text: attachment.text, tokens: attachment.session.getTokens() });
     this.applyDocumentScrollPosition(options.scrollPosition);
-    this.syncDomSelection();
+    this.inputSelection.syncDomSelection();
     this.notifyViewContributions("document", null);
     this.notifyChange(null);
-    this.refreshSyntax(documentVersion, null);
+    this.refreshSyntax(attachment.documentVersion, null);
   }
 
   detachSession(): void {
-    this.session = null;
-    this.sessionOptions = {};
-    this.clearSelectionHighlight();
+    this.document.detachSession();
+    this.inputSelection.clearSelectionHighlight();
     this.view.setEditable(false);
   }
 
   clear(): void {
-    this.documentVersion += 1;
-    this.documentId = null;
-    this.documentMode = normalizeEditorDocumentMode(this.options.documentMode);
-    this.languageId = null;
-    this.syntaxStatus = "plain";
-    this.disposeSyntaxSession();
-    this.disposeHighlighterSession();
-    this.detachSession();
+    this.document.clear();
+    this.syntax.clearDocument();
+    this.inputSelection.clearSelectionHighlight();
+    this.view.setEditable(false);
     this.setContent("");
     this.applyDocumentScrollPosition();
     this.notifyViewContributions("clear", null);
   }
 
   dispose(): void {
-    this.cancelScheduledEditorBlockMeasurementUpdate();
-    this.uninstallEditingHandlers();
+    this.blockSurfaces.dispose();
+    this.inputSelection.dispose();
     this.viewContributions.dispose();
     this.disposeEditorFeatureContributions();
     this.keymap.dispose();
-    this.highlighterThemeRequests.dispose();
-    this.disposeSyntaxSession();
-    this.disposeHighlighterSession();
+    this.syntax.dispose();
     this.detachSession();
     this.pluginHost.dispose();
     this.view.dispose();
@@ -701,53 +663,20 @@ export class Editor {
     document: EditorOpenDocumentOptions,
     options: ResetOwnedDocumentOptions,
   ): number {
-    this.documentVersion += 1;
-    const documentVersion = this.documentVersion;
-    this.documentId =
-      options.documentId ??
-      (options.persistentIdentity ? this.generatedDocumentId(documentVersion) : null);
-    this.documentMode = normalizeEditorDocumentMode(
-      document.documentMode ?? this.options.documentMode,
-    );
-    this.languageId = document.languageId ?? null;
-    this.disposeSyntaxSession();
-    this.disposeHighlighterSession();
-
-    const internalDocumentId = this.documentId ?? this.generatedOpenSessionId(documentVersion);
-    this.session = createEditorDocumentSession(document.text, this.documentMode);
-    this.sessionOptions = {};
-    this.highlighterSession = this.pluginHost.createHighlighterSession({
-      documentId: internalDocumentId,
-      languageId: this.languageId,
-      text: document.text,
-      snapshot: this.session.getSnapshot(),
+    const attachment = this.document.resetOwnedDocument(document, options);
+    this.syntax.startDocument({
+      documentId: attachment.internalDocumentId,
+      languageId: attachment.languageId,
+      text: attachment.text,
+      snapshot: attachment.session.getSnapshot(),
     });
-    this.syntaxSession = this.createSyntaxSession(internalDocumentId, document.text);
-    this.syntaxStatus = this.syntaxSession ? "loading" : "plain";
     this.syncViewEditability();
-    this.setDocument({ text: this.session.getText(), tokens: [] });
+    this.setDocument({ text: attachment.session.getText(), tokens: [] });
     this.applyRangeDecorations();
     this.applyDocumentScrollPosition(options.scrollPosition);
-    this.syncDomSelection();
+    this.inputSelection.syncDomSelection();
     this.notifyViewContributions("document", null);
-    return documentVersion;
-  }
-
-  private createSyntaxSession(documentId: string, text: string): EditorSyntaxSession | null {
-    if (!this.languageId || !this.session) return null;
-
-    const options = {
-      documentId,
-      languageId: this.languageId,
-      includeHighlights: !this.highlighterSession,
-      text,
-      snapshot: this.session.getSnapshot(),
-    };
-    return (
-      this.pluginHost.createSyntaxSession(options) ??
-      getEditorSyntaxSessionFactory()?.(options) ??
-      null
-    );
+    return attachment.documentVersion;
   }
 
   private initializeDefaultText(): void {
@@ -798,73 +727,8 @@ export class Editor {
     );
   }
 
-  private generatedDocumentId(documentVersion: number): string {
-    return `${this.highlightPrefix}-document-${documentVersion}`;
-  }
-
-  private generatedOpenSessionId(documentVersion: number): string {
-    return `${this.highlightPrefix}-open-${documentVersion}`;
-  }
-
-  private disposeSyntaxSession(): void {
-    this.syntaxRequests.cancel();
-    this.syntaxSession?.dispose();
-    this.syntaxSession = null;
-  }
-
-  private disposeHighlighterSession(): void {
-    this.highlightRequests.cancel();
-    this.highlighterSession?.dispose();
-    this.highlighterSession = null;
-    this.setHighlighterTheme(null);
-  }
-
-  private reloadHighlighterSession(): void {
-    this.disposeHighlighterSession();
-    if (!this.session) return;
-
-    const documentId = this.currentSessionDocumentId();
-    this.highlighterSession = this.pluginHost.createHighlighterSession({
-      documentId,
-      languageId: this.languageId,
-      text: this.session.getText(),
-      snapshot: this.session.getSnapshot(),
-    });
-    this.refreshHighlighterTheme();
-    this.refreshHighlightTokens(this.documentVersion, null);
-  }
-
-  private handleHighlighterProvidersChanged(): void {
-    this.reloadHighlighterSession();
-    this.reloadSyntaxSession();
-  }
-
-  private reloadSyntaxSession(): void {
-    this.disposeSyntaxSession();
-    this.clearSyntaxFolds();
-    if (!this.session) return;
-
-    this.syntaxSession = this.createSyntaxSession(this.currentSessionDocumentId(), this.getText());
-    this.syntaxStatus = this.syntaxSession ? "loading" : "plain";
-    this.refreshSyntax(this.documentVersion, null);
-    this.notifyChange(null);
-  }
-
-  private refreshHighlighterTheme(): void {
-    if (!this.pluginHost.hasHighlighterProviders()) {
-      this.setProviderHighlighterTheme(null);
-      return;
-    }
-
-    this.highlighterThemeRequests.schedule({
-      run: () => this.pluginHost.loadHighlighterTheme(),
-      apply: (theme) => this.setProviderHighlighterTheme(theme),
-      fail: () => this.setProviderHighlighterTheme(null),
-    });
-  }
-
   private currentSessionDocumentId(): string {
-    return this.documentId ?? this.generatedOpenSessionId(this.documentVersion);
+    return this.document.currentSessionDocumentId();
   }
 
   private createInitialViewContributions(
@@ -958,397 +822,7 @@ export class Editor {
   }
 
   private syncEditorBlocks(): void {
-    const providers = this.pluginHost.getBlockProviders();
-    if (providers.length === 0) {
-      this.clearEditorBlockRows();
-      return;
-    }
-
-    const context = this.createEditorBlockProviderContext();
-    const resolution = this.resolveEditorBlockRows(providers, context);
-    this.applyEditorBlockRows(
-      resolution.rows,
-      resolution.surfaces,
-      resolution.lanes,
-      resolution.laneSurfaces,
-    );
-  }
-
-  private clearEditorBlockRows(): void {
-    if (
-      this.editorBlockRows.length === 0 &&
-      this.editorBlockLanes.length === 0 &&
-      this.editorBlockMeasuredSizes.size === 0
-    )
-      return;
-
-    this.editorBlockRows = [];
-    this.editorBlockLanes = [];
-    this.editorBlockSurfaces.clear();
-    this.editorBlockLaneSurfaces.clear();
-    this.editorBlockMeasuredSizes.clear();
-    this.view.setBlockRows([]);
-    this.view.setBlockLanes([]);
-  }
-
-  private createEditorBlockProviderContext(): EditorBlockProviderContext {
-    return {
-      documentId: this.documentId,
-      text: this.text,
-      lineCount: this.view.getLineStarts().length,
-    };
-  }
-
-  private resolveEditorBlockRows(
-    providers: readonly EditorBlockProvider[],
-    context: EditorBlockProviderContext,
-  ): {
-    readonly rows: readonly BlockRow[];
-    readonly surfaces: ReadonlyMap<string, ResolvedEditorBlockSurface>;
-    readonly lanes: readonly BlockLane[];
-    readonly laneSurfaces: ReadonlyMap<string, ResolvedEditorBlockLaneSurface>;
-  } {
-    const revision = this.nextEditorBlockRevision();
-    const rows: BlockRow[] = [];
-    const lanes: BlockLane[] = [];
-    const surfaces = new Map<string, ResolvedEditorBlockSurface>();
-    const laneSurfaces = new Map<string, ResolvedEditorBlockLaneSurface>();
-
-    providers.forEach((provider, providerIndex) => {
-      this.appendProviderBlockSurfaces(
-        provider,
-        providerIndex,
-        revision,
-        context,
-        rows,
-        surfaces,
-        lanes,
-        laneSurfaces,
-      );
-    });
-
-    return { rows, surfaces, lanes, laneSurfaces };
-  }
-
-  private nextEditorBlockRevision(): number {
-    this.editorBlockRevision += 1;
-    return this.editorBlockRevision;
-  }
-
-  private appendProviderBlockSurfaces(
-    provider: EditorBlockProvider,
-    providerIndex: number,
-    revision: number,
-    context: EditorBlockProviderContext,
-    rows: BlockRow[],
-    surfaces: Map<string, ResolvedEditorBlockSurface>,
-    lanes: BlockLane[],
-    laneSurfaces: Map<string, ResolvedEditorBlockLaneSurface>,
-  ): void {
-    for (const block of provider.getBlocks(context)) {
-      this.appendEditorBlockSurfaceRow(
-        block,
-        "top",
-        providerIndex,
-        revision,
-        context.lineCount,
-        rows,
-        surfaces,
-      );
-      this.appendEditorBlockSurfaceRow(
-        block,
-        "bottom",
-        providerIndex,
-        revision,
-        context.lineCount,
-        rows,
-        surfaces,
-      );
-      this.appendEditorBlockSurfaceLane(
-        block,
-        "left",
-        providerIndex,
-        revision,
-        context.lineCount,
-        lanes,
-        laneSurfaces,
-      );
-      this.appendEditorBlockSurfaceLane(
-        block,
-        "right",
-        providerIndex,
-        revision,
-        context.lineCount,
-        lanes,
-        laneSurfaces,
-      );
-    }
-  }
-
-  private appendEditorBlockSurfaceRow(
-    block: EditorBlock,
-    slot: "top" | "bottom",
-    providerIndex: number,
-    revision: number,
-    lineCount: number,
-    rows: BlockRow[],
-    surfaces: Map<string, ResolvedEditorBlockSurface>,
-  ): void {
-    const surface = block[slot];
-    if (!surface) return;
-    if (!validEditorBlockId(block.id)) return;
-
-    const measureKey = editorBlockSurfaceMeasureKey(providerIndex, block.id, slot);
-    const size = resolveEditorBlockSize(
-      surface.height,
-      measureKey,
-      "height",
-      this.editorBlockMeasuredSizes,
-    );
-    if (!size) return;
-
-    const rowId = editorBlockSurfaceRowId(revision, providerIndex, block.id, slot);
-    const anchorBufferRow = editorBlockSurfaceAnchorRow(block.anchor, slot, lineCount);
-    if (anchorBufferRow === null) return;
-
-    surfaces.set(rowId, { rowId, block, surface, slot, anchorBufferRow, size });
-    rows.push({
-      id: rowId,
-      anchorBufferRow,
-      placement: editorBlockSurfacePlacement(slot),
-      heightRows: 1,
-      heightPx: size.px,
-      ...(size.measure ? { heightMeasured: true } : {}),
-    });
-  }
-
-  private appendEditorBlockSurfaceLane(
-    block: EditorBlock,
-    slot: "left" | "right",
-    providerIndex: number,
-    revision: number,
-    lineCount: number,
-    lanes: BlockLane[],
-    laneSurfaces: Map<string, ResolvedEditorBlockLaneSurface>,
-  ): void {
-    const surface = block[slot];
-    if (!surface) return;
-    if (!validEditorBlockId(block.id)) return;
-
-    const measureKey = editorBlockSurfaceMeasureKey(providerIndex, block.id, slot);
-    const size = resolveEditorBlockSize(
-      surface.width,
-      measureKey,
-      "width",
-      this.editorBlockMeasuredSizes,
-    );
-    if (!size) return;
-
-    const range = editorBlockSurfaceAnchorRange(block.anchor, lineCount);
-    if (range === null) return;
-
-    const laneId = editorBlockSurfaceLaneId(revision, providerIndex, block.id, slot);
-    laneSurfaces.set(laneId, {
-      laneId,
-      block,
-      surface,
-      slot,
-      startBufferRow: range.startRow,
-      endBufferRow: range.endRow,
-      size,
-    });
-    lanes.push({
-      id: laneId,
-      startBufferRow: range.startRow,
-      endBufferRow: range.endRow,
-      placement: slot,
-      widthPx: size.px,
-      ...(size.measure ? { widthMeasured: true } : {}),
-    });
-  }
-
-  private applyEditorBlockRows(
-    rows: readonly BlockRow[],
-    surfaces: ReadonlyMap<string, ResolvedEditorBlockSurface>,
-    lanes: readonly BlockLane[],
-    laneSurfaces: ReadonlyMap<string, ResolvedEditorBlockLaneSurface>,
-  ): void {
-    this.editorBlockRows = rows;
-    this.editorBlockLanes = lanes;
-    this.editorBlockSurfaces.clear();
-    this.editorBlockLaneSurfaces.clear();
-    for (const [rowId, surface] of surfaces) this.editorBlockSurfaces.set(rowId, surface);
-    for (const [laneId, surface] of laneSurfaces) this.editorBlockLaneSurfaces.set(laneId, surface);
-    this.pruneMeasuredEditorBlockSizes(surfaces, laneSurfaces);
-    this.view.setBlockRows(rows);
-    this.view.setBlockLanes(lanes);
-  }
-
-  private readonly mountEditorBlockRow = (
-    container: HTMLElement,
-    row: { readonly id: string },
-  ): void | EditorDisposable => {
-    const surface = this.editorBlockSurfaces.get(row.id);
-    if (!surface) return undefined;
-
-    container.dataset.editorBlockSurface = surface.slot;
-    return this.mountEditorBlockSurface(container, surface, () =>
-      surface.surface.mount(container, this.createEditorBlockMountContext(surface, container)),
-    );
-  };
-
-  private readonly mountEditorBlockLane = (
-    container: HTMLElement,
-    lane: { readonly id: string },
-  ): void | EditorDisposable => {
-    const surface = this.editorBlockLaneSurfaces.get(lane.id);
-    if (!surface) return undefined;
-
-    container.dataset.editorBlockSurface = surface.slot;
-    return this.mountEditorBlockSurface(container, surface, () =>
-      surface.surface.mount(container, this.createEditorBlockMountContext(surface, container)),
-    );
-  };
-
-  private createEditorBlockMountContext(
-    surface: ResolvedEditorBlockSurface | ResolvedEditorBlockLaneSurface,
-    container: HTMLElement,
-  ): EditorBlockMountContext {
-    return {
-      blockId: surface.block.id,
-      surface: surface.slot,
-      anchor: surface.block.anchor,
-      documentId: this.documentId,
-      text: this.text,
-      focusEditor: () => this.focus(),
-      setSelection: (anchor, head) =>
-        this.applyFindSelection(anchor, head, "editor.block.setSelection", head),
-      requestMeasure: () => this.measureEditorBlockSurface(surface, container),
-    };
-  }
-
-  private mountEditorBlockSurface(
-    container: HTMLElement,
-    surface: ResolvedEditorBlockSurface | ResolvedEditorBlockLaneSurface,
-    mount: () => void | EditorDisposable,
-  ): EditorDisposable {
-    const measurement = surface.size.measure;
-    if (!measurement) {
-      const disposable = mount();
-      return disposableOnce(() => disposable?.dispose());
-    }
-
-    applyEditorBlockMeasurementBounds(container, measurement);
-    const disposable = mount();
-
-    const observer = createEditorBlockResizeObserver((entries) => {
-      const measuredSize = resizeObserverMeasuredSize(entries, container, measurement.dimension);
-      if (measuredSize === null) return;
-
-      this.setMeasuredEditorBlockSize(measurement, measuredSize);
-    });
-    observer?.observe(container);
-    this.measureEditorBlockSurface(surface, container);
-
-    return disposableOnce(() => {
-      observer?.disconnect();
-      disposable?.dispose();
-    });
-  }
-
-  private measureEditorBlockSurface(
-    surface: ResolvedEditorBlockSurface | ResolvedEditorBlockLaneSurface,
-    container: HTMLElement,
-  ): void {
-    const measurement = surface.size.measure;
-    if (!measurement) return;
-
-    this.setMeasuredEditorBlockSize(
-      measurement,
-      elementMeasuredEditorBlockSize(container, measurement.dimension),
-    );
-  }
-
-  private setMeasuredEditorBlockSize(
-    measurement: EditorBlockMeasurement,
-    measuredPx: number,
-  ): void {
-    const next = clampEditorBlockMeasuredSize(measuredPx, measurement);
-    if (this.editorBlockMeasuredSizes.get(measurement.key) === next) return;
-
-    this.editorBlockMeasuredSizes.set(measurement.key, next);
-    this.scheduleEditorBlockMeasurementUpdate();
-  }
-
-  private scheduleEditorBlockMeasurementUpdate(): void {
-    if (this.editorBlockMeasureTimeout !== null) return;
-
-    this.editorBlockMeasureTimeout = setTimeout(() => {
-      this.editorBlockMeasureTimeout = null;
-      this.applyMeasuredEditorBlockSizes();
-    }, 0);
-  }
-
-  private cancelScheduledEditorBlockMeasurementUpdate(): void {
-    if (this.editorBlockMeasureTimeout === null) return;
-
-    clearTimeout(this.editorBlockMeasureTimeout);
-    this.editorBlockMeasureTimeout = null;
-  }
-
-  private applyMeasuredEditorBlockSizes(): void {
-    let changed = false;
-    const rows = this.editorBlockRows.map((row) => {
-      const surface = this.editorBlockSurfaces.get(row.id);
-      if (!surface) return row;
-
-      const heightPx = this.currentEditorBlockSizePx(surface.size);
-      if (row.heightPx === heightPx) return row;
-
-      changed = true;
-      return { ...row, heightPx };
-    });
-    const lanes = this.editorBlockLanes.map((lane) => {
-      const surface = this.editorBlockLaneSurfaces.get(lane.id);
-      if (!surface) return lane;
-
-      const widthPx = this.currentEditorBlockSizePx(surface.size);
-      if (lane.widthPx === widthPx) return lane;
-
-      changed = true;
-      return { ...lane, widthPx };
-    });
-    if (!changed) return;
-
-    this.editorBlockRows = rows;
-    this.editorBlockLanes = lanes;
-    this.view.setBlockRows(rows);
-    this.view.setBlockLanes(lanes);
-    this.notifyViewContributions("layout", null);
-  }
-
-  private currentEditorBlockSizePx(size: ResolvedEditorBlockSize): number {
-    const measurement = size.measure;
-    if (!measurement) return size.px;
-
-    return initialMeasuredEditorBlockSize(
-      measurement,
-      this.editorBlockMeasuredSizes.get(measurement.key),
-    );
-  }
-
-  private pruneMeasuredEditorBlockSizes(
-    surfaces: ReadonlyMap<string, ResolvedEditorBlockSurface>,
-    laneSurfaces: ReadonlyMap<string, ResolvedEditorBlockLaneSurface>,
-  ): void {
-    const keys = new Set<string>();
-    for (const surface of surfaces.values()) addEditorBlockMeasurementKey(keys, surface.size);
-    for (const surface of laneSurfaces.values()) addEditorBlockMeasurementKey(keys, surface.size);
-
-    for (const key of this.editorBlockMeasuredSizes.keys()) {
-      if (keys.has(key)) continue;
-      this.editorBlockMeasuredSizes.delete(key);
-    }
+    this.blockSurfaces.sync(this.pluginHost.getBlockProviders());
   }
 
   private createViewContributionContext(container: HTMLElement): EditorViewContributionContext {
@@ -1361,11 +835,12 @@ export class Editor {
       revealLine: (row) => this.view.scrollToRow(row),
       focusEditor: () => this.focus(),
       setSelection: (anchor, head, timingName, revealOffset) =>
-        this.applyFindSelection(anchor, head, timingName, revealOffset),
+        this.inputSelection.applyFindSelection(anchor, head, timingName, revealOffset),
       reserveOverlayWidth: (side, width) => this.reserveOverlayWidth(side, width),
       setScrollTop: (scrollTop) => this.setScrollTop(scrollTop),
-      textOffsetFromPoint: (clientX, clientY) => this.textOffsetFromPoint(clientX, clientY),
-      getRangeClientRect: (start, end) => this.rangeClientRect(start, end),
+      textOffsetFromPoint: (clientX, clientY) =>
+        this.inputSelection.textOffsetFromPoint(clientX, clientY),
+      getRangeClientRect: (start, end) => this.inputSelection.rangeClientRect(start, end),
       setRangeHighlight: (name, ranges, style) => this.view.setRangeHighlight(name, ranges, style),
       clearRangeHighlight: (name) => this.view.clearRangeHighlight(name),
     };
@@ -1380,14 +855,14 @@ export class Editor {
       highlightPrefix: this.highlightPrefix,
       hasDocument: () => this.session !== null,
       getText: () => this.getText(),
-      getSelections: () => this.resolveViewSelections(),
+      getSelections: () => this.inputSelection.resolveViewSelections(),
       focusEditor: () => this.focus(),
       setSelection: (anchor, head, timingName, revealOffset) =>
-        this.applyFindSelection(anchor, head, timingName, revealOffset),
+        this.inputSelection.applyFindSelection(anchor, head, timingName, revealOffset),
       setSelections: (selections, timingName, revealOffset) =>
-        this.applyFindSelections(selections, timingName, revealOffset),
+        this.inputSelection.applyFindSelections(selections, timingName, revealOffset),
       applyEdits: (edits, timingName, selection) =>
-        this.applyFindEdits(edits, timingName, selection),
+        this.inputSelection.applyFindEdits(edits, timingName, selection),
       setRangeHighlight: (name, ranges, style) => this.view.setRangeHighlight(name, ranges, style),
       clearRangeHighlight: (name) => this.view.clearRangeHighlight(name),
       registerCommand: (command, handler) => this.registerCommandHandler(command, handler),
@@ -1396,13 +871,13 @@ export class Editor {
   }
 
   private canEditDocument(): boolean {
-    return this.editability === "editable" && this.documentMode === "session";
+    return this.document.canEditDocument();
   }
 
   private syncViewEditability(): void {
     const editable = this.canEditDocument();
     this.view.setEditable(editable);
-    this.syncNativeInputHandlers(editable);
+    this.inputSelection.syncNativeInputHandlers(editable);
   }
 
   private applyRangeDecorations(): void {
@@ -1456,7 +931,7 @@ export class Editor {
       textVersion: this.documentVersion,
       lineStarts: this.view.getLineStarts(),
       tokens: this.tokens,
-      selections: this.resolveViewSelections(),
+      selections: this.inputSelection.resolveViewSelections(),
       metrics: viewState.metrics,
       lineCount: viewState.lineCount,
       contentWidth: viewState.contentWidth,
@@ -1478,22 +953,6 @@ export class Editor {
     };
   }
 
-  private resolveViewSelections(): readonly EditorResolvedSelection[] {
-    const snapshot = this.session?.getSnapshot();
-    const selections = this.session?.getSelections().selections ?? [];
-    if (!snapshot) return [];
-
-    return selections.map((selection) => {
-      const resolved = resolveSelection(snapshot, selection);
-      return {
-        anchorOffset: resolved.anchorOffset,
-        headOffset: resolved.headOffset,
-        startOffset: resolved.startOffset,
-        endOffset: resolved.endOffset,
-      };
-    });
-  }
-
   private notifyViewContributions(
     kind: EditorViewContributionUpdateKind,
     change?: DocumentSessionChange | null,
@@ -1511,24 +970,7 @@ export class Editor {
     command: EditorCommandId,
     handler: EditorCommandHandler,
   ): EditorDisposable {
-    this.commandHandlers.set(command, handler);
-
-    return {
-      dispose: () => this.unregisterCommandHandler(command, handler),
-    };
-  }
-
-  private unregisterCommandHandler(command: EditorCommandId, handler: EditorCommandHandler): void {
-    if (this.commandHandlers.get(command) !== handler) return;
-
-    this.commandHandlers.delete(command);
-  }
-
-  private runRegisteredCommand(
-    command: EditorCommandId,
-    context: EditorCommandContext,
-  ): boolean | null {
-    return this.commandHandlers.get(command)?.(context) ?? null;
+    return this.commandRouter.registerCommandHandler(command, handler);
   }
 
   private registerFeature<T>(id: string, feature: T): EditorDisposable {
@@ -1570,855 +1012,6 @@ export class Editor {
     this.notifyViewContributions("viewport", null);
   };
 
-  private installEditingHandlers(): void {
-    this.el.addEventListener("mousedown", this.handleMouseDown);
-    this.el.addEventListener("beforeinput", this.handleBeforeInput);
-    this.el.addEventListener("copy", this.handleCopy);
-    this.el.addEventListener("drop", this.handleDrop);
-    this.el.addEventListener("paste", this.handlePaste);
-    this.el.addEventListener("keydown", this.handleKeyDown);
-    this.el.addEventListener("keyup", this.syncSessionSelectionFromDom);
-    this.el.addEventListener("mouseup", this.syncSessionSelectionFromDom);
-    this.el.ownerDocument.addEventListener("selectionchange", this.syncCustomSelectionFromDom);
-  }
-
-  private uninstallEditingHandlers(): void {
-    this.uninstallNativeInputHandlers();
-    this.el.removeEventListener("mousedown", this.handleMouseDown);
-    this.el.removeEventListener("beforeinput", this.handleBeforeInput);
-    this.el.removeEventListener("copy", this.handleCopy);
-    this.el.removeEventListener("drop", this.handleDrop);
-    this.el.removeEventListener("paste", this.handlePaste);
-    this.el.removeEventListener("keydown", this.handleKeyDown);
-    this.el.removeEventListener("keyup", this.syncSessionSelectionFromDom);
-    this.el.removeEventListener("mouseup", this.syncSessionSelectionFromDom);
-    this.el.ownerDocument.removeEventListener("selectionchange", this.syncCustomSelectionFromDom);
-    this.stopMouseSelectionDrag();
-  }
-
-  private syncNativeInputHandlers(editable: boolean): void {
-    if (editable) {
-      this.installNativeInputHandlers();
-      return;
-    }
-
-    this.uninstallNativeInputHandlers();
-  }
-
-  private installNativeInputHandlers(): void {
-    if (this.nativeInputHandlersInstalled) return;
-
-    this.view.inputElement.addEventListener(
-      "beforeinput",
-      this.handleNativeInputBeforeInputCapture,
-      {
-        capture: true,
-      },
-    );
-    this.view.inputElement.addEventListener("input", this.handleNativeInputInputCapture, {
-      capture: true,
-    });
-    this.nativeInputHandlersInstalled = true;
-  }
-
-  private uninstallNativeInputHandlers(): void {
-    if (!this.nativeInputHandlersInstalled) return;
-
-    this.view.inputElement.removeEventListener(
-      "beforeinput",
-      this.handleNativeInputBeforeInputCapture,
-      { capture: true },
-    );
-    this.view.inputElement.removeEventListener("input", this.handleNativeInputInputCapture, {
-      capture: true,
-    });
-    this.nativeInputHandlersInstalled = false;
-  }
-
-  private handleNativeInputBeforeInputCapture = (_event: InputEvent): void => {
-    this.nativeInputGeneration += 1;
-  };
-
-  private handleNativeInputInputCapture = (): void => {
-    this.nativeInputGeneration += 1;
-  };
-
-  private handleMouseDown = (event: MouseEvent): void => {
-    if (!this.session) return;
-    if (event.defaultPrevented) return;
-    if (eventTargetInsideBlockSurface(event.target)) return;
-
-    this.view.focusInput();
-    if (event.detail >= 4) {
-      this.selectFullDocument(event, "input.quadClick");
-      return;
-    }
-
-    const offset = this.textOffsetFromMouseEvent(event);
-    if (offset === null) return;
-
-    if (event.detail === 3) {
-      this.selectLineAtOffset(event, offset);
-      return;
-    }
-
-    if (event.detail === 2) {
-      this.selectWordAtOffset(event, offset);
-      return;
-    }
-
-    if (event.altKey) {
-      this.addCursorAtOffset(event, offset);
-      return;
-    }
-
-    this.startMouseSelectionDrag(event, offset);
-  };
-
-  private addCursorAtOffset(event: MouseEvent, offset: number): void {
-    if (!this.session) return;
-    if (event.button !== 0) return;
-    if (event.detail !== 1) return;
-
-    const start = eventStartMs(event);
-    event.preventDefault();
-    const change = this.session.addSelection(offset);
-    this.syncSessionSelectionHighlight();
-    this.useSessionSelectionForNextInput = true;
-    this.applySessionChange(change, "input.addCursor", start, { syncDomSelection: false });
-  }
-
-  private startMouseSelectionDrag(event: MouseEvent, offset: number): void {
-    if (event.button !== 0) return;
-    if (event.detail !== 1) return;
-
-    event.preventDefault();
-    this.view.focusInput();
-    this.mouseSelectionDrag = {
-      anchorOffset: offset,
-      headOffset: offset,
-      clientX: event.clientX,
-      clientY: event.clientY,
-    };
-    this.syncCustomSelectionHighlight(offset, offset);
-    this.el.ownerDocument.addEventListener("mousemove", this.updateMouseSelectionDrag);
-    this.el.ownerDocument.addEventListener("mouseup", this.finishMouseSelectionDrag);
-  }
-
-  private updateMouseSelectionDrag = (event: MouseEvent): void => {
-    if (!this.mouseSelectionDrag) return;
-    if (!this.session) return;
-
-    event.preventDefault();
-    this.mouseSelectionDrag.clientX = event.clientX;
-    this.mouseSelectionDrag.clientY = event.clientY;
-    this.updateMouseSelectionFromDragPoint();
-    this.updateMouseSelectionAutoScroll();
-  };
-
-  private finishMouseSelectionDrag = (event: MouseEvent): void => {
-    const drag = this.mouseSelectionDrag;
-    if (!drag || !this.session) {
-      this.stopMouseSelectionDrag();
-      return;
-    }
-
-    drag.clientX = event.clientX;
-    drag.clientY = event.clientY;
-    const offset = this.mouseSelectionOffsetFromPoint(drag.clientX, drag.clientY);
-    event.preventDefault();
-    this.stopMouseSelectionDrag();
-
-    const start = nowMs();
-    const change = this.session.setSelection(drag.anchorOffset, offset);
-    const syncDomSelection = drag.anchorOffset === offset;
-    this.syncCustomSelectionHighlight(drag.anchorOffset, offset);
-    this.useSessionSelectionForNextInput = true;
-    this.applySessionChange(change, "input.selection", start, { syncDomSelection });
-  };
-
-  private stopMouseSelectionDrag(): void {
-    this.mouseSelectionDrag = null;
-    this.stopMouseSelectionAutoScroll();
-    this.el.ownerDocument.removeEventListener("mousemove", this.updateMouseSelectionDrag);
-    this.el.ownerDocument.removeEventListener("mouseup", this.finishMouseSelectionDrag);
-  }
-
-  private updateMouseSelectionFromDragPoint(): void {
-    const drag = this.mouseSelectionDrag;
-    if (!drag || !this.session) return;
-
-    const offset = this.mouseSelectionOffsetFromPoint(drag.clientX, drag.clientY);
-    drag.headOffset = offset;
-    this.syncCustomSelectionHighlight(drag.anchorOffset, offset);
-    this.session.setSelection(drag.anchorOffset, offset);
-    this.notifyViewContributions("selection", null);
-    this.useSessionSelectionForNextInput = drag.anchorOffset !== offset;
-  }
-
-  private mouseSelectionOffsetFromPoint(clientX: number, clientY: number): number {
-    return (
-      this.view.textOffsetFromPoint(clientX, clientY) ??
-      this.view.textOffsetFromViewportPoint(clientX, clientY)
-    );
-  }
-
-  private updateMouseSelectionAutoScroll(): void {
-    const delta = this.mouseSelectionAutoScrollDelta();
-    if (delta === 0 || !this.canMouseSelectionAutoScroll(delta)) {
-      this.stopMouseSelectionAutoScroll();
-      return;
-    }
-
-    this.scrollMouseSelection(delta);
-    this.scheduleMouseSelectionAutoScroll();
-  }
-
-  private mouseSelectionAutoScrollDelta(): number {
-    const drag = this.mouseSelectionDrag;
-    if (!drag) return 0;
-
-    const rect = this.el.getBoundingClientRect();
-    return mouseSelectionAutoScrollDelta(drag.clientY, rect);
-  }
-
-  private canMouseSelectionAutoScroll(delta: number): boolean {
-    const maxScrollTop = Math.max(0, this.el.scrollHeight - this.el.clientHeight);
-    if (delta < 0) return this.el.scrollTop > 0;
-    if (delta > 0) return this.el.scrollTop < maxScrollTop;
-    return false;
-  }
-
-  private scrollMouseSelection(delta: number): void {
-    const maxScrollTop = Math.max(0, this.el.scrollHeight - this.el.clientHeight);
-    const nextScrollTop = clamp(this.el.scrollTop + delta, 0, maxScrollTop);
-    if (nextScrollTop === this.el.scrollTop) return;
-
-    this.el.scrollTop = nextScrollTop;
-    this.view.setScrollMetrics(this.el.scrollTop, this.el.clientHeight);
-    this.updateMouseSelectionFromDragPoint();
-  }
-
-  private scheduleMouseSelectionAutoScroll(): void {
-    if (this.mouseSelectionAutoScrollFrame !== 0) return;
-
-    this.mouseSelectionAutoScrollFrame = requestFrame(() => {
-      this.mouseSelectionAutoScrollFrame = 0;
-      if (!this.mouseSelectionDrag) return;
-      this.updateMouseSelectionAutoScroll();
-    });
-  }
-
-  private stopMouseSelectionAutoScroll(): void {
-    if (this.mouseSelectionAutoScrollFrame === 0) return;
-
-    cancelFrame(this.mouseSelectionAutoScrollFrame);
-    this.mouseSelectionAutoScrollFrame = 0;
-  }
-
-  private selectFullDocument(event: MouseEvent, timingName: string): void {
-    if (!this.session) return;
-
-    const start = eventStartMs(event);
-    event.preventDefault();
-    const change = this.session.setSelection(0, this.session.getSnapshot().length);
-    this.syncCustomSelectionHighlight(0, this.session.getSnapshot().length);
-    this.useSessionSelectionForNextInput = true;
-    this.applySessionChange(change, timingName, start, { syncDomSelection: false });
-  }
-
-  private selectLineAtOffset(event: MouseEvent, offset: number): void {
-    if (!this.session) return;
-
-    const range = lineRangeAtOffset(this.session.getText(), offset);
-    this.selectRange(event, range, "input.tripleClick");
-  }
-
-  private selectWordAtOffset(event: MouseEvent, offset: number): void {
-    if (!this.session) return;
-
-    const range = wordRangeAtOffset(this.session.getText(), offset);
-    if (range.start === range.end) return;
-
-    this.selectRange(event, range, "input.doubleClick");
-  }
-
-  private selectRange(
-    event: MouseEvent,
-    range: { readonly start: number; readonly end: number },
-    timingName: string,
-  ): void {
-    if (!this.session) return;
-
-    const start = eventStartMs(event);
-    event.preventDefault();
-    const change = this.session.setSelection(range.start, range.end);
-    this.syncCustomSelectionHighlight(range.start, range.end);
-    this.useSessionSelectionForNextInput = true;
-    this.applySessionChange(change, timingName, start, { syncDomSelection: false });
-  }
-
-  private handleBeforeInput = (event: InputEvent): void => {
-    if (!this.session) return;
-    if (!this.canEditDocument()) {
-      event.preventDefault();
-      return;
-    }
-
-    const text = event.data ?? "";
-    if (event.inputType !== "insertText" && event.inputType !== "insertLineBreak") return;
-
-    const start = eventStartMs(event);
-    const selectionChange = this.selectionChangeBeforeEdit();
-    event.preventDefault();
-    const inserted = event.inputType === "insertLineBreak" ? "\n" : text;
-    this.applySessionChange(
-      mergeChangeTimings(this.session.applyText(inserted), selectionChange),
-      "input.beforeinput",
-      start,
-    );
-  };
-
-  private handlePaste = (event: ClipboardEvent): void => {
-    if (!this.session) return;
-    if (!this.canEditDocument()) {
-      event.preventDefault();
-      return;
-    }
-
-    const text = event.clipboardData?.getData("text/plain") ?? "";
-    if (text.length === 0) return;
-
-    const start = eventStartMs(event);
-    const selectionChange = this.selectionChangeBeforeEdit();
-    event.preventDefault();
-    const change = mergeChangeTimings(this.session.applyText(text), selectionChange);
-    this.applySessionChange(change, "input.paste", start, {
-      revealBlock: "end",
-      revealOffset: this.primarySelectionHeadOffset(change),
-    });
-  };
-
-  private handleDrop = (event: DragEvent): void => {
-    if (this.canEditDocument()) return;
-
-    event.preventDefault();
-  };
-
-  private handleCopy = (event: ClipboardEvent): void => {
-    const text = this.selectedTextForClipboard();
-    if (text === null) return;
-    if (!event.clipboardData) return;
-
-    event.clipboardData.setData("text/plain", text);
-    event.preventDefault();
-  };
-
-  private handleKeyDown = (event: KeyboardEvent): void => {
-    if (!this.session) return;
-    if (!this.canEditDocument()) return;
-
-    const fallbackText = keyboardFallbackText(event);
-    if (fallbackText === null) return;
-
-    this.preventBrowserTextKeyDefault(event, fallbackText);
-    this.scheduleKeyboardTextFallback(event, fallbackText);
-  };
-
-  private preventBrowserTextKeyDefault(event: KeyboardEvent, text: string): void {
-    if (event.target === this.view.inputElement && text !== " ") return;
-
-    event.preventDefault();
-  }
-
-  private scheduleKeyboardTextFallback(event: KeyboardEvent, text: string): void {
-    const start = eventStartMs(event);
-    const nativeInputGeneration = this.nativeInputGeneration;
-
-    this.el.ownerDocument.defaultView?.setTimeout(() => {
-      if (!this.session) return;
-      if (!this.canEditDocument()) return;
-      if (this.nativeInputGeneration !== nativeInputGeneration) return;
-
-      const selectionChange = this.selectionChangeBeforeEdit();
-      this.view.inputElement.value = "";
-      this.applySessionChange(
-        mergeChangeTimings(this.session.applyText(text), selectionChange),
-        "input.keydownFallback",
-        start,
-      );
-    }, 0);
-  }
-
-  private applyHistoryCommand(command: "undo" | "redo", context: EditorCommandContext): boolean {
-    if (!this.session) return false;
-    if (!this.canEditDocument()) return false;
-
-    const start = context.event ? eventStartMs(context.event) : nowMs();
-    const change = command === "undo" ? this.session.undo() : this.session.redo();
-    this.applySessionChange(change, command === "undo" ? "input.undo" : "input.redo", start);
-    return true;
-  }
-
-  private applyDeleteCommand(
-    direction: "backward" | "forward",
-    context: EditorCommandContext,
-  ): boolean {
-    if (!this.session) return false;
-    if (!this.canEditDocument()) return false;
-
-    const start = context.event ? eventStartMs(context.event) : nowMs();
-    const selectionChange = this.selectionChangeBeforeEdit();
-    const change =
-      direction === "backward" ? this.session.backspace() : this.session.deleteSelection();
-    this.applySessionChange(
-      mergeChangeTimings(change, selectionChange),
-      direction === "backward" ? "input.backspace" : "input.delete",
-      start,
-    );
-    return true;
-  }
-
-  private applyIndentCommand(
-    direction: "indent" | "outdent",
-    context: EditorCommandContext,
-  ): boolean {
-    if (!this.session) return false;
-    if (!this.canEditDocument()) return false;
-
-    const start = context.event ? eventStartMs(context.event) : nowMs();
-    const selectionChange = this.selectionChangeBeforeEdit();
-    const change =
-      direction === "indent"
-        ? this.applyIndentToSession()
-        : this.session.outdentSelection(this.tabSize);
-    const merged = mergeChangeTimings(change, selectionChange);
-    this.applySessionChange(merged, indentTimingName(direction), start, {
-      revealOffset: this.primarySelectionHeadOffset(merged),
-    });
-    return true;
-  }
-
-  private applyEditActionCommand(
-    command: Parameters<typeof editActionForCommand>[0],
-    context: EditorCommandContext,
-  ): boolean {
-    if (!this.session) return false;
-    if (!this.canEditDocument()) return false;
-
-    const start = context.event ? eventStartMs(context.event) : nowMs();
-    const selectionChange = this.selectionChangeBeforeEdit();
-    const snapshot = this.session.getSnapshot();
-    const selections = this.session
-      .getSelections()
-      .selections.map((selection) => resolveSelection(snapshot, selection));
-    const action = editActionForCommand(command, this.session.getText(), selections, {
-      languageId: this.languageId,
-      tabSize: this.tabSize,
-    });
-    const change = this.session.applyEdits(action.edits, {
-      selections: action.selections,
-    });
-    this.applySessionChange(mergeChangeTimings(change, selectionChange), action.timingName, start, {
-      revealOffset: action.revealOffset,
-    });
-    return true;
-  }
-
-  private applyIndentToSession(): DocumentSessionChange {
-    if (!this.session) throw new Error("missing editor session");
-    if (this.shouldInsertLiteralTab()) return this.session.applyText("\t");
-    return this.session.indentSelection("\t");
-  }
-
-  private shouldInsertLiteralTab(): boolean {
-    if (!this.session) return false;
-
-    const snapshot = this.session.getSnapshot();
-    const selections = this.session.getSelections().selections;
-    return selections.every((selection) => resolveSelection(snapshot, selection).collapsed);
-  }
-
-  private applySelectAllCommand(context: EditorCommandContext): boolean {
-    if (!this.session) return false;
-
-    const start = context.event ? eventStartMs(context.event) : nowMs();
-    const change = this.session.setSelection(0, this.session.getSnapshot().length);
-    this.syncCustomSelectionHighlight(0, this.session.getSnapshot().length);
-    this.useSessionSelectionForNextInput = true;
-    this.applySessionChange(change, "input.selectAll", start, { syncDomSelection: false });
-    return true;
-  }
-
-  private applyClearSecondarySelections(context: EditorCommandContext): boolean {
-    if (!this.session) return false;
-
-    const start = context.event ? eventStartMs(context.event) : nowMs();
-    const change = this.session.clearSecondarySelections();
-    this.syncSessionSelectionHighlight();
-    this.useSessionSelectionForNextInput = true;
-    this.applySessionChange(change, "input.clearSecondarySelections", start, {
-      syncDomSelection: false,
-    });
-    return true;
-  }
-
-  private applyInsertCursorCommand(
-    direction: "above" | "below",
-    context: EditorCommandContext,
-  ): boolean {
-    if (!this.session) return false;
-
-    const resolved = this.resolvedSelections();
-    const rowDelta = direction === "above" ? -1 : 1;
-    const inserted = resolved
-      .map((selection) => this.cursorSelectionByDisplayRows(selection, rowDelta))
-      .filter((selection) => selection.anchor !== selection.sourceHead);
-    if (inserted.length === 0) return false;
-
-    const selections = [
-      ...resolved.map((selection) => ({
-        anchor: selection.anchorOffset,
-        head: selection.headOffset,
-        goal: selection.goal,
-      })),
-      ...inserted.map((selection) => ({
-        anchor: selection.anchor,
-        head: selection.anchor,
-        goal: selection.goal,
-      })),
-    ];
-    const start = context.event ? eventStartMs(context.event) : nowMs();
-    const change = this.session.setSelections(selections);
-    this.syncSessionSelectionHighlight();
-    this.useSessionSelectionForNextInput = true;
-    this.applySessionChange(change, `input.insertCursor${capitalize(direction)}`, start, {
-      revealOffset: inserted[0]?.anchor,
-      syncDomSelection: false,
-    });
-    return true;
-  }
-
-  private cursorSelectionByDisplayRows(
-    selection: ResolvedSelection,
-    rowDelta: -1 | 1,
-  ): {
-    readonly anchor: number;
-    readonly goal: SelectionGoalValue;
-    readonly sourceHead: number;
-  } {
-    const visualColumn = selectionGoalColumn(selection, this.view);
-    return {
-      anchor: this.view.offsetByDisplayRows(selection.headOffset, rowDelta, visualColumn),
-      goal: SelectionGoal.horizontal(visualColumn),
-      sourceHead: selection.headOffset,
-    };
-  }
-
-  private applySelectExactOccurrencesCommand(
-    command: "editor.action.selectHighlights" | "editor.action.changeAll",
-    context: EditorCommandContext,
-  ): boolean {
-    if (!this.session) return false;
-
-    const text = this.session.getText();
-    const query = this.occurrenceQueryForCurrentSelection(text);
-    if (!query) return false;
-
-    const ranges = findAllExactOccurrences(text, query.query);
-    if (ranges.length === 0) return false;
-
-    const selections = ranges.map((range) => ({ anchor: range.start, head: range.end }));
-    const start = context.event ? eventStartMs(context.event) : nowMs();
-    const change = this.session.setSelections(selections);
-    this.syncSessionSelectionHighlight();
-    this.useSessionSelectionForNextInput = true;
-    this.applySessionChange(change, occurrenceSelectTimingName(command), start, {
-      revealOffset: query.range.end,
-      syncDomSelection: false,
-    });
-    return true;
-  }
-
-  private applyMoveSelectionToNextOccurrenceCommand(context: EditorCommandContext): boolean {
-    if (!this.session) return false;
-
-    const text = this.session.getText();
-    const resolved = this.resolvedSelections();
-    const source = resolved.at(-1);
-    if (!source) return false;
-
-    const query = occurrenceQueryForSelection(text, source);
-    if (!query) return false;
-
-    const keptSelections = resolved.slice(0, -1);
-    const selected = keptSelections.map((selection) => ({
-      start: selection.startOffset,
-      end: selection.endOffset,
-    }));
-    const next = findNextExactOccurrenceFromRange(text, query.query, selected, query.range);
-    if (!next) return false;
-    if (next.start === query.range.start && next.end === query.range.end) return false;
-
-    const selections = [
-      ...keptSelections.map((selection) => ({
-        anchor: selection.anchorOffset,
-        head: selection.headOffset,
-        goal: selection.goal,
-      })),
-      { anchor: next.start, head: next.end },
-    ];
-    const start = context.event ? eventStartMs(context.event) : nowMs();
-    const change = this.session.setSelections(selections);
-    this.syncSessionSelectionHighlight();
-    this.useSessionSelectionForNextInput = true;
-    this.applySessionChange(change, "input.moveSelectionToNextFindMatch", start, {
-      revealOffset: next.end,
-      syncDomSelection: false,
-    });
-    return true;
-  }
-
-  private applyAddNextOccurrenceCommand(context: EditorCommandContext): boolean {
-    if (!this.session) return false;
-
-    const start = context.event ? eventStartMs(context.event) : nowMs();
-    const result = this.addNextExactOccurrence();
-    if (!result) return false;
-
-    this.syncSessionSelectionHighlight();
-    this.useSessionSelectionForNextInput = true;
-    this.applySessionChange(result.change, "input.addNextOccurrence", start, {
-      revealOffset: result.revealOffset,
-      syncDomSelection: false,
-    });
-    return true;
-  }
-
-  private resolvedSelections(): readonly ResolvedSelection[] {
-    if (!this.session) return [];
-
-    const snapshot = this.session.getSnapshot();
-    return this.session
-      .getSelections()
-      .selections.map((selection) => resolveSelection(snapshot, selection));
-  }
-
-  private addNextExactOccurrence(): OccurrenceSelectionChange | null {
-    if (!this.session) return null;
-
-    const text = this.session.getText();
-    const resolved = this.resolvedSelections();
-    const primary = resolved[0];
-    if (!primary) return null;
-
-    if (resolved.length === 1 && primary.collapsed) {
-      return this.selectCurrentWordForOccurrence(text, primary);
-    }
-
-    const query = getOccurrenceQuery(text, resolved);
-    if (!query) return null;
-
-    const range = findNextExactOccurrence(text, query, resolved);
-    if (!range) return null;
-
-    const selections = [
-      ...resolved.map((selection) => ({
-        anchor: selection.anchorOffset,
-        head: selection.headOffset,
-      })),
-      { anchor: range.start, head: range.end },
-    ];
-    return {
-      change: this.session.setSelections(selections),
-      revealOffset: range.end,
-    };
-  }
-
-  private occurrenceQueryForCurrentSelection(text: string): OccurrenceQuery | null {
-    const resolved = this.resolvedSelections();
-    const selected = resolved.find((selection) => !selection.collapsed);
-    if (selected) return occurrenceQueryForSelection(text, selected);
-
-    const primary = resolved[0];
-    if (!primary) return null;
-    return occurrenceQueryForSelection(text, primary);
-  }
-
-  private selectCurrentWordForOccurrence(
-    text: string,
-    selection: ResolvedSelection,
-  ): OccurrenceSelectionChange | null {
-    if (!this.session) return null;
-
-    const range = wordRangeAtOffset(text, selection.headOffset);
-    if (range.start === range.end) return null;
-
-    return {
-      change: this.session.setSelection(range.start, range.end),
-      revealOffset: range.end,
-    };
-  }
-
-  private applyNavigationCommand(command: EditorCommandId, context: EditorCommandContext): boolean {
-    if (!this.session) return false;
-
-    const snapshot = this.session.getSnapshot();
-    const text = this.session.getText();
-    const resolvedSelections = this.session
-      .getSelections()
-      .selections.map((selection) => resolveSelection(snapshot, selection));
-    if (resolvedSelections.length === 0) return false;
-
-    const navigation = resolvedSelections.map((resolved) => ({
-      resolved,
-      target: navigationTargetForCommand({
-        command,
-        resolved,
-        text,
-        documentLength: snapshot.length,
-        view: this.view,
-      }),
-    }));
-    const primary = navigation[0];
-    if (!primary?.target) return false;
-
-    const start = context.event ? eventStartMs(context.event) : nowMs();
-    const selections = [];
-    for (const { resolved, target } of navigation) {
-      if (!target) return false;
-      selections.push({
-        anchor: target.extend ? resolved.anchorOffset : target.offset,
-        head: target.offset,
-        goal: target.goal ?? SelectionGoal.none(),
-      });
-    }
-    const change = this.session.setSelections(selections);
-    this.useSessionSelectionForNextInput = true;
-    this.view.revealOffset(primary.target.offset);
-    this.applySessionChange(change, primary.target.timingName, start);
-    return true;
-  }
-
-  private selectedTextForClipboard(): string | null {
-    if (!this.session) return null;
-
-    const snapshot = this.session.getSnapshot();
-    const texts = this.session
-      .getSelections()
-      .selections.map((selection) => resolveSelection(snapshot, selection))
-      .filter((selection) => !selection.collapsed)
-      .map((selection) => getPieceTableText(snapshot, selection.startOffset, selection.endOffset));
-    if (texts.length === 0) return null;
-
-    return texts.join("\n");
-  }
-
-  private primarySelectionHeadOffset(change: DocumentSessionChange): number | undefined {
-    const selection = change.selections.selections[0];
-    if (!selection) return undefined;
-
-    return resolveSelection(change.snapshot, selection).headOffset;
-  }
-
-  private applyFindSelection(
-    anchorOffset: number,
-    headOffset: number,
-    timingName: string,
-    revealOffset?: number,
-  ): void {
-    if (!this.session) return;
-
-    const start = nowMs();
-    const change = this.session.setSelection(anchorOffset, headOffset);
-    this.syncSessionSelectionHighlight();
-    this.useSessionSelectionForNextInput = true;
-    this.applySessionChange(change, timingName, start, {
-      revealOffset,
-      syncDomSelection: false,
-    });
-  }
-
-  private applyFindSelections(
-    selections: readonly EditorSelectionRange[],
-    timingName: string,
-    revealOffset?: number,
-  ): void {
-    if (!this.session) return;
-    if (selections.length === 0) return;
-
-    const start = nowMs();
-    const change = this.session.setSelections(selections);
-    this.syncSessionSelectionHighlight();
-    this.useSessionSelectionForNextInput = true;
-    this.applySessionChange(change, timingName, start, {
-      revealOffset,
-      syncDomSelection: false,
-    });
-  }
-
-  private applyFindEdits(
-    edits: readonly TextEdit[],
-    timingName: string,
-    selection?: EditorSelectionRange,
-  ): void {
-    if (!this.session) return;
-    if (!this.canEditDocument()) return;
-    if (edits.length === 0) return;
-
-    const start = nowMs();
-    const change = this.session.applyEdits(edits, { selection });
-    this.syncSessionSelectionHighlight();
-    this.useSessionSelectionForNextInput = true;
-    this.applySessionChange(change, timingName, start, {
-      revealOffset: this.primarySelectionHeadOffset(change),
-      syncDomSelection: false,
-    });
-  }
-
-  private syncSessionSelectionFromDom = (_event: Event): void => {
-    if (!this.session) return;
-    if (this.mouseSelectionDrag) return;
-    if (this.useSessionSelectionForNextInput) return;
-    if (this.isInputFocused()) return;
-
-    const start = nowMs();
-    const change = this.updateSessionSelectionFromDom();
-    if (!change) return;
-
-    this.useSessionSelectionForNextInput = false;
-    const timedChange = appendTiming(change, "input.selection", start);
-    this.sessionOptions.onChange?.(timedChange);
-    this.notifyViewContributions("selection", null);
-    this.notifyChangeWithTiming(timedChange);
-  };
-
-  private updateSessionSelectionFromDom(): DocumentSessionChange | null {
-    if (!this.session) return null;
-
-    const readStart = nowMs();
-    const offsets = this.readDomSelectionOffsets();
-    if (!offsets) return null;
-
-    this.syncCustomSelectionHighlight(offsets.anchorOffset, offsets.headOffset);
-    return appendTiming(
-      this.session.setSelection(offsets.anchorOffset, offsets.headOffset),
-      "editor.readDomSelection",
-      readStart,
-    );
-  }
-
-  private selectionChangeBeforeEdit(): DocumentSessionChange | null {
-    if (this.isInputFocused()) {
-      this.useSessionSelectionForNextInput = false;
-      return null;
-    }
-    if (!this.useSessionSelectionForNextInput) return this.updateSessionSelectionFromDom();
-
-    this.useSessionSelectionForNextInput = false;
-    return null;
-  }
-
   private applySessionChange(
     change: DocumentSessionChange,
     totalName = "editor.change",
@@ -2438,7 +1031,7 @@ export class Editor {
 
     if (options.syncDomSelection !== false) {
       const selectionStart = nowMs();
-      this.syncDomSelection();
+      this.inputSelection.syncDomSelection();
       timedChange = appendTiming(timedChange, "editor.syncDomSelection", selectionStart);
     }
     const finalChange = appendTiming(timedChange, totalName, totalStart);
@@ -2481,100 +1074,7 @@ export class Editor {
   }
 
   private refreshSyntax(documentVersion: number, change: DocumentSessionChange | null): void {
-    if (!this.session) return;
-    if (change && (change.kind === "none" || change.kind === "selection")) return;
-
-    this.refreshStructuralSyntax(documentVersion, change);
-    this.refreshHighlightTokens(documentVersion, change);
-  }
-
-  private refreshStructuralSyntax(
-    documentVersion: number,
-    change: DocumentSessionChange | null,
-  ): void {
-    if (!this.syntaxSession || !this.session || !this.languageId) return;
-
-    const text = this.session.getText();
-    this.syntaxStatus = "loading";
-
-    this.syntaxRequests.schedule({
-      delayMs: syntaxRefreshDelay(change),
-      run: () => this.loadSyntaxResult(change, text),
-      apply: (result, startedAt) => this.applySyntaxResult(result, documentVersion, startedAt),
-      fail: () => this.applySyntaxError(documentVersion),
-    });
-  }
-
-  private refreshHighlightTokens(
-    documentVersion: number,
-    change: DocumentSessionChange | null,
-  ): void {
-    if (!this.highlighterSession || !this.session) return;
-
-    const text = this.session.getText();
-    this.highlightRequests.schedule({
-      delayMs: syntaxRefreshDelay(change),
-      run: () => this.loadHighlightResult(change, text),
-      apply: (result, startedAt) => this.applyHighlightResult(result, documentVersion, startedAt),
-      fail: (_error, startedAt) => this.applyHighlightError(documentVersion, startedAt),
-    });
-  }
-
-  private loadSyntaxResult(
-    change: DocumentSessionChange | null,
-    text: string,
-  ): Promise<EditorSyntaxResult> {
-    if (!this.syntaxSession) return Promise.reject(new Error("No syntax session"));
-    if (!change) {
-      const snapshot = this.session?.getSnapshot();
-      if (!snapshot) return Promise.reject(new Error("No document snapshot"));
-      return this.syntaxSession.refresh(snapshot, text);
-    }
-    return this.syntaxSession.applyChange(change);
-  }
-
-  private loadHighlightResult(
-    change: DocumentSessionChange | null,
-    text: string,
-  ): Promise<EditorHighlightResult> {
-    if (!this.highlighterSession) return Promise.reject(new Error("No highlighter session"));
-    if (!change) {
-      const snapshot = this.session?.getSnapshot();
-      if (!snapshot) return Promise.reject(new Error("No document snapshot"));
-      return this.highlighterSession.refresh(snapshot, text);
-    }
-
-    return this.highlighterSession.applyChange(change);
-  }
-
-  private applySyntaxResult(
-    result: EditorSyntaxResult,
-    documentVersion: number,
-    startedAt: number,
-  ): void {
-    if (!this.session || documentVersion !== this.documentVersion) return;
-
-    this.syntaxStatus = "ready";
-    const nextTokens = this.highlighterSession ? this.tokens : result.tokens;
-    const tokenChange = this.session.adoptTokens(nextTokens);
-    const timedChange = appendTiming(tokenChange, "editor.syntax", startedAt);
-    if (!this.highlighterSession) this.adoptTokens(result.tokens);
-    this.setSyntaxFolds(result.folds);
-    this.notifyChange(timedChange);
-  }
-
-  private applyHighlightResult(
-    result: EditorHighlightResult,
-    documentVersion: number,
-    startedAt: number,
-  ): void {
-    if (!this.session || documentVersion !== this.documentVersion) return;
-
-    if (result.theme !== undefined) this.setHighlighterTheme(result.theme);
-    const tokenChange = this.session.adoptTokens(result.tokens);
-    const timedChange = appendTiming(tokenChange, "editor.highlight", startedAt);
-    this.adoptTokens(result.tokens);
-    this.notifyChange(timedChange);
+    this.syntax.refresh(documentVersion, change);
   }
 
   private handleFoldToggle = (marker: VirtualizedFoldMarker): void => {
@@ -2634,192 +1134,11 @@ export class Editor {
     this.foldState.clear();
   }
 
-  private adoptTokens(tokens: readonly EditorToken[]): void {
-    this.tokens = tokens;
-    this.view.adoptTokens(tokens);
-    this.notifyViewContributions("tokens", null);
-  }
-
-  private applySyntaxError(documentVersion: number): void {
-    if (documentVersion !== this.documentVersion) return;
-
-    this.syntaxStatus = "error";
-    this.notifyChange(null);
-  }
-
-  private applyHighlightError(documentVersion: number, startedAt: number): void {
-    if (!this.session || documentVersion !== this.documentVersion) return;
-
-    this.setHighlighterTheme(null);
-    const tokenChange = this.session.adoptTokens([]);
-    const timedChange = appendTiming(tokenChange, "editor.highlightError", startedAt);
-    this.adoptTokens([]);
-    this.notifyChange(timedChange);
-  }
-
-  private setHighlighterTheme(theme: EditorTheme | null | undefined): void {
-    const nextTheme = theme ?? null;
-    if (editorThemesEqual(this.highlighterTheme, nextTheme)) return;
-
-    this.highlighterTheme = nextTheme;
-    this.applyResolvedTheme();
-  }
-
-  private setProviderHighlighterTheme(theme: EditorTheme | null | undefined): void {
-    const nextTheme = theme ?? null;
-    if (editorThemesEqual(this.providerHighlighterTheme, nextTheme)) return;
-
-    this.providerHighlighterTheme = nextTheme;
-    this.applyResolvedTheme();
-  }
-
   private applyResolvedTheme(): void {
     this.view.setTheme(this.resolvedTheme());
   }
 
   private resolvedTheme(): EditorTheme | null {
-    return mergeEditorThemes(
-      this.providerHighlighterTheme,
-      this.highlighterTheme,
-      this.configuredTheme,
-    );
-  }
-
-  private syncDomSelection(): void {
-    if (!this.session) return;
-
-    const selection = this.session.getSelections().selections[0];
-    if (!selection) return;
-
-    const resolved = resolveSelection(this.session.getSnapshot(), selection);
-    const start = clamp(resolved.startOffset, 0, this.text.length);
-    const end = clamp(resolved.endOffset, start, this.text.length);
-
-    if (this.hasFocusedExternalElement()) {
-      this.syncSessionSelectionHighlight();
-      this.notifyViewContributions("selection", null);
-      return;
-    }
-
-    if (this.isInputFocused()) {
-      this.syncSessionSelectionHighlight();
-      this.notifyViewContributions("selection", null);
-      return;
-    }
-
-    if (this.selectionSyncMode === "none") {
-      this.syncSessionSelectionHighlight();
-      this.notifyViewContributions("selection", null);
-      return;
-    }
-
-    const range = this.view.createRange(start, end, { scrollIntoView: false });
-    const domSelection = window.getSelection();
-    domSelection?.removeAllRanges();
-    if (range) domSelection?.addRange(range);
-    this.syncSessionSelectionHighlight();
-    this.notifyViewContributions("selection", null);
-  }
-
-  private readDomSelectionOffsets(): { anchorOffset: number; headOffset: number } | null {
-    const selection = window.getSelection();
-    if (!selection?.anchorNode || !selection.focusNode) return null;
-
-    const anchorOffset = this.domBoundaryToTextOffset(selection.anchorNode, selection.anchorOffset);
-    const headOffset = this.domBoundaryToTextOffset(selection.focusNode, selection.focusOffset);
-    if (anchorOffset === null || headOffset === null) return null;
-
-    return { anchorOffset, headOffset };
-  }
-
-  private syncCustomSelectionFromDom = (): void => {
-    if (!this.session) return;
-    if (this.useSessionSelectionForNextInput) return;
-    if (this.isInputFocused()) return;
-
-    const offsets = this.readDomSelectionOffsets();
-    if (!offsets) return;
-
-    this.syncCustomSelectionHighlight(offsets.anchorOffset, offsets.headOffset);
-  };
-
-  private syncCustomSelectionHighlight(anchorOffset: number, headOffset: number): void {
-    this.view.setSelection(anchorOffset, headOffset);
-  }
-
-  private syncSessionSelectionHighlight(): void {
-    if (!this.session) return;
-
-    const snapshot = this.session.getSnapshot();
-    const selections = this.session.getSelections().selections.map((selection) => {
-      const resolved = resolveSelection(snapshot, selection);
-      return {
-        anchorOffset: resolved.anchorOffset,
-        headOffset: resolved.headOffset,
-      };
-    });
-    this.view.setSelections(selections);
-  }
-
-  private clearSelectionHighlight(): void {
-    this.view.clearSelection();
-  }
-
-  private isInputFocused(): boolean {
-    return this.el.ownerDocument.activeElement === this.view.inputElement;
-  }
-
-  private hasFocusedExternalElement(): boolean {
-    const activeElement = this.el.ownerDocument.activeElement;
-    if (!activeElement) return false;
-    if (activeElement === this.el.ownerDocument.body) return false;
-    if (activeElement === this.el.ownerDocument.documentElement) return false;
-
-    return !this.el.contains(activeElement);
-  }
-
-  private domBoundaryToTextOffset(node: Node, offset: number): number | null {
-    const viewOffset = this.view.textOffsetFromDomBoundary(node, offset);
-    if (viewOffset !== null) return viewOffset;
-
-    if (node === this.el) return elementBoundaryToTextOffset(offset, this.text.length);
-    return this.externalBoundaryToTextOffset(node, offset);
-  }
-
-  private textOffsetFromMouseEvent(event: MouseEvent): number | null {
-    return this.textOffsetFromPoint(event.clientX, event.clientY);
-  }
-
-  private textOffsetFromPoint(clientX: number, clientY: number): number | null {
-    return (
-      this.view.textOffsetFromPoint(clientX, clientY) ??
-      this.view.textOffsetFromViewportPoint(clientX, clientY)
-    );
-  }
-
-  private rangeClientRect(start: number, end: number): DOMRect | null {
-    const range = this.view.createRange(start, Math.max(start, end), { scrollIntoView: false });
-    if (!range) return null;
-
-    const firstRect = range.getClientRects()[0];
-    if (firstRect) return firstRect;
-
-    const rect = range.getBoundingClientRect();
-    if (rect.width > 0 || rect.height > 0) return rect;
-    return null;
-  }
-
-  private externalBoundaryToTextOffset(node: Node, offset: number): number | null {
-    if (node.contains(this.el)) {
-      const child = childContainingNode(node, this.el);
-      const childIndex = child ? childNodeIndex(node, child) : -1;
-      if (childIndex === -1) return null;
-      return elementBoundaryToTextOffset(offset <= childIndex ? 0 : 1, this.text.length);
-    }
-
-    const position = node.compareDocumentPosition(this.el);
-    if ((position & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) return 0;
-    if ((position & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return this.text.length;
-    return null;
+    return mergeEditorThemes(this.syntax.providerTheme, this.syntax.theme, this.configuredTheme);
   }
 }

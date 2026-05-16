@@ -1,6 +1,16 @@
 import type * as lsp from "vscode-languageserver-protocol";
 
 const TYPE_SCRIPT_EXTENSIONS = new Set([".cts", ".mts", ".ts", ".tsx"]);
+const TYPE_SCRIPT_LSP_SOURCE_EXTENSIONS = new Set([
+  ".cjs",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".mts",
+  ".ts",
+  ".tsx",
+]);
 
 export function sourcePathToFileName(path: string): string {
   if (hasUriScheme(path)) return documentUriToFileName(path) ?? normalizeFileNamePath(path);
@@ -32,6 +42,10 @@ export function documentUriToFileName(uri: string): string | null {
 
 export function isTypeScriptFileName(fileName: string): boolean {
   return TYPE_SCRIPT_EXTENSIONS.has(extensionForPath(fileName));
+}
+
+export function isTypeScriptLspSourceFileName(fileName: string): boolean {
+  return TYPE_SCRIPT_LSP_SOURCE_EXTENSIONS.has(extensionForPath(fileName));
 }
 
 function normalizeFileNamePath(path: string): string {

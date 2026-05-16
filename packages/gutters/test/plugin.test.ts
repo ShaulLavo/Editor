@@ -208,5 +208,6 @@ function createContext(
     registerViewContribution: vi.fn(() => ({ dispose: vi.fn() })),
     registerEditorFeatureContribution: vi.fn(() => ({ dispose: vi.fn() })),
     registerGutterContribution,
+    registerBlockProvider: vi.fn(() => ({ dispose: vi.fn() })),
   };
 }

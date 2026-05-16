@@ -176,6 +176,55 @@ describe("createTypeScriptLspPlugin", () => {
     expect(worker.terminated).toBe(true);
   });
 
+  it("syncs active JavaScript documents through the TypeScript language service", async () => {
+    const worker = new FakeWorker();
+    const context = viewContributionContext(
+      editorSnapshot({
+        documentId: "src/index.js",
+        languageId: "javascript",
+        text: "const value = 1;",
+      }),
+    );
+    const plugin = createTypeScriptLspPlugin({ workerFactory: () => worker });
+    const provider = activatePlugin(plugin);
+    const contribution = provider.createContribution(context);
+    if (!contribution) throw new Error("missing contribution");
+
+    worker.receive(initializeResponse(message(worker.sent[0])));
+    await flushPromises();
+
+    expect(textDocumentFor(worker.sent.find(hasMethod("textDocument/didOpen")))).toMatchObject({
+      uri: "file:///src/index.js",
+      languageId: "javascript",
+      version: 0,
+      text: "const value = 1;",
+    });
+
+    contribution.dispose();
+  });
+
+  it("does not attach the TypeScript language service to Markdown documents", async () => {
+    const worker = new FakeWorker();
+    const context = viewContributionContext(
+      editorSnapshot({
+        documentId: "README.md",
+        languageId: "markdown",
+        text: "# Notes",
+      }),
+    );
+    const plugin = createTypeScriptLspPlugin({ workerFactory: () => worker });
+    const provider = activatePlugin(plugin);
+    const contribution = provider.createContribution(context);
+    if (!contribution) throw new Error("missing contribution");
+
+    worker.receive(initializeResponse(message(worker.sent[0])));
+    await flushPromises();
+
+    expect(sentMethods(worker)).not.toContain("textDocument/didOpen");
+
+    contribution.dispose();
+  });
+
   it("publishes diagnostic line markers to the minimap feature", async () => {
     const worker = new FakeWorker();
     const minimap = minimapFeature();
@@ -880,6 +929,83 @@ describe("createTypeScriptLspPlugin", () => {
     );
   });
 
+  it("requests completions while typing and accepts the selected suggestion", async () => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker();
+    const container = document.createElement("div");
+    const applyEdits = vi.fn<EditorFeatureContributionContext["applyEdits"]>();
+    const { provider, features } = activatePluginWithCommands(
+      createTypeScriptLspPlugin({ workerFactory: () => worker }),
+      { container, applyEdits },
+    );
+    const context = viewContributionContext(
+      editorSnapshot({
+        text: "const va",
+        selections: [collapsedSelection(8)],
+      }),
+      { container, features },
+    );
+    const contribution = provider.createContribution(context);
+    if (!contribution) throw new Error("missing contribution");
+
+    worker.receive(initializeResponse(message(worker.sent[0])));
+    await flushPromises();
+    contribution.update(
+      editorSnapshot({
+        text: "const val",
+        textVersion: 2,
+        selections: [collapsedSelection(9)],
+      }),
+      "content",
+      documentChange([{ from: 8, to: 8, text: "l" }]),
+    );
+    await vi.advanceTimersByTimeAsync(90);
+
+    const request = message(worker.sent.toReversed().find(hasMethod("textDocument/completion")));
+    expect(request.params).toMatchObject({
+      textDocument: { uri: "file:///src/index.ts" },
+      position: { line: 0, character: 9 },
+      context: { triggerKind: 1 },
+    });
+
+    worker.receive({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: {
+        isIncomplete: false,
+        items: [
+          {
+            label: "value",
+            kind: 6,
+            labelDetails: { description: ": number" },
+            textEdit: {
+              range: {
+                start: { line: 0, character: 6 },
+                end: { line: 0, character: 9 },
+              },
+              newText: "value",
+            },
+          },
+        ],
+      },
+    });
+    await flushPromises();
+
+    expect(completionElement().hidden).toBe(false);
+    expect(completionElement().textContent).toContain("value");
+
+    context.scrollElement.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    );
+
+    expect(applyEdits).toHaveBeenCalledWith(
+      [{ from: 6, to: 9, text: "value" }],
+      "typescriptLsp.completion.accept",
+      { anchor: 11, head: 11 },
+    );
+    expect(completionElement().hidden).toBe(true);
+  });
+
   it("routes implementation commands through the TypeScript LSP plugin", async () => {
     const worker = new FakeWorker();
     const context = viewContributionContext(
@@ -1034,12 +1160,25 @@ function activatePlugin(
   return provider;
 }
 
-function activatePluginWithCommands(plugin: ReturnType<typeof createTypeScriptLspPlugin>): {
+function activatePluginWithCommands(
+  plugin: ReturnType<typeof createTypeScriptLspPlugin>,
+  options?: FeatureContributionContextOptions,
+): {
   readonly provider: EditorViewContributionProvider;
   readonly commands: ReadonlyMap<EditorCommandId, EditorCommandHandler>;
+  readonly features: ReadonlyMap<string, unknown>;
+};
+function activatePluginWithCommands(
+  plugin: ReturnType<typeof createTypeScriptLspPlugin>,
+  options?: FeatureContributionContextOptions,
+): {
+  readonly provider: EditorViewContributionProvider;
+  readonly commands: ReadonlyMap<EditorCommandId, EditorCommandHandler>;
+  readonly features: ReadonlyMap<string, unknown>;
 } {
   let provider: EditorViewContributionProvider | null = null;
   const commands = new Map<EditorCommandId, EditorCommandHandler>();
+  const features = options?.features ?? new Map<string, unknown>();
   plugin.activate({
     registerHighlighter: () => ({ dispose: () => undefined }),
     registerSyntaxProvider: () => ({ dispose: () => undefined }),
@@ -1048,7 +1187,7 @@ function activatePluginWithCommands(plugin: ReturnType<typeof createTypeScriptLs
       return { dispose: () => undefined };
     },
     registerEditorFeatureContribution: (value) => {
-      value.createContribution(featureContributionContext(commands));
+      value.createContribution(featureContributionContext(commands, { ...options, features }));
       return { dispose: () => undefined };
     },
     registerGutterContribution: () => ({ dispose: () => undefined }),
@@ -1056,13 +1195,20 @@ function activatePluginWithCommands(plugin: ReturnType<typeof createTypeScriptLs
   } satisfies EditorPluginContext);
 
   if (!provider) throw new Error("missing provider");
-  return { provider, commands };
+  return { provider, commands, features };
 }
+
+type FeatureContributionContextOptions = {
+  readonly container?: HTMLDivElement;
+  readonly features?: Map<string, unknown>;
+  readonly applyEdits?: EditorFeatureContributionContext["applyEdits"];
+};
 
 function featureContributionContext(
   commands: Map<EditorCommandId, EditorCommandHandler>,
+  options: FeatureContributionContextOptions = {},
 ): EditorFeatureContributionContext {
-  const element = document.createElement("div");
+  const element = options.container ?? document.createElement("div");
   return {
     container: element,
     scrollElement: element,
@@ -1073,14 +1219,17 @@ function featureContributionContext(
     focusEditor: vi.fn(),
     setSelection: vi.fn(),
     setSelections: vi.fn(),
-    applyEdits: vi.fn(),
+    applyEdits: options.applyEdits ?? vi.fn(),
     setRangeHighlight: vi.fn(),
     clearRangeHighlight: vi.fn(),
     registerCommand: (commandId, handler) => {
       commands.set(commandId, handler);
       return { dispose: () => commands.delete(commandId) };
     },
-    registerFeature: () => ({ dispose: () => undefined }),
+    registerFeature: (id, feature) => {
+      options.features?.set(id, feature);
+      return { dispose: () => options.features?.delete(id) };
+    },
   };
 }
 
@@ -1093,14 +1242,24 @@ function command(
   return handler;
 }
 
-function viewContributionContext(snapshot: EditorViewSnapshot): EditorViewContributionContext {
-  const element = document.createElement("div");
+function viewContributionContext(
+  snapshot: EditorViewSnapshot,
+  options: {
+    readonly container?: HTMLDivElement;
+    readonly features?: ReadonlyMap<string, unknown>;
+  } = {},
+): EditorViewContributionContext {
+  const element = options.container ?? document.createElement("div");
+  const getFeature = vi.fn((id: string): unknown | null => {
+    const feature = options.features?.get(id);
+    return feature === undefined ? null : feature;
+  }) as EditorViewContributionContext["getFeature"];
   return {
     container: element,
     scrollElement: element,
     highlightPrefix: "editor-test",
     getSnapshot: () => snapshot,
-    getFeature: vi.fn(() => null),
+    getFeature,
     revealLine: vi.fn(),
     focusEditor: vi.fn(),
     setSelection: vi.fn(),
@@ -1152,6 +1311,15 @@ function editorSnapshot(options: Partial<EditorViewSnapshot> = {}): EditorViewSn
   };
 }
 
+function collapsedSelection(offset: number): EditorViewSnapshot["selections"][number] {
+  return {
+    anchorOffset: offset,
+    headOffset: offset,
+    startOffset: offset,
+    endOffset: offset,
+  };
+}
+
 function documentChange(edits: readonly TextEdit[]): DocumentSessionChange {
   return {
     kind: "edit",
@@ -1173,6 +1341,10 @@ function initializeResponse(request: JsonMessage): JsonMessage {
         textDocumentSync: {
           openClose: true,
           change: 2,
+        },
+        completionProvider: {
+          resolveProvider: false,
+          triggerCharacters: ["."],
         },
       },
     },
@@ -1252,6 +1424,12 @@ function tooltipBody(): HTMLElement | null {
 function copyButton(): HTMLButtonElement {
   const element = document.querySelector<HTMLButtonElement>(".editor-typescript-lsp-hover-copy");
   if (!element) throw new Error("missing copy button");
+  return element;
+}
+
+function completionElement(): HTMLElement {
+  const element = document.querySelector<HTMLElement>(".editor-typescript-lsp-completion");
+  if (!element) throw new Error("missing completion widget");
   return element;
 }
 

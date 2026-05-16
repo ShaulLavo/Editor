@@ -10,6 +10,9 @@ describe("syntax capture conversion", () => {
     expect(styleForTreeSitterCapture("string")).toEqual({
       color: "var(--editor-syntax-string)",
     });
+    expect(styleForTreeSitterCapture("constructor")).toEqual({
+      color: "var(--editor-syntax-type-definition)",
+    });
     expect(styleForTreeSitterCapture("text.title")).toEqual({
       color: "var(--editor-syntax-keyword-declaration)",
       fontWeight: 700,

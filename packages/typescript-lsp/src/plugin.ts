@@ -26,6 +26,19 @@ import {
 } from "@editor/lsp"
 import type * as lsp from "vscode-languageserver-protocol"
 import {
+  COMPLETION_REQUEST_DEBOUNCE_MS,
+  TYPESCRIPT_LSP_COMPLETION_EDIT_FEATURE_ID,
+  completionAnchorRange,
+  completionApplication,
+  completionItems,
+  completionTriggerFromChange,
+  createCompletionWidgetController,
+  type CompletionWidgetController,
+  type TypeScriptLspCompletionApplication,
+  type TypeScriptLspCompletionEditFeature,
+  type TypeScriptLspCompletionTrigger,
+} from "./completion"
+import {
   identifierRangeAtOffset,
   navigateToTarget,
   preferredDefinitionTarget,
@@ -47,7 +60,7 @@ import {
   editsForChange,
   projectDiagnostics,
 } from "./diagnosticProjection"
-import { isTypeScriptFileName, pathOrUriToDocumentUri } from "./paths"
+import { isTypeScriptLspSourceFileName, pathOrUriToDocumentUri } from "./paths"
 import { DIAGNOSTIC_STYLES, LINK_HIGHLIGHT_STYLE } from "./plugin.styles"
 import {
   createTooltipController,
@@ -109,6 +122,11 @@ type DocumentDescriptor = {
   readonly languageId: string
   readonly text: string
   readonly textVersion: number
+}
+
+type CompletionSession = {
+  readonly active: ActiveDocument
+  readonly offset: number
 }
 
 const DEFAULT_DIAGNOSTIC_DELAY_MS = 150
@@ -228,18 +246,42 @@ class TypeScriptLspPluginState {
 
 class TypeScriptLspCommandContribution implements EditorFeatureContribution {
   private readonly commands: readonly EditorDisposable[]
+  private readonly completionFeature: EditorDisposable
 
   public constructor(
-    _context: EditorFeatureContributionContext,
+    context: EditorFeatureContributionContext,
     private readonly state: TypeScriptLspPluginState
   ) {
     this.commands = TYPESCRIPT_LSP_COMMANDS.map((command) =>
-      _context.registerCommand(command.id, () => command.run(this.state))
+      context.registerCommand(command.id, () => command.run(this.state))
+    )
+    this.completionFeature = context.registerFeature(
+      TYPESCRIPT_LSP_COMPLETION_EDIT_FEATURE_ID,
+      completionEditFeature(context)
     )
   }
 
   public dispose(): void {
     for (const command of this.commands) command.dispose()
+    this.completionFeature.dispose()
+  }
+}
+
+function completionEditFeature(
+  context: EditorFeatureContributionContext
+): TypeScriptLspCompletionEditFeature {
+  return {
+    applyCompletion(application: TypeScriptLspCompletionApplication): boolean {
+      if (!context.hasDocument()) return false
+
+      context.applyEdits(
+        application.edits,
+        "typescriptLsp.completion.accept",
+        application.selection
+      )
+      context.focusEditor()
+      return true
+    },
   }
 }
 
@@ -260,11 +302,16 @@ class TypeScriptLspContribution implements EditorViewContribution {
   private hoverTimer: ReturnType<typeof setTimeout> | null = null
   private hoverAbort: AbortController | null = null
   private hoverRequestId = 0
+  private completionTimer: ReturnType<typeof setTimeout> | null = null
+  private completionAbort: AbortController | null = null
+  private completionRequestId = 0
+  private completionSession: CompletionSession | null = null
   private definitionRequestId = 0
   private definitionHoverRequestId = 0
   private lastPointerOffset: number | null = null
   private linkRange: OffsetRange | null = null
   private currentTheme: EditorTheme | null = null
+  private readonly completion: CompletionWidgetController
 
   public constructor(
     private readonly context: EditorViewContributionContext,
@@ -280,6 +327,13 @@ class TypeScriptLspContribution implements EditorViewContribution {
       themeSource: context.scrollElement,
       reentryElement: context.scrollElement,
       markdownCodeBackground: this.options.hoverMarkdownCodeBackground,
+    })
+    this.completion = createCompletionWidgetController({
+      document: context.container.ownerDocument,
+      themeSource: context.scrollElement,
+      onSelect: () => {
+        this.acceptCompletion()
+      },
     })
     this.installPointerHandlers()
     this.state.register(this)
@@ -303,9 +357,11 @@ class TypeScriptLspContribution implements EditorViewContribution {
       this.hideHover()
       this.clearDefinitionLink()
     }
-    if (!shouldSyncDocument(kind, snapshot, this.activeDocument)) return
+    if (shouldSyncDocument(kind, snapshot, this.activeDocument)) {
+      this.syncDocument(snapshot, change ?? null)
+    }
 
-    this.syncDocument(snapshot, change ?? null)
+    this.handleCompletionUpdate(snapshot, kind, change ?? null)
   }
 
   public dispose(): void {
@@ -315,8 +371,10 @@ class TypeScriptLspContribution implements EditorViewContribution {
     this.state.unregister(this)
     this.uninstallPointerHandlers()
     this.hideHover()
+    this.hideCompletion()
     this.clearDefinitionLink()
     this.tooltip.dispose()
+    this.completion.dispose()
     this.clearDiagnosticHighlights()
     this.closeActiveDocument()
     this.client.disconnect()
@@ -460,6 +518,7 @@ class TypeScriptLspContribution implements EditorViewContribution {
     this.transport?.close()
     this.transport = null
     this.clearPointerUi()
+    this.hideCompletion()
   }
 
   private syncDocument(
@@ -531,6 +590,7 @@ class TypeScriptLspContribution implements EditorViewContribution {
     const active = this.activeDocument
     this.activeDocument = null
     this.activeDiagnostics = []
+    this.hideCompletion()
     if (!active) return
 
     this.clearDiagnosticHighlights()
@@ -633,7 +693,161 @@ class TypeScriptLspContribution implements EditorViewContribution {
     this.options.onError?.(error)
   }
 
+  private handleCompletionUpdate(
+    snapshot: EditorViewSnapshot,
+    kind: EditorViewContributionUpdateKind,
+    change: DocumentSessionChange | null
+  ): void {
+    if (kind === "document" || kind === "clear") {
+      this.hideCompletion()
+      return
+    }
+    if (kind === "selection" || kind === "viewport" || kind === "layout") {
+      this.hideCompletion()
+      return
+    }
+    if (kind !== "content") return
+
+    const trigger = completionTriggerFromChange(change)
+    if (!trigger) {
+      this.hideCompletion()
+      return
+    }
+
+    this.scheduleCompletion(snapshot, trigger)
+  }
+
+  private scheduleCompletion(
+    snapshot: EditorViewSnapshot,
+    trigger: TypeScriptLspCompletionTrigger
+  ): void {
+    const active = this.activeDocument
+    if (!active || !this.client.initialized) return this.hideCompletion()
+
+    const selection = primaryCollapsedSelection(snapshot)
+    if (!selection) return this.hideCompletion()
+
+    const offset = selection.headOffset
+    this.cancelCompletionRequest()
+    this.completionTimer = setTimeout(() => {
+      this.completionTimer = null
+      void this.requestCompletion(active, offset, trigger)
+    }, COMPLETION_REQUEST_DEBOUNCE_MS)
+  }
+
+  private requestManualCompletion(): void {
+    const active = this.activeDocument
+    if (!active || !this.client.initialized) return this.hideCompletion()
+
+    const selection = primaryCollapsedSelection(this.context.getSnapshot())
+    if (!selection) return this.hideCompletion()
+
+    this.cancelCompletionRequest()
+    void this.requestCompletion(active, selection.headOffset, { triggerKind: 1 })
+  }
+
+  private async requestCompletion(
+    active: ActiveDocument,
+    offset: number,
+    trigger: TypeScriptLspCompletionTrigger
+  ): Promise<void> {
+    this.completionAbort?.abort()
+    const requestId = this.completionRequestId + 1
+    const abort = new AbortController()
+    this.completionRequestId = requestId
+    this.completionAbort = abort
+
+    try {
+      const result = await this.client.request<
+        lsp.CompletionList | readonly lsp.CompletionItem[] | null
+      >(
+        "textDocument/completion",
+        {
+          textDocument: { uri: active.uri },
+          position: offsetToLspPosition(active.text, offset),
+          context: trigger,
+        } satisfies lsp.CompletionParams,
+        { signal: abort.signal }
+      )
+      this.renderCompletionResult(requestId, active, offset, completionItems(result))
+    } catch (error) {
+      this.handleRequestError(error)
+    }
+  }
+
+  private renderCompletionResult(
+    requestId: number,
+    active: ActiveDocument,
+    offset: number,
+    items: readonly lsp.CompletionItem[]
+  ): void {
+    if (requestId !== this.completionRequestId) return
+    if (active !== this.activeDocument) return
+    if (items.length === 0) return this.hideCompletion()
+
+    const range = completionAnchorRange(active.text, offset)
+    const rect = this.context.getRangeClientRect(range.start, range.end)
+    if (!rect) return this.hideCompletion()
+
+    this.hideHover()
+    this.clearDefinitionLink()
+    this.completionSession = { active, offset }
+    this.completion.show({
+      anchor: rect,
+      items: items.slice(0, 100),
+    })
+  }
+
+  private acceptCompletion(): boolean {
+    const session = this.completionSession
+    const item = this.completion.selectedItem()
+    if (!session || !item) return false
+    if (session.active !== this.activeDocument) return false
+
+    const application = completionApplication(
+      session.active.text,
+      session.offset,
+      item
+    )
+    if (!application) return false
+
+    const feature = this.completionEditFeature()
+    if (!feature) return false
+
+    this.hideCompletion()
+    return feature.applyCompletion(application)
+  }
+
+  private completionEditFeature(): TypeScriptLspCompletionEditFeature | null {
+    return (
+      this.context.getFeature?.<TypeScriptLspCompletionEditFeature>(
+        TYPESCRIPT_LSP_COMPLETION_EDIT_FEATURE_ID
+      ) ?? null
+    )
+  }
+
+  private cancelCompletionRequest(): void {
+    if (this.completionTimer) clearTimeout(this.completionTimer)
+    this.completionTimer = null
+    this.completionAbort?.abort()
+    this.completionAbort = null
+    this.completionRequestId += 1
+  }
+
+  private hideCompletion(): void {
+    this.cancelCompletionRequest()
+    this.completionSession = null
+    this.completion.hide()
+  }
+
   private installPointerHandlers(): void {
+    this.context.scrollElement.addEventListener(
+      "keydown",
+      this.handleCompletionKeyDown,
+      {
+        capture: true,
+      }
+    )
     this.context.scrollElement.addEventListener(
       "pointermove",
       this.handlePointerMove
@@ -667,6 +881,13 @@ class TypeScriptLspContribution implements EditorViewContribution {
   }
 
   private uninstallPointerHandlers(): void {
+    this.context.scrollElement.removeEventListener(
+      "keydown",
+      this.handleCompletionKeyDown,
+      {
+        capture: true,
+      }
+    )
     this.context.scrollElement.removeEventListener(
       "pointermove",
       this.handlePointerMove
@@ -760,8 +981,55 @@ class TypeScriptLspContribution implements EditorViewContribution {
   private readonly handleDocumentPointerDown = (event: PointerEvent): void => {
     if (event.button !== 0) return
     if (this.tooltip.containsTarget(event.target)) return
+    if (this.completion.containsTarget(event.target)) return
 
     this.clearPointerUi()
+    this.hideCompletion()
+  }
+
+  private readonly handleCompletionKeyDown = (event: KeyboardEvent): void => {
+    if (isCompletionManualTrigger(event)) {
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      this.requestManualCompletion()
+      return
+    }
+    if (!this.completion.isVisible()) return
+
+    if (event.key === "ArrowDown") {
+      this.consumeCompletionKey(event)
+      this.completion.moveSelection(1)
+      return
+    }
+    if (event.key === "ArrowUp") {
+      this.consumeCompletionKey(event)
+      this.completion.moveSelection(-1)
+      return
+    }
+    if (event.key === "PageDown") {
+      this.consumeCompletionKey(event)
+      this.completion.moveSelection(8)
+      return
+    }
+    if (event.key === "PageUp") {
+      this.consumeCompletionKey(event)
+      this.completion.moveSelection(-8)
+      return
+    }
+    if (event.key === "Escape") {
+      this.consumeCompletionKey(event)
+      this.hideCompletion()
+      return
+    }
+    if (event.key !== "Enter" && event.key !== "Tab") return
+
+    this.consumeCompletionKey(event)
+    this.acceptCompletion()
+  }
+
+  private consumeCompletionKey(event: KeyboardEvent): void {
+    event.preventDefault()
+    event.stopImmediatePropagation()
   }
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
@@ -1135,10 +1403,10 @@ function documentDescriptor(
 ): DocumentDescriptor | null {
   if (!snapshot.documentId) return null
   if (!snapshot.languageId) return null
-  if (!isTypeScriptLanguage(snapshot.languageId)) return null
+  if (!isTypeScriptLspLanguage(snapshot.languageId)) return null
 
   const uri = pathOrUriToDocumentUri(snapshot.documentId)
-  if (!isTypeScriptFileName(uri)) return null
+  if (!isTypeScriptLspSourceFileName(uri)) return null
   return {
     uri,
     languageId: snapshot.languageId,
@@ -1147,8 +1415,13 @@ function documentDescriptor(
   }
 }
 
-function isTypeScriptLanguage(languageId: string): boolean {
-  return languageId === "typescript" || languageId === "typescriptreact"
+function isTypeScriptLspLanguage(languageId: string): boolean {
+  return (
+    languageId === "javascript" ||
+    languageId === "javascriptreact" ||
+    languageId === "typescript" ||
+    languageId === "typescriptreact"
+  )
 }
 
 function publishDiagnosticsParams(params: unknown): {
@@ -1275,6 +1548,15 @@ function visibleRangeAtOffset(text: string, offset: number): OffsetRange {
   return { start, end: Math.min(text.length, start + 1) }
 }
 
+function primaryCollapsedSelection(
+  snapshot: EditorViewSnapshot
+): EditorViewSnapshot["selections"][number] | null {
+  const selection = snapshot.selections[0]
+  if (!selection) return null
+  if (selection.startOffset !== selection.endOffset) return null
+  return selection
+}
+
 function diagnosticMarkerTarget(
   text: string,
   diagnostics: readonly lsp.Diagnostic[],
@@ -1316,6 +1598,11 @@ function isNavigationModifier(event: {
   readonly ctrlKey: boolean
 }): boolean {
   return event.metaKey || event.ctrlKey
+}
+
+function isCompletionManualTrigger(event: KeyboardEvent): boolean {
+  if (!event.ctrlKey && !event.metaKey) return false
+  return event.key === " " || event.code === "Space"
 }
 
 function isAbortError(error: unknown): boolean {

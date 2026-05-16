@@ -138,12 +138,9 @@ export class LspClient {
 
   public notify<TParams = unknown>(method: string, params?: TParams): Promise<void> {
     if (!this.transport) return Promise.reject(new Error("LSP client is not connected"));
-    if (this.state === "ready") {
-      this.sendNotification(method, params);
-      return Promise.resolve();
-    }
+    if (this.state === "ready") return this.notifyReady(method, params);
 
-    return this.awaitInitialization().then(() => this.sendNotification(method, params));
+    return this.awaitInitialization().then(() => this.notifyReady(method, params));
   }
 
   public notification<TParams = unknown>(method: string, params?: TParams): Promise<void> {
@@ -154,7 +151,7 @@ export class LspClient {
     const pending = this.pendingRequestForParams(params);
     if (!pending) return;
 
-    this.sendNotification("$/cancelRequest", { id: pending.id });
+    this.trySendNotification("$/cancelRequest", { id: pending.id });
   }
 
   public hasCapability(name: keyof lsp.ServerCapabilities): boolean | null {
@@ -168,7 +165,7 @@ export class LspClient {
     if (this.syncedDocuments.has(document.uri)) return;
 
     this.syncedDocuments.add(document.uri);
-    this.sendNotification("textDocument/didOpen", {
+    this.trySendNotification("textDocument/didOpen", {
       textDocument: {
         uri: document.uri,
         languageId: document.languageId,
@@ -187,7 +184,7 @@ export class LspClient {
     if (this.syncMode === "none") return;
     if (!this.syncedDocuments.has(document.uri)) return;
 
-    this.sendNotification("textDocument/didChange", {
+    this.trySendNotification("textDocument/didChange", {
       textDocument: { uri: document.uri, version: document.version },
       contentChanges: createLspContentChanges(previousText, document.text, {
         incremental: this.syncMode === "incremental",
@@ -200,7 +197,7 @@ export class LspClient {
     if (this.state !== "ready") return;
     if (!this.syncedDocuments.delete(document.uri)) return;
 
-    this.sendNotification("textDocument/didClose", {
+    this.trySendNotification("textDocument/didClose", {
       textDocument: { uri: document.uri },
     });
   }
@@ -289,13 +286,37 @@ export class LspClient {
       transport.send(JSON.stringify(message));
     } catch (error) {
       this.deletePendingRequest(pending.id);
+      this.handleTransportSendError(error);
       pending.reject(error);
     }
   }
 
   private sendNotification(method: string, params?: unknown): void {
     const transport = this.requireTransport();
-    transport.send(JSON.stringify(createNotificationMessage(method, params)));
+    try {
+      transport.send(JSON.stringify(createNotificationMessage(method, params)));
+    } catch (error) {
+      this.handleTransportSendError(error);
+      throw error;
+    }
+  }
+
+  private notifyReady(method: string, params?: unknown): Promise<void> {
+    try {
+      this.sendNotification(method, params);
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  private trySendNotification(method: string, params?: unknown): boolean {
+    try {
+      this.sendNotification(method, params);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private receiveMessage(message: string): void {
@@ -337,7 +358,11 @@ export class LspClient {
   private handleRequest(message: lsp.RequestMessage): void {
     const transport = this.requireTransport();
     const id = message.id ?? null;
-    transport.send(JSON.stringify(createMethodNotFoundResponse(id, message.method)));
+    try {
+      transport.send(JSON.stringify(createMethodNotFoundResponse(id, message.method)));
+    } catch (error) {
+      this.handleTransportSendError(error);
+    }
   }
 
   private timeoutRequest(id: LspRequestId): void {
@@ -352,7 +377,7 @@ export class LspClient {
     const pending = this.pendingRequests.get(id);
     if (!pending) return;
 
-    this.sendNotification("$/cancelRequest", { id });
+    this.trySendNotification("$/cancelRequest", { id });
     this.deletePendingRequest(id);
     pending.reject(new LspRequestCancelledError());
   }
@@ -382,6 +407,12 @@ export class LspClient {
     }
 
     this.pendingRequests.clear();
+  }
+
+  private handleTransportSendError(_error: unknown): void {
+    if (!this.transport) return;
+
+    this.disconnect();
   }
 
   private awaitInitialization(): Promise<void> {

@@ -11,6 +11,7 @@ const SYNTAX_COLOR = {
   bracket: "var(--editor-syntax-bracket)",
   comment: "var(--editor-syntax-comment)",
   constant: "var(--editor-syntax-constant)",
+  constructor: "var(--editor-syntax-type-definition)",
   function: "var(--editor-syntax-function)",
   keyword: "var(--editor-syntax-keyword)",
   keywordDeclaration: "var(--editor-syntax-keyword-declaration)",
@@ -29,6 +30,7 @@ const SYNTAX_COLOR = {
 
 const EXACT_CAPTURE_STYLES: Record<string, EditorTokenStyle> = {
   comment: { color: SYNTAX_COLOR.comment, fontStyle: "italic" },
+  constructor: { color: SYNTAX_COLOR.constructor },
   "constant.builtin": { color: SYNTAX_COLOR.constant },
   "function.method": { color: SYNTAX_COLOR.function },
   "keyword.control": { color: SYNTAX_COLOR.keyword },
@@ -51,6 +53,7 @@ const EXACT_CAPTURE_STYLES: Record<string, EditorTokenStyle> = {
 
 const PREFIX_CAPTURE_STYLES: Record<string, EditorTokenStyle> = {
   attribute: { color: SYNTAX_COLOR.attribute },
+  constructor: { color: SYNTAX_COLOR.constructor },
   constant: { color: SYNTAX_COLOR.constant },
   function: { color: SYNTAX_COLOR.function },
   keyword: { color: SYNTAX_COLOR.keyword },

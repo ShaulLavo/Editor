@@ -18,6 +18,14 @@ export const defaultClientCapabilities = (): lsp.ClientCapabilities => ({
       willSave: false,
       willSaveWaitUntil: false,
     },
+    completion: {
+      contextSupport: true,
+      completionItem: {
+        documentationFormat: ["markdown", "plaintext"],
+        labelDetailsSupport: true,
+        snippetSupport: false,
+      },
+    },
   },
   window: {
     showMessage: {},

@@ -236,6 +236,56 @@ describe("TypeScript LSP worker", () => {
     });
   });
 
+  it("returns TypeScript completions with replacement edits", async () => {
+    const postMessage = vi.spyOn(globalThis, "postMessage").mockImplementation(() => undefined);
+    const sourceFiles = new Map<string, string>();
+    installVfsMocks(sourceFiles);
+    await import("../src/typescriptLsp.worker");
+
+    openDocumentWithInitializedWorker("const va = value;");
+    send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "textDocument/completion",
+      params: {
+        textDocument: { uri: "file:///src/index.ts" },
+        position: { line: 0, character: 8 },
+        context: { triggerKind: 1 },
+      },
+    });
+    await waitFor(() => responseForId(postMessage.mock.calls, 2) !== null);
+
+    expect(responseForId(postMessage.mock.calls, 1)).toMatchObject({
+      result: {
+        capabilities: {
+          completionProvider: {
+            triggerCharacters: expect.arrayContaining(["."]),
+          },
+        },
+      },
+    });
+    expect(responseForId(postMessage.mock.calls, 2)).toMatchObject({
+      result: {
+        isIncomplete: false,
+        items: [
+          {
+            label: "value",
+            kind: 6,
+            sortText: "0",
+            labelDetails: { description: ": number" },
+            textEdit: {
+              range: {
+                start: { line: 0, character: 6 },
+                end: { line: 0, character: 8 },
+              },
+              newText: "value",
+            },
+          },
+        ],
+      },
+    });
+  });
+
   it("returns workspace definition locations and demirrors node_modules package paths", async () => {
     const postMessage = vi.spyOn(globalThis, "postMessage").mockImplementation(() => undefined);
     const sourceFiles = new Map<string, string>();
@@ -409,6 +459,20 @@ function createEnvironment(sourceFiles: Map<string, string>): unknown {
         displayParts: [{ text: "const value: number" }],
         documentation: [{ text: "The current value." }],
         textSpan: { start: 6, length: 5 },
+      }),
+      getCompletionsAtPosition: () => ({
+        isGlobalCompletion: true,
+        isMemberCompletion: false,
+        isNewIdentifierLocation: true,
+        optionalReplacementSpan: { start: 6, length: 2 },
+        entries: [
+          {
+            name: "value",
+            kind: "const",
+            sortText: "0",
+            labelDetails: { description: ": number" },
+          },
+        ],
       }),
       getDefinitionAndBoundSpan: () => ({
         textSpan: { start: 0, length: 6 },

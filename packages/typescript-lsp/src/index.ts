@@ -10,6 +10,7 @@ export {
   documentUriToFileName,
   fileNameToDocumentUri,
   isTypeScriptFileName,
+  isTypeScriptLspSourceFileName,
   pathOrUriToDocumentUri,
   sourcePathToFileName,
 } from "./paths"

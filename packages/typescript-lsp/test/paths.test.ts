@@ -3,6 +3,7 @@ import {
   documentUriToFileName,
   fileNameToDocumentUri,
   isTypeScriptFileName,
+  isTypeScriptLspSourceFileName,
   pathOrUriToDocumentUri,
   sourcePathToFileName,
 } from "../src";
@@ -33,5 +34,13 @@ describe("TypeScript LSP path helpers", () => {
     expect(isTypeScriptFileName("/src/index.ts")).toBe(true);
     expect(isTypeScriptFileName("/src/index.tsx")).toBe(true);
     expect(isTypeScriptFileName("/src/index.js")).toBe(false);
+  });
+
+  it("identifies TypeScript language service source extensions", () => {
+    expect(isTypeScriptLspSourceFileName("/src/index.ts")).toBe(true);
+    expect(isTypeScriptLspSourceFileName("/src/index.tsx")).toBe(true);
+    expect(isTypeScriptLspSourceFileName("/src/index.js")).toBe(true);
+    expect(isTypeScriptLspSourceFileName("/src/index.jsx")).toBe(true);
+    expect(isTypeScriptLspSourceFileName("/src/readme.md")).toBe(false);
   });
 });

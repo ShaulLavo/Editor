@@ -64,6 +64,39 @@ describe.skipIf(typeof Worker === "undefined")("tree-sitter worker client", () =
     expect(edited?.captures.length).toBeGreaterThan(0);
   });
 
+  it("highlights PascalCase TSX component tag names", async () => {
+    const documentId = "main.tsx";
+    const text = [
+      "const view = (",
+      "  <StrictMode>",
+      "    <QueryClientProvider client={queryClient}>",
+      "      <App />",
+      "    </QueryClientProvider>",
+      "  </StrictMode>",
+      ");",
+    ].join("\n");
+    const snapshot = createPieceTableSnapshot(text);
+    const parsed = await parseWithTreeSitter({
+      documentId,
+      snapshotVersion: 1,
+      languageId: "typescript",
+      snapshot,
+    });
+
+    expect(parsed?.captures).toContainEqual({
+      startIndex: text.indexOf("StrictMode"),
+      endIndex: text.indexOf("StrictMode") + "StrictMode".length,
+      captureName: "constructor",
+      languageId: "typescript",
+    });
+    expect(parsed?.captures).toContainEqual({
+      startIndex: text.indexOf("QueryClientProvider"),
+      endIndex: text.indexOf("QueryClientProvider") + "QueryClientProvider".length,
+      captureName: "constructor",
+      languageId: "typescript",
+    });
+  });
+
   it("matches a full parse after same-line inserts before later rows", async () => {
     const documentId = "same-line-insert.ts";
     const text = [

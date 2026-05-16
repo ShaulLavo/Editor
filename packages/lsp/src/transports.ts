@@ -44,7 +44,10 @@ export type LspWorkerTransportOptions = {
   readonly terminateOnClose?: boolean;
 };
 
+const WEB_SOCKET_CONNECTING = 0;
 const WEB_SOCKET_OPEN = 1;
+const WEB_SOCKET_CLOSING = 2;
+const WEB_SOCKET_CLOSED = 3;
 
 const mutableProtocols = (
   protocols: string | readonly string[] | undefined,
@@ -79,9 +82,17 @@ class WebSocketLspTransport implements LspManagedTransport {
 
   public constructor(private readonly socket: LspWebSocketLike) {
     this.socket.addEventListener("message", this.handleMessage);
+    this.socket.addEventListener("close", this.handleClose);
   }
 
   public send(message: string): void {
+    if (this.closed || isWebSocketClosingOrClosed(this.socket)) {
+      throw new Error("WebSocket LSP transport is closed");
+    }
+    if (!isWebSocketOpen(this.socket)) {
+      throw new Error("WebSocket LSP transport is not open");
+    }
+
     this.socket.send(message);
   }
 
@@ -97,9 +108,8 @@ class WebSocketLspTransport implements LspManagedTransport {
     if (this.closed) return;
 
     this.closed = true;
-    this.handlers.clear();
-    this.socket.removeEventListener("message", this.handleMessage);
-    this.socket.close();
+    this.detachSocketListeners();
+    if (canCloseWebSocket(this.socket)) this.socket.close();
   }
 
   private readonly handleMessage = (event: Event): void => {
@@ -107,6 +117,17 @@ class WebSocketLspTransport implements LspManagedTransport {
     if (message === null) return;
     for (const handler of this.handlers) handler(message);
   };
+
+  private readonly handleClose = (): void => {
+    this.closed = true;
+    this.detachSocketListeners();
+  };
+
+  private detachSocketListeners(): void {
+    this.handlers.clear();
+    this.socket.removeEventListener("message", this.handleMessage);
+    this.socket.removeEventListener("close", this.handleClose);
+  }
 }
 
 class WorkerLspTransport implements LspManagedTransport {
@@ -191,3 +212,14 @@ const messageEventData = (event: Event): string | null => {
   if (data === undefined) return null;
   return JSON.stringify(data);
 };
+
+const isWebSocketOpen = (socket: LspWebSocketLike): boolean =>
+  socket.readyState === undefined || socket.readyState === WEB_SOCKET_OPEN;
+
+const isWebSocketClosingOrClosed = (socket: LspWebSocketLike): boolean =>
+  socket.readyState === WEB_SOCKET_CLOSING || socket.readyState === WEB_SOCKET_CLOSED;
+
+const canCloseWebSocket = (socket: LspWebSocketLike): boolean =>
+  socket.readyState === undefined ||
+  socket.readyState === WEB_SOCKET_CONNECTING ||
+  socket.readyState === WEB_SOCKET_OPEN;

@@ -10,7 +10,7 @@ import type * as lsp from "vscode-languageserver-protocol";
 import {
   documentUriToFileName,
   fileNameToDocumentUri,
-  isTypeScriptFileName,
+  isTypeScriptLspSourceFileName,
   sourcePathToFileName,
 } from "./paths";
 import { tsDiagnosticToLspDiagnostic } from "./tsDiagnostics";
@@ -20,7 +20,11 @@ const JSON_RPC_VERSION = "2.0";
 const METHOD_NOT_FOUND = -32601;
 const INTERNAL_ERROR = -32603;
 const TEXT_DOCUMENT_SYNC_INCREMENTAL = 2;
+const COMPLETION_TRIGGER_INVOKED = 1;
+const COMPLETION_TRIGGER_CHARACTER = 2;
 const DEFAULT_DIAGNOSTIC_DELAY_MS = 150;
+const MAX_COMPLETION_ITEMS = 100;
+const COMPLETION_TRIGGER_CHARACTERS = [".", '"', "'", "`", "/", "@", "<", "#", " "] as const;
 const REACT_JSX_RUNTIME_PACKAGE_JSON = "/node_modules/react/package.json";
 const REACT_INDEX_TYPES = "/node_modules/react/index.d.ts";
 const REACT_JSX_RUNTIME_TYPES = "/node_modules/react/jsx-runtime.d.ts";
@@ -136,6 +140,7 @@ async function requestResult(message: lsp.RequestMessage): Promise<unknown> {
   if (message.method === "initialize") return initializeResult(message.params);
   if (message.method === "shutdown") return shutdownResult();
   if (message.method === "textDocument/hover") return hoverResult(message.params);
+  if (message.method === "textDocument/completion") return completionResult(message.params);
   if (message.method === "textDocument/definition") return definitionResult(message.params);
   if (message.method === "textDocument/references") return referencesResult(message.params);
   if (message.method === "textDocument/implementation") return implementationResult(message.params);
@@ -170,6 +175,10 @@ function initializeResult(params: unknown): lsp.InitializeResult {
         workspaceDiagnostics: false,
       },
       hoverProvider: true,
+      completionProvider: {
+        resolveProvider: false,
+        triggerCharacters: [...COMPLETION_TRIGGER_CHARACTERS],
+      },
       definitionProvider: true,
       referencesProvider: true,
       implementationProvider: true,
@@ -197,7 +206,7 @@ function handleDidOpen(params: unknown): void {
 
   const fileName = documentUriToFileName(textDocument.uri);
   if (!fileName) return;
-  if (!isTypeScriptFileName(fileName)) return;
+  if (!isTypeScriptLspSourceFileName(fileName)) return;
 
   const document = {
     uri: textDocument.uri,
@@ -318,6 +327,25 @@ async function hoverResult(params: unknown): Promise<lsp.Hover | null> {
   if (!quickInfo) return null;
 
   return hoverFromQuickInfo(document.text, quickInfo);
+}
+
+async function completionResult(params: unknown): Promise<lsp.CompletionList> {
+  const request = textDocumentPositionParams(params);
+  if (!request) return emptyCompletionList();
+
+  const document = documentForUri(request.uri);
+  if (!document) return emptyCompletionList();
+
+  const state = await ensureService();
+  const offset = lspPositionToOffset(document.text, request.position);
+  const info = state.env.languageService.getCompletionsAtPosition(
+    document.fileName,
+    offset,
+    completionOptions(params),
+  );
+  if (!info) return emptyCompletionList();
+
+  return completionListFromInfo(document.text, info);
 }
 
 async function definitionResult(params: unknown): Promise<lsp.Location[]> {
@@ -484,9 +512,11 @@ function rootFileNames(
   fsMap: ReadonlyMap<string, string>,
   projectConfig: ProjectConfig | null,
 ): string[] {
-  const roots = new Set(projectConfig?.fileNames ?? [...fsMap.keys()].filter(isTypeScriptFileName));
+  const roots = new Set(
+    projectConfig?.fileNames ?? [...fsMap.keys()].filter(isTypeScriptLspSourceFileName),
+  );
   for (const document of documents.values()) roots.add(document.fileName);
-  return [...roots].filter(isTypeScriptFileName);
+  return [...roots].filter(isTypeScriptLspSourceFileName);
 }
 
 function invalidateService(): void {
@@ -555,6 +585,111 @@ function tagText(tag: ts.JSDocTagInfo): string {
   const text = ts.displayPartsToString(tag.text ?? []);
   if (!text) return `@${tag.name}`;
   return `@${tag.name} ${text}`;
+}
+
+function emptyCompletionList(): lsp.CompletionList {
+  return { isIncomplete: false, items: [] };
+}
+
+function completionOptions(params: unknown): ts.GetCompletionsAtPositionOptions {
+  const trigger = completionTrigger(params);
+  const options: ts.GetCompletionsAtPositionOptions = {
+    includeCompletionsForImportStatements: true,
+    includeCompletionsForModuleExports: true,
+    includeCompletionsWithInsertText: true,
+    includeCompletionsWithSnippetText: false,
+    triggerKind: trigger.kind as ts.CompletionTriggerKind,
+  };
+  if (trigger.character) options.triggerCharacter = trigger.character;
+  return options;
+}
+
+function completionTrigger(params: unknown): {
+  readonly kind: number;
+  readonly character?: ts.CompletionsTriggerCharacter;
+} {
+  if (!isRecord(params)) return { kind: COMPLETION_TRIGGER_INVOKED };
+  if (!isRecord(params.context)) return { kind: COMPLETION_TRIGGER_INVOKED };
+
+  const context = params.context;
+  const character = completionTriggerCharacter(context.triggerCharacter);
+  if (context.triggerKind === COMPLETION_TRIGGER_CHARACTER && character) {
+    return { kind: COMPLETION_TRIGGER_CHARACTER, character };
+  }
+
+  return { kind: COMPLETION_TRIGGER_INVOKED };
+}
+
+function completionTriggerCharacter(value: unknown): ts.CompletionsTriggerCharacter | undefined {
+  if (typeof value !== "string") return undefined;
+  if (!completionTriggerCharacterSet.has(value)) return undefined;
+  return value as ts.CompletionsTriggerCharacter;
+}
+
+const completionTriggerCharacterSet = new Set<string>(COMPLETION_TRIGGER_CHARACTERS);
+
+function completionListFromInfo(text: string, info: ts.CompletionInfo): lsp.CompletionList {
+  return {
+    isIncomplete: info.isIncomplete === true,
+    items: info.entries
+      .slice(0, MAX_COMPLETION_ITEMS)
+      .map((entry) => completionItemFromEntry(text, info, entry)),
+  };
+}
+
+function completionItemFromEntry(
+  text: string,
+  info: ts.CompletionInfo,
+  entry: ts.CompletionEntry,
+): lsp.CompletionItem {
+  const insertText = entry.insertText ?? entry.name;
+  const item: lsp.CompletionItem = {
+    label: entry.name,
+    kind: completionItemKind(entry.kind),
+    sortText: entry.sortText,
+    filterText: entry.filterText,
+    commitCharacters: entry.commitCharacters ?? info.defaultCommitCharacters,
+  };
+  const detail = completionEntryDetail(entry);
+  if (detail) item.detail = detail;
+  if (entry.labelDetails) item.labelDetails = entry.labelDetails;
+  if (entry.source) item.data = { source: entry.source, data: entry.data };
+
+  const span = entry.replacementSpan ?? info.optionalReplacementSpan;
+  if (span) item.textEdit = { range: rangeFromTextSpan(text, span), newText: insertText };
+  else item.insertText = insertText;
+  return item;
+}
+
+function completionEntryDetail(entry: ts.CompletionEntry): string | undefined {
+  const source = ts.displayPartsToString(entry.sourceDisplay ?? []);
+  if (source) return source;
+  if (entry.kindModifiers) return entry.kindModifiers;
+  return undefined;
+}
+
+function completionItemKind(kind: string): lsp.CompletionItemKind {
+  if (kind === "method") return 2;
+  if (kind === "function") return 3;
+  if (kind === "constructor") return 4;
+  if (kind === "member variable") return 5;
+  if (kind === "member get accessor") return 5;
+  if (kind === "member set accessor") return 5;
+  if (kind === "var") return 6;
+  if (kind === "let") return 6;
+  if (kind === "const") return 6;
+  if (kind === "local var") return 6;
+  if (kind === "parameter") return 6;
+  if (kind === "class") return 7;
+  if (kind === "interface") return 8;
+  if (kind === "module") return 9;
+  if (kind === "property") return 10;
+  if (kind === "enum") return 13;
+  if (kind === "keyword") return 14;
+  if (kind === "enum member") return 20;
+  if (kind === "alias") return 18;
+  if (kind === "type") return 25;
+  return 1;
 }
 
 function definitionInfosAtPosition(

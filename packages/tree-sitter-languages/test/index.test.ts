@@ -74,5 +74,6 @@ function pluginContext(): EditorPluginContext {
     registerViewContribution: vi.fn(() => ({ dispose: vi.fn() })),
     registerEditorFeatureContribution: vi.fn(() => ({ dispose: vi.fn() })),
     registerGutterContribution: vi.fn(() => ({ dispose: vi.fn() })),
+    registerBlockProvider: vi.fn(() => ({ dispose: vi.fn() })),
   };
 }

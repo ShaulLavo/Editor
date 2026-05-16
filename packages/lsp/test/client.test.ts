@@ -13,9 +13,12 @@ type JsonMessage = Record<string, unknown>;
 
 class TestTransport implements LspTransport {
   public readonly sent: JsonMessage[] = [];
+  public failSend = false;
   private readonly handlers = new Set<LspTransportHandler>();
 
   public send(message: string): void {
+    if (this.failSend) throw new Error("transport send failed");
+
     this.sent.push(JSON.parse(message) as JsonMessage);
   }
 
@@ -90,6 +93,26 @@ describe("LspClient", () => {
     });
     await expect(failed).rejects.toBeInstanceOf(LspResponseError);
     await expect(failed).rejects.toMatchObject({ code: -32000 });
+  });
+
+  it("rejects requests and disconnects when the transport send fails", async () => {
+    const { client, transport } = await initializedClient();
+    transport.failSend = true;
+
+    await expect(client.request("test/sendFailure", {})).rejects.toThrow(
+      "transport send failed",
+    );
+
+    expect(client.connected).toBe(false);
+  });
+
+  it("returns rejected notify promises when the transport send fails", async () => {
+    const { client, transport } = await initializedClient();
+    transport.failSend = true;
+
+    await expect(client.notify("test/event", {})).rejects.toThrow("transport send failed");
+
+    expect(client.connected).toBe(false);
   });
 
   it("enforces request timeouts", async () => {
@@ -207,6 +230,21 @@ describe("LspClient", () => {
     expect(didChange.method).toBe("textDocument/didChange");
     expect(didChangeTextDocument(didChange)).toEqual({ uri: "file:///repo/a.ts", version: 1 });
     expect(didChangeContentChanges(didChange)).toEqual([{ text: "abcX" }]);
+  });
+
+  it("does not throw from workspace sync when the transport send fails", async () => {
+    const { client, transport } = await initializedClient({ textDocumentSync: 1 });
+    transport.failSend = true;
+
+    expect(() =>
+      client.workspace.openDocument({
+        uri: "file:///repo/a.ts",
+        languageId: "typescript",
+        text: "abc",
+      }),
+    ).not.toThrow();
+
+    expect(client.connected).toBe(false);
   });
 
   it("sends incremental document changes when the server requests incremental sync", async () => {

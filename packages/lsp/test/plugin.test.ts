@@ -143,6 +143,7 @@ function activatePlugin(
     registerSyntaxProvider: () => ({ dispose: () => undefined }),
     registerEditorFeatureContribution: () => ({ dispose: () => undefined }),
     registerGutterContribution: () => ({ dispose: () => undefined }),
+    registerBlockProvider: () => ({ dispose: () => undefined }),
   } satisfies EditorPluginContext);
 
   if (!provider) throw new Error("missing provider");

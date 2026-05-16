@@ -24,6 +24,8 @@ class FakeWebSocket implements LspWebSocketLike {
   }
 
   public send(message: string): void {
+    if (this.readyState !== 1) throw new Error(`native send called in state ${this.readyState}`);
+
     this.sent.push(message);
   }
 
@@ -147,6 +149,25 @@ describe("WebSocket LSP transport", () => {
     transport.close();
 
     expect(socket.readyState).toBe(3);
+    expect(socket.listenerCount("message")).toBe(0);
+  });
+
+  it("fails sends after the socket closes without calling native send", async () => {
+    FakeWebSocket.instances.length = 0;
+    const promise = createWebSocketLspTransport("ws://localhost:3000", {
+      WebSocketCtor: FakeWebSocket,
+    });
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) throw new Error("missing socket");
+
+    socket.open();
+    const transport = await promise;
+    socket.close();
+
+    expect(() => transport.send('{"method":"initialize"}')).toThrow(
+      "WebSocket LSP transport is closed",
+    );
+    expect(socket.sent).toEqual([]);
     expect(socket.listenerCount("message")).toBe(0);
   });
 });

@@ -1,0 +1,315 @@
+import type { DocumentSession, DocumentSessionChange } from "../documentSession";
+import type { PieceTableSnapshot } from "../pieceTable/pieceTableTypes";
+import type { EditorHighlightResult, EditorHighlighterSession, EditorPluginHost } from "../plugins";
+import type { EditorSyntaxResult, EditorSyntaxSession } from "../syntax/session";
+import type { EditorSyntaxLanguageId, FoldRange } from "../syntax/session";
+import type { EditorTheme } from "../theme";
+import { editorThemesEqual } from "../theme";
+import type { EditorToken } from "../tokens";
+import { LatestAsyncRequest } from "./latestAsyncRequest";
+import { getEditorSyntaxSessionFactory } from "./runtime";
+import { syntaxRefreshDelay } from "./editorUtils";
+import { appendTiming } from "./timing";
+
+export type EditorSyntaxDocumentStartOptions = {
+  readonly documentId: string;
+  readonly languageId: EditorSyntaxLanguageId | null;
+  readonly snapshot: PieceTableSnapshot;
+  readonly text: string;
+};
+
+export type EditorSyntaxControllerOptions = {
+  readonly pluginHost: EditorPluginHost;
+  getDocumentVersion(): number;
+  getCurrentSessionDocumentId(): string;
+  getLanguageId(): EditorSyntaxLanguageId | null;
+  getSession(): DocumentSession | null;
+  getText(): string;
+  adoptTokens(tokens: readonly EditorToken[]): void;
+  clearSyntaxFolds(): void;
+  setSyntaxFolds(folds: readonly FoldRange[]): void;
+  notifyChange(change: DocumentSessionChange | null): void;
+  notifyThemeChanged(): void;
+};
+
+export class EditorSyntaxController {
+  private syntaxStatus: "plain" | "loading" | "ready" | "error" = "plain";
+  private syntaxSession: EditorSyntaxSession | null = null;
+  private highlighterSession: EditorHighlighterSession | null = null;
+  private providerHighlighterTheme: EditorTheme | null = null;
+  private highlighterTheme: EditorTheme | null = null;
+  private readonly syntaxRequests = new LatestAsyncRequest<EditorSyntaxResult>();
+  private readonly highlightRequests = new LatestAsyncRequest<EditorHighlightResult>();
+  private readonly highlighterThemeRequests = new LatestAsyncRequest<
+    EditorTheme | null | undefined
+  >();
+  private currentTokens: readonly EditorToken[] = [];
+
+  constructor(private readonly options: EditorSyntaxControllerOptions) {}
+
+  get status(): "plain" | "loading" | "ready" | "error" {
+    return this.syntaxStatus;
+  }
+
+  get tokens(): readonly EditorToken[] {
+    return this.currentTokens;
+  }
+
+  get providerTheme(): EditorTheme | null {
+    return this.providerHighlighterTheme;
+  }
+
+  get theme(): EditorTheme | null {
+    return this.highlighterTheme;
+  }
+
+  setTokens(tokens: readonly EditorToken[]): void {
+    this.currentTokens = tokens;
+    this.options.adoptTokens(tokens);
+  }
+
+  startDocument(document: EditorSyntaxDocumentStartOptions): void {
+    this.disposeSyntaxSession();
+    this.disposeHighlighterSession();
+    this.highlighterSession = this.options.pluginHost.createHighlighterSession({
+      documentId: document.documentId,
+      languageId: document.languageId,
+      text: document.text,
+      snapshot: document.snapshot,
+    });
+    this.syntaxSession = this.createSyntaxSession(document);
+    this.syntaxStatus = this.syntaxSession ? "loading" : "plain";
+  }
+
+  clearDocument(): void {
+    this.syntaxStatus = "plain";
+    this.disposeSyntaxSession();
+    this.disposeHighlighterSession();
+  }
+
+  dispose(): void {
+    this.highlighterThemeRequests.dispose();
+    this.disposeSyntaxSession();
+    this.disposeHighlighterSession();
+  }
+
+  reloadHighlighterAndSyntax(): void {
+    this.reloadHighlighterSession();
+    this.reloadSyntaxSession();
+  }
+
+  reloadSyntaxSession(): void {
+    this.disposeSyntaxSession();
+    this.options.clearSyntaxFolds();
+
+    const session = this.options.getSession();
+    if (!session) return;
+
+    this.syntaxSession = this.createSyntaxSession({
+      documentId: this.options.getCurrentSessionDocumentId(),
+      languageId: this.options.getLanguageId(),
+      text: this.options.getText(),
+      snapshot: session.getSnapshot(),
+    });
+    this.syntaxStatus = this.syntaxSession ? "loading" : "plain";
+    this.refresh(this.options.getDocumentVersion(), null);
+    this.options.notifyChange(null);
+  }
+
+  refreshHighlighterTheme(): void {
+    if (!this.options.pluginHost.hasHighlighterProviders()) {
+      this.setProviderHighlighterTheme(null);
+      return;
+    }
+
+    this.highlighterThemeRequests.schedule({
+      run: () => this.options.pluginHost.loadHighlighterTheme(),
+      apply: (theme) => this.setProviderHighlighterTheme(theme),
+      fail: () => this.setProviderHighlighterTheme(null),
+    });
+  }
+
+  refresh(documentVersion: number, change: DocumentSessionChange | null): void {
+    if (!this.options.getSession()) return;
+    if (change && (change.kind === "none" || change.kind === "selection")) return;
+
+    this.refreshStructuralSyntax(documentVersion, change);
+    this.refreshHighlightTokens(documentVersion, change);
+  }
+
+  private reloadHighlighterSession(): void {
+    this.disposeHighlighterSession();
+
+    const session = this.options.getSession();
+    if (!session) return;
+
+    this.highlighterSession = this.options.pluginHost.createHighlighterSession({
+      documentId: this.options.getCurrentSessionDocumentId(),
+      languageId: this.options.getLanguageId(),
+      text: session.getText(),
+      snapshot: session.getSnapshot(),
+    });
+    this.refreshHighlighterTheme();
+    this.refreshHighlightTokens(this.options.getDocumentVersion(), null);
+  }
+
+  private createSyntaxSession(
+    document: EditorSyntaxDocumentStartOptions,
+  ): EditorSyntaxSession | null {
+    if (!document.languageId) return null;
+
+    const options = {
+      documentId: document.documentId,
+      languageId: document.languageId,
+      includeHighlights: !this.highlighterSession,
+      text: document.text,
+      snapshot: document.snapshot,
+    };
+    return (
+      this.options.pluginHost.createSyntaxSession(options) ??
+      getEditorSyntaxSessionFactory()?.(options) ??
+      null
+    );
+  }
+
+  private disposeSyntaxSession(): void {
+    this.syntaxRequests.cancel();
+    this.syntaxSession?.dispose();
+    this.syntaxSession = null;
+  }
+
+  private disposeHighlighterSession(): void {
+    this.highlightRequests.cancel();
+    this.highlighterSession?.dispose();
+    this.highlighterSession = null;
+    this.setHighlighterTheme(null);
+  }
+
+  private refreshStructuralSyntax(
+    documentVersion: number,
+    change: DocumentSessionChange | null,
+  ): void {
+    const session = this.options.getSession();
+    if (!this.syntaxSession || !session || !this.options.getLanguageId()) return;
+
+    const text = session.getText();
+    this.syntaxStatus = "loading";
+
+    this.syntaxRequests.schedule({
+      delayMs: syntaxRefreshDelay(change),
+      run: () => this.loadSyntaxResult(change, text),
+      apply: (result, startedAt) => this.applySyntaxResult(result, documentVersion, startedAt),
+      fail: () => this.applySyntaxError(documentVersion),
+    });
+  }
+
+  private refreshHighlightTokens(
+    documentVersion: number,
+    change: DocumentSessionChange | null,
+  ): void {
+    const session = this.options.getSession();
+    if (!this.highlighterSession || !session) return;
+
+    const text = session.getText();
+    this.highlightRequests.schedule({
+      delayMs: syntaxRefreshDelay(change),
+      run: () => this.loadHighlightResult(change, text),
+      apply: (result, startedAt) => this.applyHighlightResult(result, documentVersion, startedAt),
+      fail: (_error, startedAt) => this.applyHighlightError(documentVersion, startedAt),
+    });
+  }
+
+  private loadSyntaxResult(
+    change: DocumentSessionChange | null,
+    text: string,
+  ): Promise<EditorSyntaxResult> {
+    if (!this.syntaxSession) return Promise.reject(new Error("No syntax session"));
+    if (!change) {
+      const snapshot = this.options.getSession()?.getSnapshot();
+      if (!snapshot) return Promise.reject(new Error("No document snapshot"));
+      return this.syntaxSession.refresh(snapshot, text);
+    }
+
+    return this.syntaxSession.applyChange(change);
+  }
+
+  private loadHighlightResult(
+    change: DocumentSessionChange | null,
+    text: string,
+  ): Promise<EditorHighlightResult> {
+    if (!this.highlighterSession) return Promise.reject(new Error("No highlighter session"));
+    if (!change) {
+      const snapshot = this.options.getSession()?.getSnapshot();
+      if (!snapshot) return Promise.reject(new Error("No document snapshot"));
+      return this.highlighterSession.refresh(snapshot, text);
+    }
+
+    return this.highlighterSession.applyChange(change);
+  }
+
+  private applySyntaxResult(
+    result: EditorSyntaxResult,
+    documentVersion: number,
+    startedAt: number,
+  ): void {
+    const session = this.options.getSession();
+    if (!session || documentVersion !== this.options.getDocumentVersion()) return;
+
+    this.syntaxStatus = "ready";
+    const nextTokens = this.highlighterSession ? this.currentTokens : result.tokens;
+    const tokenChange = session.adoptTokens(nextTokens);
+    const timedChange = appendTiming(tokenChange, "editor.syntax", startedAt);
+    if (!this.highlighterSession) this.setTokens(result.tokens);
+    this.options.setSyntaxFolds(result.folds);
+    this.options.notifyChange(timedChange);
+  }
+
+  private applyHighlightResult(
+    result: EditorHighlightResult,
+    documentVersion: number,
+    startedAt: number,
+  ): void {
+    const session = this.options.getSession();
+    if (!session || documentVersion !== this.options.getDocumentVersion()) return;
+
+    if (result.theme !== undefined) this.setHighlighterTheme(result.theme);
+    const tokenChange = session.adoptTokens(result.tokens);
+    const timedChange = appendTiming(tokenChange, "editor.highlight", startedAt);
+    this.setTokens(result.tokens);
+    this.options.notifyChange(timedChange);
+  }
+
+  private applySyntaxError(documentVersion: number): void {
+    if (documentVersion !== this.options.getDocumentVersion()) return;
+
+    this.syntaxStatus = "error";
+    this.options.notifyChange(null);
+  }
+
+  private applyHighlightError(documentVersion: number, startedAt: number): void {
+    const session = this.options.getSession();
+    if (!session || documentVersion !== this.options.getDocumentVersion()) return;
+
+    this.setHighlighterTheme(null);
+    const tokenChange = session.adoptTokens([]);
+    const timedChange = appendTiming(tokenChange, "editor.highlightError", startedAt);
+    this.setTokens([]);
+    this.options.notifyChange(timedChange);
+  }
+
+  private setHighlighterTheme(theme: EditorTheme | null | undefined): void {
+    const nextTheme = theme ?? null;
+    if (editorThemesEqual(this.highlighterTheme, nextTheme)) return;
+
+    this.highlighterTheme = nextTheme;
+    this.options.notifyThemeChanged();
+  }
+
+  private setProviderHighlighterTheme(theme: EditorTheme | null | undefined): void {
+    const nextTheme = theme ?? null;
+    if (editorThemesEqual(this.providerHighlighterTheme, nextTheme)) return;
+
+    this.providerHighlighterTheme = nextTheme;
+    this.options.notifyThemeChanged();
+  }
+}
