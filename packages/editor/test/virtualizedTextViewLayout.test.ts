@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { BlockRow, DisplayRow, DisplayTextRow } from "../src/displayTransforms";
+import { createStringTextSnapshot } from "../src/documentTextSnapshot";
 import type { FixedRowVirtualizerSnapshot } from "../src/virtualization/fixedRowVirtualizer";
+import { createLineStartOffsetIndex } from "../src/virtualization/lineStartIndex";
 import type { VirtualizedTextViewInternal } from "../src/virtualization/virtualizedTextViewInternals";
 import {
+  applySameLineTextLayout,
+  bufferLineStartOffset,
   hasVariableRows,
   rowHeight,
   rowForOffset,
@@ -133,6 +137,65 @@ describe("virtualized text view layout", () => {
     expect(rowHeight(view, 0)).toBe(20);
     expect(scrollableHeight(view, fixedSnapshot({ totalSize: 20, viewportHeight: 60 }))).toBe(60);
   });
+
+  it("applies same-line layout without rewriting suffix rows", () => {
+    const lineStarts = guardedSuffixLineStarts([0, 2, 4, 6]);
+    const displayRows = guardedSuffixDisplayRows([
+      textRow(0, 0, 0, 1, "a"),
+      textRow(1, 1, 2, 3, "b"),
+      textRow(2, 2, 4, 5, "c"),
+      textRow(3, 3, 6, 7, "d"),
+    ]);
+    const view = layoutView({
+      text: "a\nb\nc\nd",
+      lineStarts,
+      displayRows,
+      foldMap: null,
+      blockRows: [],
+      wrapEnabled: false,
+    });
+
+    applySameLineTextLayout(
+      view,
+      { rowIndex: 0, localFrom: 1, deleteLength: 0, text: "X" },
+      createStringTextSnapshot("aX\nb\nc\nd"),
+    );
+
+    expect(view.displayRows[0]).toMatchObject({ text: "aX" });
+    expect(bufferLineStartOffset(view, 1)).toBe(3);
+    expect(rowForOffset(view, 3)).toBe(1);
+  });
+
+  it("accumulates same-line suffix shifts across later row edits", () => {
+    const view = layoutView({
+      text: "a\nb\nc",
+      lineStarts: [0, 2, 4],
+      displayRows: [
+        textRow(0, 0, 0, 1, "a"),
+        textRow(1, 1, 2, 3, "b"),
+        textRow(2, 2, 4, 5, "c"),
+      ],
+      foldMap: null,
+      blockRows: [],
+      wrapEnabled: false,
+    });
+
+    applySameLineTextLayout(
+      view,
+      { rowIndex: 0, localFrom: 1, deleteLength: 0, text: "X" },
+      createStringTextSnapshot("aX\nb\nc"),
+    );
+    applySameLineTextLayout(
+      view,
+      { rowIndex: 1, localFrom: 1, deleteLength: 0, text: "Y" },
+      createStringTextSnapshot("aX\nbY\nc"),
+    );
+
+    expect(view.displayRows[1]).toMatchObject({ text: "bY" });
+    expect(bufferLineStartOffset(view, 1)).toBe(3);
+    expect(bufferLineStartOffset(view, 2)).toBe(6);
+    expect(rowForOffset(view, 6)).toBe(2);
+  });
 });
 
 type LayoutFields = Pick<
@@ -143,6 +206,8 @@ type LayoutFields = Pick<
 function layoutView(fields: LayoutFields): VirtualizedTextViewInternal {
   return {
     ...fields,
+    textLength: fields.text.length,
+    lineStartOffsetIndex: createLineStartOffsetIndex(fields.lineStarts.length),
     virtualizer: throwingVirtualizer(),
     metrics: { rowHeight: 20, characterWidth: 8 },
     rowGap: 0,
@@ -220,6 +285,45 @@ function throwingDisplayRows(rows: DisplayRow[]): DisplayRow[] {
   return Object.assign(rows, {
     map: throwingDisplayRowScan,
     some: throwingDisplayRowScan,
+  });
+}
+
+function guardedSuffixLineStarts(lineStarts: number[]): number[] {
+  for (let index = 1; index < lineStarts.length; index += 1) {
+    guardArrayIndexWrite(lineStarts, index, "unexpected suffix line start rewrite");
+  }
+
+  return lineStarts;
+}
+
+function guardedSuffixDisplayRows(rows: DisplayRow[]): DisplayRow[] {
+  for (let index = 1; index < rows.length; index += 1) {
+    guardArrayIndexRead(rows, index, "unexpected suffix display row read");
+  }
+
+  return rows;
+}
+
+function guardArrayIndexWrite<T>(items: T[], index: number, message: string): void {
+  const value = items[index];
+  Object.defineProperty(items, index, {
+    configurable: true,
+    get: () => value,
+    set: () => {
+      throw new Error(message);
+    },
+  });
+}
+
+function guardArrayIndexRead<T>(items: T[], index: number, message: string): void {
+  Object.defineProperty(items, index, {
+    configurable: true,
+    get: () => {
+      throw new Error(message);
+    },
+    set: (next) => {
+      throw new Error(`${message}: ${String(next)}`);
+    },
   });
 }
 

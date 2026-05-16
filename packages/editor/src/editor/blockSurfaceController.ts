@@ -117,7 +117,7 @@ export class EditorBlockSurfaceController {
     return {
       documentId: this.options.getDocumentId(),
       text: this.options.getText(),
-      lineCount: this.options.view.getLineStarts().length,
+      lineCount: this.options.view.getLineCount(),
     };
   }
 

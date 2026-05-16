@@ -7,6 +7,7 @@ import type { EditorToken, TextEdit } from "../tokens";
 import { applyEditorTheme } from "../theme";
 import { measureBrowserTextMetrics, type BrowserTextMetrics } from "./browserMetrics";
 import { FixedRowVirtualizer, type FixedRowVirtualizerSnapshot } from "./fixedRowVirtualizer";
+import { createLineStartOffsetIndex } from "./lineStartIndex";
 import {
   DEFAULT_OVERSCAN,
   DEFAULT_SELECTION_HIGHLIGHT,
@@ -58,6 +59,7 @@ import {
   scrollableHeight,
   setBlockRowsLayout,
   setFoldStateLayout,
+  materializeLineStarts,
   setTextLayoutState,
   setWrapEnabledLayout,
   updateVirtualizerRows,
@@ -221,6 +223,7 @@ export class VirtualizedTextView {
       tokenRenderStyles: new Map(),
       tokenRenderIndexDirty: true,
       lineStarts: [0],
+      lineStartOffsetIndex: createLineStartOffsetIndex(1),
       displayRows: [],
       foldMap: null,
       foldMarkers: [],
@@ -554,7 +557,11 @@ export class VirtualizedTextView {
   }
 
   public getLineStarts(): readonly number[] {
-    return this.view.lineStarts;
+    return materializeLineStarts(this.view);
+  }
+
+  public getLineCount(): number {
+    return this.view.lineStarts.length;
   }
 
   public createRange(

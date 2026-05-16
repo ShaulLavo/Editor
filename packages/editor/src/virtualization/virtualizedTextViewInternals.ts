@@ -5,6 +5,7 @@ import type { EditorGutterContribution, EditorGutterWidthContext } from "../plug
 import type { EditorToken, EditorTokenStyle } from "../tokens";
 import type { BrowserTextMetrics } from "./browserMetrics";
 import type { FixedRowVirtualizer } from "./fixedRowVirtualizer";
+import type { LineStartOffsetIndex } from "./lineStartIndex";
 import type {
   EditorCursorLineHighlightOptions,
   HiddenCharactersMode,
@@ -100,6 +101,7 @@ export interface VirtualizedTextViewInternal {
   tokenRenderStyles: ReadonlyMap<string, EditorTokenStyle>;
   tokenRenderIndexDirty: boolean;
   lineStarts: number[];
+  lineStartOffsetIndex: LineStartOffsetIndex;
   displayRows: DisplayRow[];
   foldMap: FoldMap | null;
   foldMarkers: readonly VirtualizedFoldMarker[];
