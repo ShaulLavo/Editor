@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DocumentSessionChange, EditorViewSnapshot, TextEdit } from "@editor/core";
+import {
+  createDocumentSession,
+  type DocumentSessionChange,
+  type EditorViewSnapshot,
+  type TextEdit,
+} from "@editor/core";
 import { resolveMinimapOptions } from "../src/options";
 import { MinimapWorkerClient, type MinimapHost } from "../src/workerClient";
 import type { MinimapWorkerResponse } from "../src/types";
@@ -62,6 +67,42 @@ describe("MinimapWorkerClient", () => {
 
       expect(requests.map((request) => request.type)).toEqual([
         "applyEdit",
+        "updateViewport",
+        "render",
+      ]);
+
+      client.dispose();
+      host.root.remove();
+      host.colorScope.remove();
+    } finally {
+      runtime.restore();
+    }
+  });
+
+  it("falls back to replaceDocument for deletions", () => {
+    const runtime = installMinimapRuntime();
+    try {
+      const host = createHost();
+      const client = new MinimapWorkerClient({
+        host,
+        options: resolveMinimapOptions(),
+        snapshot: snapshot({}, { text: "abc" }),
+        decorations: [],
+        onLayoutWidth: vi.fn(),
+      });
+      const worker = runtime.workers[0]!;
+      worker.send(renderedResponse(1));
+      worker.postMessage.mockClear();
+
+      const session = createDocumentSession("abc");
+      const change = session.backspace();
+      client.update(snapshot({}, { text: "ab" }), "content", change);
+      runtime.flushAnimationFrames();
+
+      const requests = worker.postMessage.mock.calls.map((call) => call[0] as { type: string });
+
+      expect(requests.map((request) => request.type)).toEqual([
+        "replaceDocument",
         "updateViewport",
         "render",
       ]);

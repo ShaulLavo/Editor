@@ -96,6 +96,13 @@ export type MinimapDocumentPayload = {
   readonly decorations: readonly EditorMinimapDecoration[];
 };
 
+export type MinimapDocumentEditPayload = {
+  readonly lineStarts: readonly number[];
+  readonly tokens: readonly MinimapToken[];
+  readonly selections: readonly MinimapSelection[];
+  readonly externalDecorations: readonly EditorMinimapDecoration[];
+};
+
 export type MinimapRenderLayout = {
   readonly width: number;
   readonly height: number;
@@ -139,7 +146,7 @@ export type MinimapWorkerRequest =
   | {
       readonly type: "applyEdit";
       readonly edit: TextEdit;
-      readonly document: MinimapDocumentPayload;
+      readonly document: MinimapDocumentEditPayload;
     }
   | { readonly type: "updateTokens"; readonly tokens: readonly MinimapToken[] }
   | { readonly type: "updateSelection"; readonly selections: readonly MinimapSelection[] }

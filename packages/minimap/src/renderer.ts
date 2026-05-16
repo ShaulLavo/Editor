@@ -1,3 +1,4 @@
+import type { TextEdit } from "@editor/core";
 import { parseCssColor, relativeLuminance, rgbaToCss, transparent } from "./color";
 import {
   computeFrameLayout,
@@ -9,9 +10,11 @@ import {
 } from "./layout";
 import { MinimapCharRendererFactory } from "./minimapCharRendererFactory";
 import { Constants } from "./minimapCharSheet";
+import { findSectionHeaderDecorations } from "./sectionHeaders";
 import type {
   EditorMinimapDecoration,
   MinimapBaseStyles,
+  MinimapDocumentEditPayload,
   MinimapDocumentPayload,
   MinimapMetrics,
   MinimapRenderLayout,
@@ -86,9 +89,15 @@ export class MinimapWorkerRenderer {
     this.state.decorationsDirty = true;
   }
 
-  public applyEdit(document: MinimapDocumentPayload): void {
+  public applyEdit(edit: TextEdit, document: MinimapDocumentEditPayload): void {
     if (!this.state) return;
-    this.state.document = document;
+    const text = applyTextEdit(this.state.document.text, edit);
+    const lines = text.split("\n");
+    const decorations = [
+      ...findSectionHeaderDecorations(lines, this.state.options),
+      ...document.externalDecorations,
+    ];
+    this.state.document = { ...document, text, decorations };
     this.state.linesDirty = true;
     this.state.decorationsDirty = true;
   }
@@ -665,4 +674,8 @@ function defaultViewport(): MinimapViewport {
 
 function emptyRenderResult(): RenderResult {
   return { sliderNeeded: false, sliderTop: 0, sliderHeight: 0, shadowVisible: false };
+}
+
+function applyTextEdit(text: string, edit: TextEdit): string {
+  return `${text.slice(0, edit.from)}${edit.text}${text.slice(edit.to)}`;
 }

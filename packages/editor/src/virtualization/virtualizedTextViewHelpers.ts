@@ -698,9 +698,9 @@ export function alignChunkEnd(value: number, chunkSize: number): number {
   return Math.ceil(value / chunkSize) * chunkSize;
 }
 
-export function foldMapMatchesText(foldMap: FoldMap | null, text: string): boolean {
+export function foldMapMatchesText(foldMap: FoldMap | null, textLength: number): boolean {
   if (!foldMap) return false;
-  return foldMap.snapshot.length === text.length;
+  return foldMap.snapshot.length === textLength;
 }
 
 export function asFoldPoint(point: { readonly row: number; readonly column: number }): FoldPoint {

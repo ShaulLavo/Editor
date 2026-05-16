@@ -143,8 +143,8 @@ export function setRangeHighlight(
   }
 
   const nextRanges = ranges.map((range) => ({
-    start: clamp(range.start, 0, view.text.length),
-    end: clamp(range.end, 0, view.text.length),
+    start: clamp(range.start, 0, view.textLength),
+    end: clamp(range.end, 0, view.textLength),
   }));
   const group = getOrCreateRangeHighlightGroup(view, name, style);
   if (canSkipRangeHighlightUpdate(view, group, nextRanges, style)) return;
@@ -233,7 +233,7 @@ export function clampStoredSelection(view: VirtualizedTextViewInternal): void {
 }
 
 export function renderTokenHighlights(view: VirtualizedTextViewInternal): void {
-  if (!view.highlightRegistry || view.tokens.length === 0 || view.text.length === 0) {
+  if (!view.highlightRegistry || view.tokens.length === 0 || view.textLength === 0) {
     clearTokenHighlights(view);
     return;
   }
@@ -298,8 +298,8 @@ function tokenRenderEntry(
   const style = normalizeTokenStyle(token.style);
   if (!style) return null;
 
-  const start = clamp(token.start, 0, view.text.length);
-  const end = clamp(token.end, start, view.text.length);
+  const start = clamp(token.start, 0, view.textLength);
+  const end = clamp(token.end, start, view.textLength);
   if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
   if (end <= start) return null;
 
@@ -567,7 +567,7 @@ function syncTokenGroupsToStyles(
   view: VirtualizedTextViewInternal,
   styles: ReadonlyMap<string, EditorTokenStyle>,
 ): void {
-  if (view.text.length === 0) {
+  if (view.textLength === 0) {
     clearTokenHighlights(view);
     return;
   }
@@ -833,8 +833,8 @@ function clampSelection(
   view: VirtualizedTextViewInternal,
   selection: VirtualizedTextSelection,
 ): VirtualizedStoredSelection {
-  const anchor = clamp(selection.anchorOffset, 0, view.text.length);
-  const head = clamp(selection.headOffset, 0, view.text.length);
+  const anchor = clamp(selection.anchorOffset, 0, view.textLength);
+  const head = clamp(selection.headOffset, 0, view.textLength);
   return {
     start: Math.min(anchor, head),
     end: Math.max(anchor, head),
@@ -846,11 +846,11 @@ function clampStoredSelectionRange(
   view: VirtualizedTextViewInternal,
   selection: VirtualizedStoredSelection,
 ): VirtualizedStoredSelection {
-  const start = clamp(selection.start, 0, view.text.length);
+  const start = clamp(selection.start, 0, view.textLength);
   return {
     start,
-    end: clamp(selection.end, start, view.text.length),
-    head: clamp(selection.head, 0, view.text.length),
+    end: clamp(selection.end, start, view.textLength),
+    head: clamp(selection.head, 0, view.textLength),
   };
 }
 

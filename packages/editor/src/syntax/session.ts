@@ -1,4 +1,5 @@
 import type { DocumentSessionChange } from "../documentSession";
+import type { DocumentTextSnapshot } from "../documentTextSnapshot";
 import type { PieceTableSnapshot } from "../pieceTable/pieceTableTypes";
 import type { EditorToken } from "../tokens";
 
@@ -54,6 +55,7 @@ export type EditorSyntaxSessionOptions = {
   readonly languageId: EditorSyntaxLanguageId | null;
   readonly includeHighlights?: boolean;
   readonly text: string;
+  readonly textSnapshot?: DocumentTextSnapshot;
   readonly snapshot: PieceTableSnapshot;
 };
 

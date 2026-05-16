@@ -1,5 +1,6 @@
 import type { FoldMap } from "../foldMap";
 import { normalizeTabSize, type BlockLane, type BlockRow } from "../displayTransforms";
+import { createStringTextSnapshot, type TextSnapshot } from "../documentTextSnapshot";
 import type { EditorTheme } from "../theme";
 import type { EditorGutterContribution, EditorGutterWidthContext } from "../plugins";
 import type { EditorToken, TextEdit } from "../tokens";
@@ -12,7 +13,6 @@ import {
   countValidCaretChecks,
   countValidHitTestChecks,
   countValidSelectionChecks,
-  computeLineStarts,
   createInputElement,
   createScrollElement,
   createVirtualizerOptions,
@@ -46,6 +46,7 @@ import {
   renderHiddenCharacters,
 } from "./virtualizedTextViewHiddenCharacters";
 import {
+  applySameLineTextLayout,
   lineEndOffset,
   lineStartOffset,
   offsetForViewportColumn,
@@ -211,6 +212,8 @@ export class VirtualizedTextView {
       rangeHighlightGroups: new Map(),
       selectionHighlightRegistered: false,
       text: "",
+      textSnapshot: createStringTextSnapshot(""),
+      textLength: 0,
       textRevision: 0,
       tokens: [],
       tokenRenderEntries: [],
@@ -298,11 +301,11 @@ export class VirtualizedTextView {
     view.rowPool.length = 0;
   }
 
-  public setText(text: string): void {
+  public setText(text: string, textSnapshot = createStringTextSnapshot(text)): void {
     const view = this.view;
     view.tokenRangesFollowLastTextEdit = false;
     view.tokenRenderIndexDirty = true;
-    const { lineCountChanged } = setTextLayoutState(view, text);
+    const { lineCountChanged } = setTextLayoutState(view, text, textSnapshot);
     if (lineCountChanged) view.gutterWidthDirty = true;
     rebuildDisplayRows(view, horizontalViewportColumns(view));
     clampStoredSelection(view);
@@ -389,15 +392,17 @@ export class VirtualizedTextView {
     updateVirtualizerRows(view);
   }
 
-  public applyEdit(edit: TextEdit, nextText: string): void {
+  public applyEdit(edit: TextEdit, nextText: TextSnapshot | string): void {
     const view = this.view;
+    const textSnapshot =
+      typeof nextText === "string" ? createStringTextSnapshot(nextText) : nextText;
     const patch = sameLineEditPatch(view, edit);
     if (!patch) {
-      this.setText(nextText);
+      this.setText(textSnapshot.getText(), textSnapshot);
       return;
     }
 
-    this.applySameLineEdit(patch, nextText);
+    this.applySameLineEdit(patch, textSnapshot);
   }
 
   public setTokens(tokens: readonly EditorToken[]): void {
@@ -678,16 +683,12 @@ export class VirtualizedTextView {
     view.onViewportChange?.();
   }
 
-  private applySameLineEdit(patch: SameLineEditPatch, nextText: string): void {
+  private applySameLineEdit(patch: SameLineEditPatch, nextText: TextSnapshot): void {
     const view = this.view;
     const snapshot = view.virtualizer.getSnapshot();
-    view.text = nextText;
-    view.textRevision += 1;
-    view.foldMap = null;
     view.tokenRangesFollowLastTextEdit = true;
     view.tokenRenderIndexDirty = true;
-    view.lineStarts = computeLineStarts(nextText);
-    rebuildDisplayRows(view, horizontalViewportColumns(view));
+    applySameLineTextLayout(view, patch, nextText);
     clampStoredSelection(view);
     resetContentWidthScan(view);
     clearRowGeometryCaches(view);

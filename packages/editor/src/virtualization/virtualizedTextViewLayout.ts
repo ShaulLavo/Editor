@@ -7,6 +7,7 @@ import {
   type DisplayRow,
   type DisplayTextRow,
 } from "../displayTransforms";
+import type { TextSnapshot } from "../documentTextSnapshot";
 import type { TextEdit } from "../tokens";
 import { clamp } from "../style-utils";
 import {
@@ -32,13 +33,30 @@ export type FoldStateUpdate = {
 export function setTextLayoutState(
   view: VirtualizedTextViewInternal,
   text: string,
+  textSnapshot: TextSnapshot,
 ): { readonly lineCountChanged: boolean } {
   const previousLineCount = view.lineStarts.length;
   view.text = text;
+  view.textSnapshot = textSnapshot;
+  view.textLength = text.length;
   view.textRevision += 1;
   view.lineStarts = computeLineStarts(text);
-  view.foldMap = foldMapMatchesText(view.foldMap, text) ? view.foldMap : null;
+  view.foldMap = foldMapMatchesText(view.foldMap, view.textLength) ? view.foldMap : null;
   return { lineCountChanged: previousLineCount !== view.lineStarts.length };
+}
+
+export function applySameLineTextLayout(
+  view: VirtualizedTextViewInternal,
+  patch: SameLineEditPatch,
+  textSnapshot: TextSnapshot,
+): void {
+  const delta = patch.text.length - patch.deleteLength;
+  view.textSnapshot = textSnapshot;
+  view.textLength = textSnapshot.length;
+  view.textRevision += 1;
+  view.foldMap = null;
+  shiftLineStartsAfterRow(view.lineStarts, patch.rowIndex, delta);
+  updateDisplayRowsAfterSameLineEdit(view, patch, delta);
 }
 
 export function setFoldStateLayout(
@@ -46,13 +64,13 @@ export function setFoldStateLayout(
   markers: readonly VirtualizedFoldMarker[],
   foldMap: FoldMap | null,
 ): FoldStateUpdate {
-  const nextFoldMap = foldMapMatchesText(foldMap, view.text) ? foldMap : null;
+  const nextFoldMap = foldMapMatchesText(foldMap, view.textLength) ? foldMap : null;
   const foldMapChanged = view.foldMap !== nextFoldMap;
   if (!foldMapChanged && markers.length === 0 && view.foldMarkers.length === 0) {
     return { foldMapChanged: false, foldMarkersChanged: false, changed: false };
   }
 
-  const nextFoldMarkers = normalizeFoldMarkers(markers, view.text.length);
+  const nextFoldMarkers = normalizeFoldMarkers(markers, view.textLength);
   const foldMarkersChanged = !foldMarkersEqual(view.foldMarkers, nextFoldMarkers);
   if (!foldMapChanged && !foldMarkersChanged) {
     return { foldMapChanged: false, foldMarkersChanged: false, changed: false };
@@ -72,6 +90,7 @@ export function rebuildDisplayRows(
   view: VirtualizedTextViewInternal,
   viewportColumns: number | null,
 ): void {
+  materializeViewText(view);
   view.currentWrapColumn = view.wrapEnabled ? viewportColumns : null;
   view.displayRows = createDisplayRows({
     text: view.text,
@@ -190,7 +209,7 @@ export function offsetForViewportColumn(
   visualColumn: number,
 ): number {
   const displayRow = view.displayRows[row];
-  if (!displayRow) return view.text.length;
+  if (!displayRow) return view.textLength;
   if (displayRow.kind === "block") return displayRow.startOffset;
 
   const bufferColumn = visualColumnToBufferColumn(
@@ -203,19 +222,71 @@ export function offsetForViewportColumn(
 }
 
 export function lineStartOffset(view: VirtualizedTextViewInternal, row: number): number {
-  return view.displayRows[row]?.startOffset ?? view.text.length;
+  return view.displayRows[row]?.startOffset ?? view.textLength;
 }
 
 export function lineEndOffset(view: VirtualizedTextViewInternal, row: number): number {
-  return view.displayRows[row]?.endOffset ?? view.text.length;
+  return view.displayRows[row]?.endOffset ?? view.textLength;
 }
 
 export function bufferLineStartOffset(view: VirtualizedTextViewInternal, row: number): number {
-  return view.lineStarts[row] ?? view.text.length;
+  return view.lineStarts[row] ?? view.textLength;
 }
 
 export function lineText(view: VirtualizedTextViewInternal, row: number): string {
   return view.displayRows[row]?.text ?? "";
+}
+
+function materializeViewText(view: VirtualizedTextViewInternal): void {
+  const text = view.textSnapshot.getText();
+  view.text = text;
+  view.textLength = text.length;
+}
+
+function shiftLineStartsAfterRow(lineStarts: number[], rowIndex: number, delta: number): void {
+  if (delta === 0) return;
+
+  for (let index = rowIndex + 1; index < lineStarts.length; index += 1) {
+    lineStarts[index] = (lineStarts[index] ?? 0) + delta;
+  }
+}
+
+function updateDisplayRowsAfterSameLineEdit(
+  view: VirtualizedTextViewInternal,
+  patch: SameLineEditPatch,
+  delta: number,
+): void {
+  view.displayRows = view.displayRows.map((row, index) => {
+    if (index < patch.rowIndex) return row;
+    if (index > patch.rowIndex) return shiftDisplayRow(row, delta);
+    if (row.kind === "block") return shiftDisplayRow(row, delta);
+    return updateTextDisplayRow(row, patch, delta);
+  });
+}
+
+function shiftDisplayRow(row: DisplayRow, delta: number): DisplayRow {
+  if (delta === 0) return row;
+  return {
+    ...row,
+    startOffset: row.startOffset + delta,
+    endOffset: row.endOffset + delta,
+  };
+}
+
+function updateTextDisplayRow(
+  row: DisplayTextRow,
+  patch: SameLineEditPatch,
+  delta: number,
+): DisplayTextRow {
+  const suffixStart = patch.localFrom + patch.deleteLength;
+  const text = `${row.text.slice(0, patch.localFrom)}${patch.text}${row.text.slice(suffixStart)}`;
+  return {
+    ...row,
+    endOffset: row.endOffset + delta,
+    text,
+    sourceText: text,
+    sourceEndColumn: row.sourceEndColumn + delta,
+  };
 }
 
 export function sameLineEditPatch(
@@ -224,9 +295,9 @@ export function sameLineEditPatch(
 ): SameLineEditPatch | null {
   if (view.foldMap) return null;
   if (view.wrapEnabled || view.blockRows.length > 0) return null;
-  if (edit.from < 0 || edit.to < edit.from || edit.to > view.text.length) return null;
+  if (edit.from < 0 || edit.to < edit.from || edit.to > view.textLength) return null;
   if (edit.text.includes("\n")) return null;
-  if (view.text.slice(edit.from, edit.to).includes("\n")) return null;
+  if (view.textSnapshot.getTextInRange(edit.from, edit.to).includes("\n")) return null;
 
   const rowIndex = rowForOffset(view, edit.from);
   if (lineText(view, rowIndex).length > view.longLineChunkThreshold) return null;
@@ -242,14 +313,14 @@ export function rowForOffset(view: VirtualizedTextViewInternal, offset: number):
   const bufferRow = bufferRowForOffset(view, offset);
   if (!usesDisplayRowTransforms(view)) return foldVirtualRowForBufferRow(view, bufferRow);
 
-  const displayRow = textDisplayRowForOffset(view, clamp(offset, 0, view.text.length));
+  const displayRow = textDisplayRowForOffset(view, clamp(offset, 0, view.textLength));
   if (displayRow) return displayRow.index;
 
   return virtualRowForBufferRow(view, bufferRow);
 }
 
 export function bufferRowForOffset(view: VirtualizedTextViewInternal, offset: number): number {
-  const clamped = clamp(offset, 0, view.text.length);
+  const clamped = clamp(offset, 0, view.textLength);
   let low = 0;
   let high = view.lineStarts.length - 1;
 

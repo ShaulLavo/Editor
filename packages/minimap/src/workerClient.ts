@@ -9,6 +9,7 @@ import { parseCssColor, RGBA_BLACK, RGBA_WHITE, transparent } from "./color";
 import { findSectionHeaderDecorations } from "./sectionHeaders";
 import type {
   MinimapBaseStyles,
+  MinimapDocumentEditPayload,
   MinimapDocumentPayload,
   MinimapMetrics,
   MinimapSelection,
@@ -204,7 +205,7 @@ export class MinimapWorkerClient {
       this.post({
         type: "applyEdit",
         edit: change.edits[0]!,
-        document: this.documentPayload(snapshot),
+        document: this.documentEditPayload(snapshot),
       });
       return;
     }
@@ -255,6 +256,15 @@ export class MinimapWorkerClient {
       tokens: this.tokens(snapshot.tokens),
       selections: selections(snapshot),
       decorations: this.decorations(snapshot),
+    };
+  }
+
+  private documentEditPayload(snapshot: EditorViewSnapshot): MinimapDocumentEditPayload {
+    return {
+      lineStarts: snapshot.lineStarts,
+      tokens: this.tokens(snapshot.tokens),
+      selections: selections(snapshot),
+      externalDecorations: this.externalDecorations,
     };
   }
 
@@ -426,7 +436,7 @@ function singleLineEdit(
   if (!change || change.kind !== "edit" || change.edits.length !== 1) return false;
   const edit = change.edits[0]!;
   if (edit.text.includes("\n")) return false;
-  return !change.text.slice(edit.from, edit.to).includes("\n");
+  return edit.from === edit.to;
 }
 
 function splitLines(text: string): readonly string[] {

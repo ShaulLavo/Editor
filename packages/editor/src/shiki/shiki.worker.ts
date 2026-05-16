@@ -199,17 +199,34 @@ const openDocument = async (payload: ShikiWorkerOpenRequest): Promise<ShikiWorke
 
 const editDocument = async (payload: ShikiWorkerEditRequest): Promise<ShikiWorkerResult> => {
   const existing = documents.get(payload.documentId);
-  if (!existing) return openDocument({ ...payload, type: "open" });
-  if (!documentMatches(existing, payload)) return openDocument({ ...payload, type: "open" });
+  if (!existing && payload.text !== undefined)
+    return openDocument(openRequestFromEdit(payload, payload.text));
+  if (!existing) throw new Error("Unable to edit unopened Shiki document without text");
+  if (!documentMatches(existing, payload) && payload.text !== undefined) {
+    return openDocument(openRequestFromEdit(payload, payload.text));
+  }
+  if (!documentMatches(existing, payload)) {
+    throw new Error("Unable to reopen Shiki document without text");
+  }
 
   if (payload.edit) {
     existing.tokenizer.applyEdit(payload.edit);
   } else {
-    existing.tokenizer.update(payload.text);
+    existing.tokenizer.update(payload.text ?? existing.tokenizer.getCode());
   }
 
   return resultFromState(existing);
 };
+
+const openRequestFromEdit = (payload: ShikiWorkerEditRequest, text: string) => ({
+  documentId: payload.documentId,
+  lang: payload.lang,
+  theme: payload.theme,
+  text,
+  langs: payload.langs,
+  themes: payload.themes,
+  type: "open" as const,
+});
 
 const ensureHighlighter = (
   options: ShikiWorkerDocumentOptions,

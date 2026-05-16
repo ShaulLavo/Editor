@@ -8,10 +8,12 @@ import {
   compareAnchors,
   createPieceTableSnapshot,
   deleteFromPieceTable,
+  forEachPieceTableTextChunk,
   getPieceTableText,
   insertIntoPieceTable,
   debugPieceTable,
   offsetToPoint,
+  pieceTableSnapshotsHaveSameText,
   pointToOffset,
   resolveAnchor,
   resolveAnchorLinear,
@@ -140,6 +142,26 @@ describe("piece table", () => {
     expectSnapshotText(initial, "abc");
     expectSnapshotText(inserted, "aXXbc");
     expectSnapshotText(deleted, "aXc");
+  });
+
+  test("iterates text chunks with document offsets", () => {
+    const snapshot = insertIntoPieceTable(createPieceTableSnapshot("ac"), 1, "b");
+    const chunks: string[] = [];
+
+    forEachPieceTableTextChunk(snapshot, (text, start, end) => {
+      chunks.push(`${start}:${end}:${text}`);
+    });
+
+    expect(chunks).toEqual(["0:1:a", "1:2:b", "2:3:c"]);
+  });
+
+  test("compares snapshot text without requiring identical piece layouts", () => {
+    const left = createPieceTableSnapshot("alpha beta gamma");
+    const right = insertIntoPieceTable(createPieceTableSnapshot("alpha gamma"), 6, "beta ");
+    const changed = insertIntoPieceTable(right, right.length, "!");
+
+    expect(pieceTableSnapshotsHaveSameText(left, right)).toBe(true);
+    expect(pieceTableSnapshotsHaveSameText(left, changed)).toBe(false);
   });
 
   test("handles empty documents", () => {

@@ -731,7 +731,7 @@ describe("VirtualizedTextView", () => {
     expect(selection?.style.width).toBe("8px");
   });
 
-  it("mounts horizontal block lane surfaces only when the range is visible", () => {
+  it("mounts horizontal block lane surfaces only when the range is visible", async () => {
     const mounted: string[] = [];
     const disposed: string[] = [];
     view.dispose();
@@ -763,6 +763,7 @@ describe("VirtualizedTextView", () => {
     expect(blockSurfaces(container)[0]).toBe("run-rail");
 
     view.setScrollMetrics(120, 40, 160);
+    await Promise.resolve();
 
     expect(disposed).toEqual(["run-rail"]);
     expect(blockSurfaces(container)).toEqual([]);

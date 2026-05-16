@@ -1,4 +1,8 @@
-import type { DocumentSession, DocumentSessionChange } from "../documentSession";
+import {
+  documentSessionChangeTextSnapshot,
+  type DocumentSession,
+  type DocumentSessionChange,
+} from "../documentSession";
 import { projectSyntaxFoldsThroughLineEdit } from "./folds";
 import { EditorFoldState } from "./foldState";
 import { EditorKeymapController } from "./keymap";
@@ -82,6 +86,11 @@ import type { FoldRange } from "../syntax/session";
 import type { EditorTheme } from "../theme";
 import { editorThemesEqual, mergeEditorThemes } from "../theme";
 import type { EditorDocument, EditorToken, TextEdit } from "../tokens";
+import {
+  createStringTextSnapshot,
+  defineLazyTextProperty,
+  type TextSnapshot,
+} from "../documentTextSnapshot";
 import { clamp } from "../style-utils";
 import {
   VirtualizedTextView,
@@ -126,6 +135,10 @@ export class Editor {
 
   private set text(text: string) {
     this.document.setRenderedText(text);
+  }
+
+  private get textSnapshot(): TextSnapshot {
+    return this.document.textSnapshot;
   }
 
   private get session(): DocumentSession | null {
@@ -210,7 +223,6 @@ export class Editor {
       getCurrentSessionDocumentId: () => this.currentSessionDocumentId(),
       getLanguageId: () => this.languageId,
       getSession: () => this.session,
-      getText: () => this.getText(),
       adoptTokens: (tokens) => {
         this.view.adoptTokens(tokens);
         this.notifyViewContributions("tokens", null);
@@ -303,10 +315,10 @@ export class Editor {
     this.syntax.setTokens(copiedTokens);
   }
 
-  applyEdit(edit: TextEdit, tokens: readonly EditorToken[]): void {
-    const { from, to, text } = edit;
-    this.text = `${this.text.slice(0, from)}${text}${this.text.slice(to)}`;
-    this.view.applyEdit(edit, this.text);
+  applyEdit(edit: TextEdit, tokens: readonly EditorToken[], textSnapshot?: TextSnapshot): void {
+    const nextTextSnapshot = textSnapshot ?? this.legacyEditTextSnapshot(edit);
+    this.document.setRenderedTextSnapshot(nextTextSnapshot);
+    this.view.applyEdit(edit, nextTextSnapshot);
     this.syncEditorBlocks();
     this.setTokens(tokens);
   }
@@ -619,7 +631,7 @@ export class Editor {
     this.syntax.startDocument({
       documentId: attachment.internalDocumentId,
       languageId: attachment.languageId,
-      text: attachment.text,
+      textSnapshot: attachment.textSnapshot,
       snapshot: attachment.session.getSnapshot(),
     });
     this.syncViewEditability();
@@ -667,11 +679,11 @@ export class Editor {
     this.syntax.startDocument({
       documentId: attachment.internalDocumentId,
       languageId: attachment.languageId,
-      text: attachment.text,
+      textSnapshot: attachment.textSnapshot,
       snapshot: attachment.session.getSnapshot(),
     });
     this.syncViewEditability();
-    this.setDocument({ text: attachment.session.getText(), tokens: [] });
+    this.setDocument({ text: attachment.text, tokens: [] });
     this.applyRangeDecorations();
     this.applyDocumentScrollPosition(options.scrollPosition);
     this.inputSelection.syncDomSelection();
@@ -881,7 +893,7 @@ export class Editor {
   }
 
   private applyRangeDecorations(): void {
-    if (this.text.length === 0 || this.rangeDecorations.length === 0) {
+    if (this.textSnapshot.length === 0 || this.rangeDecorations.length === 0) {
       this.clearAppliedRangeDecorations();
       return;
     }
@@ -911,6 +923,7 @@ export class Editor {
 
   private createViewSnapshot(): EditorViewSnapshot {
     const viewState = this.view.getState();
+    const textSnapshot = this.textSnapshot;
     const viewport = {
       scrollTop: viewState.scrollTop,
       scrollLeft: viewState.scrollLeft,
@@ -923,11 +936,11 @@ export class Editor {
       visibleRange: viewState.visibleRange,
     };
 
-    return {
+    return defineLazyTextProperty({
       documentId: this.documentId,
       languageId: this.languageId,
       theme: this.resolvedTheme(),
-      text: this.text,
+      textSnapshot,
       textVersion: this.documentVersion,
       lineStarts: this.view.getLineStarts(),
       tokens: this.tokens,
@@ -950,7 +963,7 @@ export class Editor {
         height: row.height,
       })),
       viewport,
-    };
+    });
   }
 
   private notifyViewContributions(
@@ -1047,18 +1060,30 @@ export class Editor {
     if (change.kind === "selection" || change.kind === "none") return;
 
     if (edit && change.edits.length === 1) {
+      const previousText = this.text;
       const foldProjection = projectSyntaxFoldsThroughLineEdit(
         this.foldState.folds,
         edit,
-        this.text,
+        previousText,
       );
-      this.applyEdit(edit, projectTokensThroughEdit(this.tokens, edit, this.text));
+      this.applyEdit(
+        edit,
+        projectTokensThroughEdit(this.tokens, edit, previousText),
+        documentSessionChangeTextSnapshot(change),
+      );
       this.foldState.applyProjection(foldProjection);
       return;
     }
 
     this.clearSyntaxFolds();
     this.setDocument({ text: change.text, tokens: [] });
+  }
+
+  private legacyEditTextSnapshot(edit: TextEdit): TextSnapshot {
+    const currentText = this.text;
+    return createStringTextSnapshot(
+      `${currentText.slice(0, edit.from)}${edit.text}${currentText.slice(edit.to)}`,
+    );
   }
 
   private notifyChange(change: DocumentSessionChange | null): void {

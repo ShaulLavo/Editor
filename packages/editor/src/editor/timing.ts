@@ -1,4 +1,8 @@
-import type { DocumentSessionChange, EditorTimingMeasurement } from "../documentSession";
+import {
+  withDocumentSessionChangeTimings,
+  type DocumentSessionChange,
+  type EditorTimingMeasurement,
+} from "../documentSession";
 
 export function nowMs(): number {
   return globalThis.performance?.now() ?? Date.now();
@@ -22,10 +26,7 @@ export function appendTiming(
   name: string,
   startMs: number,
 ): DocumentSessionChange {
-  return {
-    ...change,
-    timings: [...change.timings, createTiming(name, startMs)],
-  };
+  return withDocumentSessionChangeTimings(change, [...change.timings, createTiming(name, startMs)]);
 }
 
 export function mergeChangeTimings(
@@ -33,10 +34,7 @@ export function mergeChangeTimings(
   earlierChange: DocumentSessionChange | null,
 ): DocumentSessionChange {
   if (!earlierChange) return change;
-  return {
-    ...change,
-    timings: [...earlierChange.timings, ...change.timings],
-  };
+  return withDocumentSessionChangeTimings(change, [...earlierChange.timings, ...change.timings]);
 }
 
 function createTiming(name: string, startMs: number): EditorTimingMeasurement {

@@ -20,9 +20,14 @@ import {
   type PieceTableEditorHistory,
 } from "./history";
 import type { EditorToken, TextEdit } from "./tokens";
+import {
+  createDocumentTextSnapshot,
+  defineLazyTextProperty,
+  type DocumentTextSnapshot,
+} from "./documentTextSnapshot";
 import type { Anchor as PieceTableAnchor, PieceTableSnapshot } from "./pieceTable/pieceTableTypes";
 import { applyBatchToPieceTable } from "./pieceTable/edits";
-import { forEachPieceTableTextChunk, getPieceTableText } from "./pieceTable/reads";
+import { getPieceTableText, pieceTableSnapshotsHaveSameText } from "./pieceTable/reads";
 import { createPieceTableSnapshot } from "./pieceTable/snapshot";
 
 export type DocumentSessionChangeKind = "edit" | "selection" | "undo" | "redo" | "none";
@@ -37,6 +42,7 @@ export type DocumentSessionChange = {
   readonly edits: readonly TextEdit[];
   readonly snapshot: PieceTableSnapshot;
   readonly selections: SelectionSet<PieceTableAnchor>;
+  readonly textSnapshot: DocumentTextSnapshot;
   readonly text: string;
   readonly tokens: readonly EditorToken[];
   readonly timings: readonly EditorTimingMeasurement[];
@@ -75,6 +81,7 @@ export type DocumentSession = {
   setTokens(tokens: readonly EditorToken[]): DocumentSessionChange;
   adoptTokens(tokens: readonly EditorToken[]): DocumentSessionChange;
   getText(): string;
+  getTextSnapshot(): DocumentTextSnapshot;
   getTokens(): readonly EditorToken[];
   getSelections(): SelectionSet<PieceTableAnchor>;
   getSnapshot(): PieceTableSnapshot;
@@ -108,18 +115,12 @@ type CommitEditOptions = {
   readonly history: DocumentSessionEditHistoryMode;
 };
 
-type PieceTableTextChunk = {
-  readonly text: string;
-  readonly start: number;
-  readonly end: number;
-};
-
 class PieceTableDocumentSession implements DocumentSession {
   private history: PieceTableEditorHistory;
   private cleanSnapshot: PieceTableSnapshot;
   private dirtyCacheSnapshot: PieceTableSnapshot;
   private dirtyCacheValue = false;
-  private text: string;
+  private textSnapshot: DocumentTextSnapshot;
   private tokens: readonly EditorToken[] = [];
   private undoEdits: readonly (readonly TextEdit[])[];
   private redoEdits: readonly (readonly TextEdit[])[];
@@ -130,7 +131,7 @@ class PieceTableDocumentSession implements DocumentSession {
     this.history = createEditorHistory(snapshot, selections);
     this.cleanSnapshot = snapshot;
     this.dirtyCacheSnapshot = snapshot;
-    this.text = text;
+    this.textSnapshot = createDocumentTextSnapshot(snapshot, text);
     this.undoEdits = [];
     this.redoEdits = [];
   }
@@ -228,7 +229,7 @@ class PieceTableDocumentSession implements DocumentSession {
 
     const previousSnapshot = this.history.current;
     this.history = next;
-    this.refreshText();
+    this.textSnapshot = createDocumentTextSnapshot(this.history.current);
     const edits = this.consumeUndoEdits(previousSnapshot);
     return appendTiming(this.createChange("undo", edits), "session.undo", start);
   }
@@ -242,7 +243,7 @@ class PieceTableDocumentSession implements DocumentSession {
 
     const previousSnapshot = this.history.current;
     this.history = next;
-    this.refreshText();
+    this.textSnapshot = createDocumentTextSnapshot(this.history.current);
     const edits = this.consumeRedoEdits(previousSnapshot);
     return appendTiming(this.createChange("redo", edits), "session.redo", start);
   }
@@ -312,7 +313,11 @@ class PieceTableDocumentSession implements DocumentSession {
   }
 
   public getText(): string {
-    return this.text;
+    return this.textSnapshot.getText();
+  }
+
+  public getTextSnapshot(): DocumentTextSnapshot {
+    return this.textSnapshot;
   }
 
   public getTokens(): readonly EditorToken[] {
@@ -366,7 +371,7 @@ class PieceTableDocumentSession implements DocumentSession {
       this.history = { ...this.history, current: snapshot, selections };
     }
 
-    this.refreshText();
+    this.textSnapshot = createDocumentTextSnapshot(snapshot);
     return this.createChange("edit", edits);
   }
 
@@ -445,38 +450,34 @@ class PieceTableDocumentSession implements DocumentSession {
     return edits;
   }
 
-  private refreshText(): void {
-    this.text = getPieceTableText(this.history.current);
-  }
-
   private createChange(
     kind: DocumentSessionChangeKind,
     edits: readonly TextEdit[],
   ): DocumentSessionChange {
-    return {
+    return createDocumentSessionChange({
       kind,
       edits,
       snapshot: this.history.current,
       selections: this.history.selections,
-      text: this.text,
+      textSnapshot: this.textSnapshot,
       tokens: this.tokens,
       timings: [],
       canUndo: this.canUndo(),
       canRedo: this.canRedo(),
       isDirty: this.isDirty(),
-    };
+    });
   }
 }
 
 class StaticDocumentSession implements DocumentSession {
   private snapshot: PieceTableSnapshot;
-  private text: string;
+  private textSnapshot: DocumentTextSnapshot;
   private selections: SelectionSet<PieceTableAnchor>;
   private tokens: readonly EditorToken[] = [];
 
   public constructor(text: string) {
-    this.text = text;
     this.snapshot = createPieceTableSnapshot(text);
+    this.textSnapshot = createDocumentTextSnapshot(this.snapshot, text);
     this.selections = createSelectionSet(
       [createAnchorSelection(this.snapshot, this.snapshot.length)],
       true,
@@ -513,7 +514,7 @@ class StaticDocumentSession implements DocumentSession {
     }
 
     this.snapshot = nextSnapshot;
-    this.text = getPieceTableText(nextSnapshot);
+    this.textSnapshot = createDocumentTextSnapshot(nextSnapshot);
     this.selections = this.selectionsAfterProgrammaticEdit(nextSnapshot, options);
     return appendTiming(this.createChange("edit", effectiveEdits), "session.applyEdits", start);
   }
@@ -592,7 +593,11 @@ class StaticDocumentSession implements DocumentSession {
   }
 
   public getText(): string {
-    return this.text;
+    return this.textSnapshot.getText();
+  }
+
+  public getTextSnapshot(): DocumentTextSnapshot {
+    return this.textSnapshot;
   }
 
   public getTokens(): readonly EditorToken[] {
@@ -678,18 +683,18 @@ class StaticDocumentSession implements DocumentSession {
     kind: DocumentSessionChangeKind,
     edits: readonly TextEdit[],
   ): DocumentSessionChange {
-    return {
+    return createDocumentSessionChange({
       kind,
       edits,
       snapshot: this.snapshot,
       selections: this.selections,
-      text: this.text,
+      textSnapshot: this.textSnapshot,
       tokens: this.tokens,
       timings: [],
       canUndo: false,
       canRedo: false,
       isDirty: false,
-    };
+    });
   }
 }
 
@@ -701,6 +706,38 @@ export function createStaticDocumentSession(text: string): DocumentSession {
   return new StaticDocumentSession(text);
 }
 
+type DocumentSessionChangeFields = Omit<DocumentSessionChange, "text">;
+
+function createDocumentSessionChange(fields: DocumentSessionChangeFields): DocumentSessionChange {
+  return defineLazyTextProperty({ ...fields });
+}
+
+export function documentSessionChangeTextSnapshot(
+  change: DocumentSessionChange,
+): DocumentTextSnapshot {
+  const textSnapshot = (change as { readonly textSnapshot?: DocumentTextSnapshot }).textSnapshot;
+  if (textSnapshot) return textSnapshot;
+  return createDocumentTextSnapshot(change.snapshot, change.text);
+}
+
+export function withDocumentSessionChangeTimings(
+  change: DocumentSessionChange,
+  timings: readonly EditorTimingMeasurement[],
+): DocumentSessionChange {
+  return createDocumentSessionChange({
+    kind: change.kind,
+    edits: change.edits,
+    snapshot: change.snapshot,
+    selections: change.selections,
+    textSnapshot: documentSessionChangeTextSnapshot(change),
+    tokens: change.tokens,
+    timings,
+    canUndo: change.canUndo,
+    canRedo: change.canRedo,
+    isDirty: change.isDirty,
+  });
+}
+
 function normalizeTextEdits(edits: readonly TextEdit[]): readonly TextEdit[] {
   return edits
     .map((edit) => ({ from: edit.from, to: edit.to, text: edit.text }))
@@ -709,78 +746,6 @@ function normalizeTextEdits(edits: readonly TextEdit[]): readonly TextEdit[] {
 
 function isEffectiveTextEdit(edit: TextEdit): boolean {
   return edit.from !== edit.to || edit.text.length > 0;
-}
-
-function pieceTableSnapshotsHaveSameText(
-  left: PieceTableSnapshot,
-  right: PieceTableSnapshot,
-): boolean {
-  if (left === right) return true;
-  if (left.length !== right.length) return false;
-  if (left.length === 0) return true;
-  return pieceTableTextChunksEqual(
-    collectPieceTableTextChunks(left),
-    collectPieceTableTextChunks(right),
-  );
-}
-
-function collectPieceTableTextChunks(snapshot: PieceTableSnapshot): readonly PieceTableTextChunk[] {
-  const chunks: PieceTableTextChunk[] = [];
-  forEachPieceTableTextChunk(snapshot, (text, start, end) => {
-    chunks.push({ text, start, end });
-  });
-  return chunks;
-}
-
-function pieceTableTextChunksEqual(
-  left: readonly PieceTableTextChunk[],
-  right: readonly PieceTableTextChunk[],
-): boolean {
-  let leftIndex = 0;
-  let rightIndex = 0;
-  let leftOffset = left[0]?.start ?? 0;
-  let rightOffset = right[0]?.start ?? 0;
-
-  while (leftIndex < left.length && rightIndex < right.length) {
-    const leftChunk = left[leftIndex];
-    const rightChunk = right[rightIndex];
-    if (!leftChunk || !rightChunk) return false;
-
-    const length = Math.min(leftChunk.end - leftOffset, rightChunk.end - rightOffset);
-    if (!pieceTableTextRangesEqual(leftChunk, leftOffset, rightChunk, rightOffset, length)) {
-      return false;
-    }
-
-    leftOffset += length;
-    rightOffset += length;
-    if (leftOffset === leftChunk.end) {
-      leftIndex += 1;
-      leftOffset = left[leftIndex]?.start ?? 0;
-    }
-    if (rightOffset === rightChunk.end) {
-      rightIndex += 1;
-      rightOffset = right[rightIndex]?.start ?? 0;
-    }
-  }
-
-  return leftIndex === left.length && rightIndex === right.length;
-}
-
-function pieceTableTextRangesEqual(
-  left: PieceTableTextChunk,
-  leftOffset: number,
-  right: PieceTableTextChunk,
-  rightOffset: number,
-  length: number,
-): boolean {
-  for (let index = 0; index < length; index += 1) {
-    const leftCode = left.text.charCodeAt(leftOffset + index);
-    const rightCode = right.text.charCodeAt(rightOffset + index);
-    if (leftCode !== rightCode) {
-      return false;
-    }
-  }
-  return true;
 }
 
 function invertTextEdits(
@@ -814,8 +779,8 @@ function appendTiming(
   name: string,
   startMs: number,
 ): DocumentSessionChange {
-  return {
-    ...change,
-    timings: [...change.timings, { name, durationMs: nowMs() - startMs }],
-  };
+  return withDocumentSessionChangeTimings(change, [
+    ...change.timings,
+    { name, durationMs: nowMs() - startMs },
+  ]);
 }

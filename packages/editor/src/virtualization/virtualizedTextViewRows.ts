@@ -399,8 +399,8 @@ function rowUpdateState(
     blockRow: displayRow?.kind === "block" ? displayRow : null,
     index,
     bufferRow,
-    startOffset: displayRow?.startOffset ?? view.text.length,
-    endOffset: displayRow?.endOffset ?? view.text.length,
+    startOffset: displayRow?.startOffset ?? view.textLength,
+    endOffset: displayRow?.endOffset ?? view.textLength,
     text: displayRow?.text ?? "",
     kind: displayRow?.kind ?? "text",
     primaryText,
@@ -1792,7 +1792,7 @@ export function resolveMountedOffset(
   view: VirtualizedTextViewInternal,
   offset: number,
 ): { readonly node: Node; readonly offset: number } | null {
-  const clamped = clamp(offset, 0, view.text.length);
+  const clamped = clamp(offset, 0, view.textLength);
   const targetRow = rowForOffset(view, clamped);
   for (const row of getMountedRows(view)) {
     if (row.index !== targetRow) continue;

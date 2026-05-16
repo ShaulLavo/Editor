@@ -1,5 +1,11 @@
 import type { DocumentSession } from "../documentSession";
 import {
+  createStringTextSnapshot,
+  defineLazyTextProperty,
+  type DocumentTextSnapshot,
+  type TextSnapshot,
+} from "../documentTextSnapshot";
+import {
   createEditorDocumentSession,
   normalizeEditorDocumentMode,
   normalizeEditorEditability,
@@ -24,13 +30,14 @@ export type EditorDocumentAttachment = {
   readonly internalDocumentId: string;
   readonly languageId: EditorSyntaxLanguageId | null;
   readonly session: DocumentSession;
+  readonly textSnapshot: DocumentTextSnapshot;
   readonly text: string;
 };
 
 export class EditorDocumentController {
   private readonly defaultDocumentMode: EditorDocumentMode | undefined;
   private readonly highlightPrefix: string;
-  private currentText = "";
+  private currentTextSnapshot: TextSnapshot = createStringTextSnapshot("");
   private currentSession: DocumentSession | null = null;
   private currentSessionOptions: EditorSessionOptions = {};
   private currentDocumentId: string | null = null;
@@ -47,7 +54,11 @@ export class EditorDocumentController {
   }
 
   get text(): string {
-    return this.currentText;
+    return this.currentTextSnapshot.getText();
+  }
+
+  get textSnapshot(): TextSnapshot {
+    return this.currentTextSnapshot;
   }
 
   get session(): DocumentSession | null {
@@ -79,7 +90,11 @@ export class EditorDocumentController {
   }
 
   setRenderedText(text: string): void {
-    this.currentText = text;
+    this.currentTextSnapshot = createStringTextSnapshot(text);
+  }
+
+  setRenderedTextSnapshot(textSnapshot: TextSnapshot): void {
+    this.currentTextSnapshot = textSnapshot;
   }
 
   setEditability(editability: EditorEditability): boolean {
@@ -104,15 +119,15 @@ export class EditorDocumentController {
     this.currentLanguageId = options.languageId ?? null;
     this.currentSession = session;
     this.currentSessionOptions = options;
-    this.currentText = session.getText();
+    this.currentTextSnapshot = session.getTextSnapshot();
 
-    return {
+    return this.createAttachment({
       documentVersion: this.currentDocumentVersion,
       internalDocumentId: this.currentSessionDocumentId(),
       languageId: this.currentLanguageId,
       session,
-      text: this.currentText,
-    };
+      textSnapshot: session.getTextSnapshot(),
+    });
   }
 
   detachSession(): void {
@@ -125,7 +140,7 @@ export class EditorDocumentController {
     this.currentDocumentId = null;
     this.currentDocumentMode = normalizeEditorDocumentMode(this.defaultDocumentMode);
     this.currentLanguageId = null;
-    this.currentText = "";
+    this.currentTextSnapshot = createStringTextSnapshot("");
     this.detachSession();
     return this.currentDocumentVersion;
   }
@@ -144,15 +159,15 @@ export class EditorDocumentController {
     this.currentLanguageId = document.languageId ?? null;
     this.currentSession = createEditorDocumentSession(document.text, this.currentDocumentMode);
     this.currentSessionOptions = {};
-    this.currentText = this.currentSession.getText();
+    this.currentTextSnapshot = this.currentSession.getTextSnapshot();
 
-    return {
+    return this.createAttachment({
       documentVersion: this.currentDocumentVersion,
       internalDocumentId: this.currentSessionDocumentId(),
       languageId: this.currentLanguageId,
       session: this.currentSession,
-      text: this.currentText,
-    };
+      textSnapshot: this.currentSession.getTextSnapshot(),
+    });
   }
 
   currentSessionDocumentId(): string {
@@ -165,5 +180,11 @@ export class EditorDocumentController {
 
   private generatedOpenSessionId(documentVersion: number): string {
     return `${this.highlightPrefix}-open-${documentVersion}`;
+  }
+
+  private createAttachment(
+    attachment: Omit<EditorDocumentAttachment, "text">,
+  ): EditorDocumentAttachment {
+    return defineLazyTextProperty(attachment);
   }
 }

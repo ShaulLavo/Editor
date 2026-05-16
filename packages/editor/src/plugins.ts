@@ -1,4 +1,5 @@
 import type { DocumentSessionChange } from "./documentSession";
+import type { DocumentTextSnapshot, TextSnapshot } from "./documentTextSnapshot";
 import type { EditorCommandContext, EditorCommandId } from "./editor/commands";
 import type { PieceTableSnapshot } from "./pieceTable/pieceTableTypes";
 import type { EditorTheme } from "./theme";
@@ -55,6 +56,7 @@ export type EditorHighlighterSessionOptions = {
   readonly documentId: string;
   readonly languageId: EditorSyntaxLanguageId | null;
   readonly text: string;
+  readonly textSnapshot?: DocumentTextSnapshot;
   readonly snapshot: PieceTableSnapshot;
 };
 
@@ -103,6 +105,7 @@ export type EditorViewSnapshot = {
   readonly documentId: string | null;
   readonly languageId: EditorSyntaxLanguageId | null;
   readonly theme?: EditorTheme | null;
+  readonly textSnapshot?: TextSnapshot;
   readonly text: string;
   readonly textVersion: number;
   readonly lineStarts: readonly number[];

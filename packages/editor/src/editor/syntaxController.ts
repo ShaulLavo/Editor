@@ -1,4 +1,5 @@
 import type { DocumentSession, DocumentSessionChange } from "../documentSession";
+import { defineLazyTextProperty, type DocumentTextSnapshot } from "../documentTextSnapshot";
 import type { PieceTableSnapshot } from "../pieceTable/pieceTableTypes";
 import type { EditorHighlightResult, EditorHighlighterSession, EditorPluginHost } from "../plugins";
 import type { EditorSyntaxResult, EditorSyntaxSession } from "../syntax/session";
@@ -15,7 +16,7 @@ export type EditorSyntaxDocumentStartOptions = {
   readonly documentId: string;
   readonly languageId: EditorSyntaxLanguageId | null;
   readonly snapshot: PieceTableSnapshot;
-  readonly text: string;
+  readonly textSnapshot: DocumentTextSnapshot;
 };
 
 export type EditorSyntaxControllerOptions = {
@@ -24,7 +25,6 @@ export type EditorSyntaxControllerOptions = {
   getCurrentSessionDocumentId(): string;
   getLanguageId(): EditorSyntaxLanguageId | null;
   getSession(): DocumentSession | null;
-  getText(): string;
   adoptTokens(tokens: readonly EditorToken[]): void;
   clearSyntaxFolds(): void;
   setSyntaxFolds(folds: readonly FoldRange[]): void;
@@ -71,12 +71,12 @@ export class EditorSyntaxController {
   startDocument(document: EditorSyntaxDocumentStartOptions): void {
     this.disposeSyntaxSession();
     this.disposeHighlighterSession();
-    this.highlighterSession = this.options.pluginHost.createHighlighterSession({
-      documentId: document.documentId,
-      languageId: document.languageId,
-      text: document.text,
-      snapshot: document.snapshot,
-    });
+    this.highlighterSession = this.createHighlighterSession(
+      document.documentId,
+      document.languageId,
+      document.textSnapshot,
+      document.snapshot,
+    );
     this.syntaxSession = this.createSyntaxSession(document);
     this.syntaxStatus = this.syntaxSession ? "loading" : "plain";
   }
@@ -108,7 +108,7 @@ export class EditorSyntaxController {
     this.syntaxSession = this.createSyntaxSession({
       documentId: this.options.getCurrentSessionDocumentId(),
       languageId: this.options.getLanguageId(),
-      text: this.options.getText(),
+      textSnapshot: session.getTextSnapshot(),
       snapshot: session.getSnapshot(),
     });
     this.syntaxStatus = this.syntaxSession ? "loading" : "plain";
@@ -143,12 +143,12 @@ export class EditorSyntaxController {
     const session = this.options.getSession();
     if (!session) return;
 
-    this.highlighterSession = this.options.pluginHost.createHighlighterSession({
-      documentId: this.options.getCurrentSessionDocumentId(),
-      languageId: this.options.getLanguageId(),
-      text: session.getText(),
-      snapshot: session.getSnapshot(),
-    });
+    this.highlighterSession = this.createHighlighterSession(
+      this.options.getCurrentSessionDocumentId(),
+      this.options.getLanguageId(),
+      session.getTextSnapshot(),
+      session.getSnapshot(),
+    );
     this.refreshHighlighterTheme();
     this.refreshHighlightTokens(this.options.getDocumentVersion(), null);
   }
@@ -162,13 +162,30 @@ export class EditorSyntaxController {
       documentId: document.documentId,
       languageId: document.languageId,
       includeHighlights: !this.highlighterSession,
-      text: document.text,
+      textSnapshot: document.textSnapshot,
       snapshot: document.snapshot,
     };
+    const sessionOptions = defineLazyTextProperty(options);
     return (
-      this.options.pluginHost.createSyntaxSession(options) ??
-      getEditorSyntaxSessionFactory()?.(options) ??
+      this.options.pluginHost.createSyntaxSession(sessionOptions) ??
+      getEditorSyntaxSessionFactory()?.(sessionOptions) ??
       null
+    );
+  }
+
+  private createHighlighterSession(
+    documentId: string,
+    languageId: EditorSyntaxLanguageId | null,
+    textSnapshot: DocumentTextSnapshot,
+    snapshot: PieceTableSnapshot,
+  ): EditorHighlighterSession | null {
+    return this.options.pluginHost.createHighlighterSession(
+      defineLazyTextProperty({
+        documentId,
+        languageId,
+        textSnapshot,
+        snapshot,
+      }),
     );
   }
 
@@ -192,12 +209,11 @@ export class EditorSyntaxController {
     const session = this.options.getSession();
     if (!this.syntaxSession || !session || !this.options.getLanguageId()) return;
 
-    const text = session.getText();
     this.syntaxStatus = "loading";
 
     this.syntaxRequests.schedule({
       delayMs: syntaxRefreshDelay(change),
-      run: () => this.loadSyntaxResult(change, text),
+      run: () => this.loadSyntaxResult(change),
       apply: (result, startedAt) => this.applySyntaxResult(result, documentVersion, startedAt),
       fail: () => this.applySyntaxError(documentVersion),
     });
@@ -210,24 +226,20 @@ export class EditorSyntaxController {
     const session = this.options.getSession();
     if (!this.highlighterSession || !session) return;
 
-    const text = session.getText();
     this.highlightRequests.schedule({
       delayMs: syntaxRefreshDelay(change),
-      run: () => this.loadHighlightResult(change, text),
+      run: () => this.loadHighlightResult(change),
       apply: (result, startedAt) => this.applyHighlightResult(result, documentVersion, startedAt),
       fail: (_error, startedAt) => this.applyHighlightError(documentVersion, startedAt),
     });
   }
 
-  private loadSyntaxResult(
-    change: DocumentSessionChange | null,
-    text: string,
-  ): Promise<EditorSyntaxResult> {
+  private loadSyntaxResult(change: DocumentSessionChange | null): Promise<EditorSyntaxResult> {
     if (!this.syntaxSession) return Promise.reject(new Error("No syntax session"));
     if (!change) {
       const snapshot = this.options.getSession()?.getSnapshot();
       if (!snapshot) return Promise.reject(new Error("No document snapshot"));
-      return this.syntaxSession.refresh(snapshot, text);
+      return this.syntaxSession.refresh(snapshot);
     }
 
     return this.syntaxSession.applyChange(change);
@@ -235,13 +247,12 @@ export class EditorSyntaxController {
 
   private loadHighlightResult(
     change: DocumentSessionChange | null,
-    text: string,
   ): Promise<EditorHighlightResult> {
     if (!this.highlighterSession) return Promise.reject(new Error("No highlighter session"));
     if (!change) {
       const snapshot = this.options.getSession()?.getSnapshot();
       if (!snapshot) return Promise.reject(new Error("No document snapshot"));
-      return this.highlighterSession.refresh(snapshot, text);
+      return this.highlighterSession.refresh(snapshot);
     }
 
     return this.highlighterSession.applyChange(change);

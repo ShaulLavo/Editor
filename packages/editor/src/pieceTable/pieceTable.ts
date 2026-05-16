@@ -21,7 +21,13 @@ export {
 } from "./anchors";
 export { applyBatchToPieceTable, deleteFromPieceTable, insertIntoPieceTable } from "./edits";
 export { offsetToPoint, pointToOffset } from "./positions";
-export { getPieceTableLength, getPieceTableOriginalText, getPieceTableText } from "./reads";
+export {
+  getPieceTableLength,
+  getPieceTableOriginalText,
+  getPieceTableText,
+  forEachPieceTableTextChunk,
+  pieceTableSnapshotsHaveSameText,
+} from "./reads";
 export { createPieceTableSnapshot } from "./snapshot";
 
 export const debugPieceTable = (snapshot: PieceTableTreeSnapshot): Piece[] =>

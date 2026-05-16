@@ -28,10 +28,10 @@ describe("piece table reads", () => {
     const chunks: string[] = [];
 
     forEachPieceTableTextChunk(edited, (text, start, end) => {
-      chunks.push(text.slice(start, end));
+      chunks.push(`${start}:${end}:${text}`);
     });
 
-    expect(chunks.join("")).toBe("abcXXdef");
+    expect(chunks.join("|")).toBe("0:3:abc|3:5:XX|5:8:def");
     expect(chunks.length).toBeGreaterThan(1);
   });
 

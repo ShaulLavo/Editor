@@ -7,6 +7,7 @@ import type {
   EditorVisibleRowSnapshot,
   VirtualizedFoldMarker,
 } from "@editor/core";
+import { createStringTextSnapshot } from "@editor/core";
 import type { DocumentSessionChange } from "@editor/core";
 import "./style.css";
 
@@ -259,9 +260,10 @@ function lineText(snapshot: EditorViewSnapshot, row: number): string {
   const start = snapshot.lineStarts[row];
   if (start === undefined) return "";
 
-  const nextStart = snapshot.lineStarts[row + 1] ?? snapshot.text.length + 1;
-  const end = Math.max(start, Math.min(snapshot.text.length, nextStart - 1));
-  return snapshot.text.slice(start, end);
+  const textSnapshot = snapshot.textSnapshot ?? createStringTextSnapshot(snapshot.text);
+  const nextStart = snapshot.lineStarts[row + 1] ?? textSnapshot.length + 1;
+  const end = Math.max(start, Math.min(textSnapshot.length, nextStart - 1));
+  return textSnapshot.getTextInRange(start, end);
 }
 
 function isBlankLine(text: string): boolean {

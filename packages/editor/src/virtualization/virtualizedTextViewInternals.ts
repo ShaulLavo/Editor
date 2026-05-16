@@ -1,5 +1,6 @@
 import type { FoldMap } from "../foldMap";
 import type { BlockLane, BlockRow, DisplayRow } from "../displayTransforms";
+import type { TextSnapshot } from "../documentTextSnapshot";
 import type { EditorGutterContribution, EditorGutterWidthContext } from "../plugins";
 import type { EditorToken, EditorTokenStyle } from "../tokens";
 import type { BrowserTextMetrics } from "./browserMetrics";
@@ -90,6 +91,8 @@ export interface VirtualizedTextViewInternal {
   readonly rangeHighlightGroups: Map<string, VirtualizedTextHighlightGroup>;
   selectionHighlightRegistered: boolean;
   text: string;
+  textSnapshot: TextSnapshot;
+  textLength: number;
   textRevision: number;
   tokens: readonly EditorToken[];
   tokenRenderEntries: readonly TokenRenderEntry[];

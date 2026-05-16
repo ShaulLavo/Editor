@@ -1,21 +1,26 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createPieceTableSnapshot, type DocumentSessionChange } from "../../src";
+import {
+  createDocumentTextSnapshot,
+  createPieceTableSnapshot,
+  type DocumentSessionChange,
+} from "../../src";
 
 import { createShikiHighlighterSession, disposeShikiWorker, loadShikiTheme } from "../../src/shiki";
 
 const createChange = (text: string, edit: { from: number; to: number; text: string }) =>
-  ({
+  ((snapshot = createPieceTableSnapshot(text)) => ({
     kind: "edit",
     edits: [edit],
     text,
-    snapshot: createPieceTableSnapshot(text),
+    textSnapshot: createDocumentTextSnapshot(snapshot, text),
+    snapshot,
     selections: { selections: [], normalized: true },
     tokens: [],
     timings: [],
     canUndo: false,
     canRedo: false,
     isDirty: true,
-  }) satisfies DocumentSessionChange;
+  }))() satisfies DocumentSessionChange;
 
 describe.skipIf(typeof Worker === "undefined")("Shiki worker highlighter", () => {
   afterEach(async () => {

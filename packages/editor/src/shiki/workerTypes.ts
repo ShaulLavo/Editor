@@ -5,13 +5,14 @@ export type ShikiWorkerDocumentOptions = {
   readonly documentId: string;
   readonly lang: string;
   readonly theme: string;
-  readonly text: string;
+  readonly text?: string;
   readonly langs: readonly string[];
   readonly themes: readonly string[];
 };
 
 export type ShikiWorkerOpenRequest = ShikiWorkerDocumentOptions & {
   readonly type: "open";
+  readonly text: string;
 };
 
 export type ShikiWorkerEditRequest = ShikiWorkerDocumentOptions & {

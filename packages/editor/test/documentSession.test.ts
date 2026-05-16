@@ -37,6 +37,8 @@ describe("DocumentSession", () => {
 
     expect(change.kind).toBe("edit");
     expect(change.edits).toEqual([{ from: 3, to: 3, text: "!" }]);
+    expect(Object.keys(change)).toContain("text");
+    expect({ ...change }.text).toBe("abc!");
     expect(session.getText()).toBe("abc!");
     expect(resolvedOffsets(session)).toEqual({ start: 4, end: 4 });
     expect(session.canUndo()).toBe(true);

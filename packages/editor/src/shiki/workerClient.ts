@@ -1,4 +1,8 @@
-import type { DocumentSessionChange } from "../documentSession";
+import { documentSessionChangeTextSnapshot, type DocumentSessionChange } from "../documentSession";
+import { createDocumentTextSnapshot, type DocumentTextSnapshot } from "../documentTextSnapshot";
+import { applyBatchToPieceTable } from "../pieceTable/edits";
+import { pieceTableSnapshotsHaveSameText } from "../pieceTable/reads";
+import type { PieceTableSnapshot } from "../pieceTable/pieceTableTypes";
 import type {
   EditorHighlightResult,
   EditorHighlighterSession,
@@ -13,7 +17,11 @@ import type {
   ShikiWorkerResult,
 } from "./workerTypes";
 
-export type ShikiHighlighterSessionOptions = EditorHighlighterSessionOptions & {
+export type ShikiHighlighterSessionOptions = Omit<
+  EditorHighlighterSessionOptions,
+  "textSnapshot"
+> & {
+  readonly textSnapshot?: DocumentTextSnapshot;
   readonly lang: string;
   readonly theme: string;
   readonly langs?: readonly string[];
@@ -82,7 +90,10 @@ class ShikiHighlighterSession implements EditorHighlighterSession {
   private readonly theme: string;
   private readonly langs: readonly string[];
   private readonly themes: readonly string[];
-  private text: string;
+  private snapshot: PieceTableSnapshot;
+  private textSnapshot: DocumentTextSnapshot;
+  private opened = false;
+  private disposed = false;
   private task: Promise<void> = Promise.resolve();
 
   public constructor(options: ShikiHighlighterSessionOptions) {
@@ -91,34 +102,48 @@ class ShikiHighlighterSession implements EditorHighlighterSession {
     this.theme = options.theme;
     this.langs = options.langs ?? [];
     this.themes = options.themes ?? [];
-    this.text = options.text;
+    this.snapshot = options.snapshot;
+    this.textSnapshot =
+      options.textSnapshot ?? createDocumentTextSnapshot(options.snapshot, options.text);
   }
 
   public async refresh(
-    _snapshot: ShikiHighlighterSessionOptions["snapshot"],
-    text = "",
+    snapshot: ShikiHighlighterSessionOptions["snapshot"],
+    text?: string,
   ): Promise<EditorHighlightResult> {
     return this.enqueueRequest(async () => {
+      const textSnapshot = createDocumentTextSnapshot(snapshot, text);
+      const documentText = textSnapshot.getText();
       const result = await postRequest({
         type: "open",
-        ...this.documentOptions(text),
+        ...this.documentOptions(documentText),
+        text: documentText,
       });
 
-      this.text = text;
+      this.snapshot = snapshot;
+      this.textSnapshot = textSnapshot;
+      this.opened = true;
+      this.disposed = false;
       return { tokens: result?.tokens ?? [], theme: result?.theme };
     });
   }
 
   public async applyChange(change: DocumentSessionChange): Promise<EditorHighlightResult> {
     return this.enqueueRequest(async () => {
-      const payload = this.editPayloadForText(change.text);
+      const nextTextSnapshot = documentSessionChangeTextSnapshot(change);
+      const payload = this.editPayloadForChange(change, nextTextSnapshot);
       const result = await postRequest(payload);
-      this.text = change.text;
+      this.snapshot = change.snapshot;
+      this.textSnapshot = nextTextSnapshot;
+      this.opened = true;
+      this.disposed = false;
       return { tokens: result?.tokens ?? [], theme: result?.theme };
     });
   }
 
   public dispose(): void {
+    this.disposed = true;
+    this.opened = false;
     void postRequest({ type: "disposeDocument", documentId: this.documentId }).catch(
       () => undefined,
     );
@@ -135,16 +160,29 @@ class ShikiHighlighterSession implements EditorHighlighterSession {
     return result;
   }
 
-  private editPayloadForText(text: string): ShikiWorkerRequestPayload {
-    const edit = createTextDiffEdit(this.text, text) ?? undefined;
+  private editPayloadForChange(
+    change: DocumentSessionChange,
+    nextTextSnapshot: DocumentTextSnapshot,
+  ): ShikiWorkerRequestPayload {
+    const edit = incrementalEditForChange(this.snapshot, change);
+    if (edit && this.opened && !this.disposed) {
+      return {
+        type: "edit",
+        ...this.documentOptions(),
+        edit,
+      };
+    }
+
+    const text = nextTextSnapshot.getText();
+    const fallbackEdit = createTextDiffEdit(this.textSnapshot.getText(), text) ?? undefined;
     return {
       type: "edit",
       ...this.documentOptions(text),
-      edit,
+      edit: fallbackEdit,
     };
   }
 
-  private documentOptions(text: string): ShikiWorkerDocumentOptions {
+  private documentOptions(text?: string): ShikiWorkerDocumentOptions {
     return {
       documentId: this.documentId,
       lang: this.lang,
@@ -228,6 +266,25 @@ export const createTextDiffEdit = (previousText: string, nextText: string) => {
     to: previousEnd,
     text: nextText.slice(start, nextEnd),
   };
+};
+
+const incrementalEditForChange = (snapshot: PieceTableSnapshot, change: DocumentSessionChange) => {
+  if (change.edits.length !== 1) return null;
+
+  try {
+    if (
+      !pieceTableSnapshotsHaveSameText(
+        applyBatchToPieceTable(snapshot, change.edits),
+        change.snapshot,
+      )
+    ) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
+  return change.edits[0] ?? null;
 };
 
 async function requestShikiTheme(
